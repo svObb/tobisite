@@ -111,7 +111,11 @@ async def main():
         log.exception("handler error: %s", event.exception)
         return True
 
-    log.info("bot started")
+    me = await bot.get_me()
+    log.info(
+        "bot started: @%s, режим %s",
+        me.username, "ТЕСТОВЫЙ" if config.TEST_MODE else "боевой",
+    )
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

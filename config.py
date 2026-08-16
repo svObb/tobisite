@@ -1,20 +1,44 @@
 import os
+import sys
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-ADMIN_TG_ID = int(os.environ["ADMIN_TG_ID"])
-ACCESS_CODE = os.environ["ACCESS_CODE"]
+# Тестовый режим: python main.py --test, для alembic — переменная QDIF_TEST=1.
+# Боевой запуск (systemd) идёт без флага и в тест уйти не может.
+TEST_MODE = "--test" in sys.argv or os.getenv("QDIF_TEST") == "1"
+
+
+def _req(name: str) -> str:
+    value = (os.getenv(name) or "").strip()
+    if not value:
+        raise SystemExit(f"В .env не заполнена переменная {name}")
+    return value
+
+
+def _pick(test_name: str, prod_name: str) -> str:
+    return _req(test_name if TEST_MODE else prod_name)
+
+
+BOT_TOKEN = _pick("BOT_TEST_TOKEN", "BOT_TOKEN")
+ADMIN_TG_ID = int(_req("ADMIN_TG_ID"))
+ACCESS_CODE = _req("ACCESS_CODE")
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "15"))
 CANCEL_WINDOW_MIN = int(os.getenv("CANCEL_WINDOW_MIN", "60"))
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Kyiv"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
+if TEST_MODE and LOG_FILE:
+    LOG_FILE = "test-" + LOG_FILE
 
-_db_url = os.environ["DATABASE_URL"]
+_db_url = _pick("TEST_DATABASE_URL", "DATABASE_URL")
+if TEST_MODE and _db_url == (os.getenv("DATABASE_URL") or "").strip():
+    raise SystemExit(
+        "TEST_DATABASE_URL совпадает с боевой DATABASE_URL — "
+        "тестовые записи попали бы в рабочую базу"
+    )
 if _db_url.startswith("postgresql://"):
     _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 DATABASE_URL = _db_url
