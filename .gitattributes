@@ -1,0 +1,4 @@
+# Файлы для Linux-сервера должны уезжать с LF, иначе bash споткнётся
+# о «\r: command not found», а systemd затащит \r внутрь ExecStart.
+*.sh text eol=lf
+*.service text eol=lf
