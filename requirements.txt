@@ -1,0 +1,7 @@
+aiogram>=3.13
+SQLAlchemy>=2.0.30
+asyncpg>=0.29
+alembic>=1.13
+python-dotenv>=1.0
+phonenumbers>=8.13
+tzdata>=2024.1
