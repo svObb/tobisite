@@ -82,8 +82,34 @@ jobs:
       - name: импорт всех модулей
         run: python -c "import main, handlers_admin, handlers_worker, keyboards, models, dedup"
 
-  deploy:
+  # Образ собирается здесь, а не на сервере: иначе CI проверяет одно, а сервер
+  # запускает другое, и весь смысл контейнера теряется. Тег — sha коммита;
+  # latest не используем, он не даёт откатиться на предыдущий образ.
+  build:
     needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GITHUB_TOKEN выдаёт сам раннер — отдельного секрета для реестра не нужно
+      - name: вход в GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: сборка и публикация
+        run: |
+          # имя образа только строчными: GHCR не принимает svObb
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build --platform linux/amd64 -t "$IMAGE:$GITHUB_SHA" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          echo "опубликован $IMAGE:$GITHUB_SHA"
+
+  deploy:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
