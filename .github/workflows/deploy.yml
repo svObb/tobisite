@@ -1,0 +1,110 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Два выката одновременно перезапускали бы службу друг у друга под руками.
+# cancel-in-progress выключен намеренно: начатый выкат надо добить, иначе
+# сервер останется с распакованным кодом и старым процессом.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Гейт: сломанный код не должен доезжать до сервера вообще. Откат — крайняя
+  # мера, а не штатный путь.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # config.py завершает процесс, если этих переменных нет, — импорт не пройдёт
+      BOT_TOKEN: '0:ci'
+      ADMIN_TG_ID: '1'
+      ACCESS_CODE: ci
+      DATABASE_URL: postgresql+asyncpg://ci:ci@127.0.0.1:5432/ci
+      LOG_FILE: ''
+      # списки читаются из .env, и пустыми они не бывают — импорт должен
+      # проверяться на том же виде данных, что и на сервере
+      COUNTRIES: 'Украина|UA,Словакия|SK'
+      LANGUAGES: 'Украинский,Словацкий'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: зависимости
+        run: pip install -r requirements.txt pyflakes
+
+      - name: синтаксис
+        run: python -m compileall -q .
+
+      - name: pyflakes
+        run: pyflakes *.py tools/*.py alembic/env.py alembic/versions/*.py
+
+      - name: дедуп
+        run: python test_dedup.py
+
+      # Миграции на сервер автодеплой не накатывает, но проверить, что они
+      # вообще накатываются на пустую базу, надо здесь: на сервере это делается
+      # руками и уже на боевых данных.
+      - name: миграции с нуля
+        run: alembic upgrade head
+
+      - name: схема совпадает с моделями
+        run: alembic check
+
+      # Ловит ровно тот класс поломок, из-за которого служба не поднимается:
+      # опечатка в импорте, отсутствующее имя, битый декоратор роутера.
+      - name: импорт всех модулей
+        run: python -c "import main, handlers_admin, handlers_worker, keyboards, models, dedup"
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Сторонних actions здесь нет намеренно: любой из них получил бы наш
+      # приватный ключ, а плавающий тег вроде @v1 меняется без нашего ведома.
+      - name: ключ и known_hosts
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      # Ключ на сервере ограничен форсированной командой: всё, что мы можем
+      # отправить, — это коммит. Сам выкат делает /usr/local/bin/qdif-deploy.
+      - name: выкат
+        run: |
+          ssh -i ~/.ssh/id_ed25519 \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              -o ServerAliveInterval=15 \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+              "$GITHUB_SHA"
