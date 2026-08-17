@@ -3,8 +3,10 @@ import csv
 import logging
 import os
 import tempfile
+from datetime import datetime
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -15,7 +17,8 @@ from sqlalchemy.exc import IntegrityError
 import config
 import keyboards as kb
 from handlers_worker import (
-    edits_count, esc, fmt_lead, get_contacts, is_url, list_text, local,
+    STALE, edits_count, esc, fmt_lead, get_contacts, is_url, list_text, local,
+    pick, safe_edit,
 )
 from models import (
     Contact, Lead, LeadEvent, Session, Worker, day_start, log_event,
@@ -113,10 +116,10 @@ async def filter_menu(cb: CallbackQuery, state: FSMContext):
     flt = await get_flt(state)
     if key == "reset":
         await state.update_data(flt={})
-        await cb.message.edit_text(flt_text({}), reply_markup=kb.filters_kb())
+        await safe_edit(cb.message, flt_text({}), kb.filters_kb())
         return
     if key == "back":
-        await cb.message.edit_text(flt_text(flt), reply_markup=kb.filters_kb())
+        await safe_edit(cb.message, flt_text(flt), kb.filters_kb())
         return
     if key == "worker":
         async with Session() as s:
@@ -125,8 +128,8 @@ async def filter_menu(cb: CallbackQuery, state: FSMContext):
             ))
         await state.update_data(opts=[w.id for w in workers],
                                 opt_names=[w.name for w in workers])
-        await cb.message.edit_text(
-            "Работник:", reply_markup=kb.options_kb([w.name for w in workers], "afw")
+        await safe_edit(
+            cb.message, "Работник:", kb.options_kb([w.name for w in workers], "afw")
         )
         return
     if key in ("country", "niche"):
@@ -137,20 +140,22 @@ async def filter_menu(cb: CallbackQuery, state: FSMContext):
             )]
         await state.update_data(opts=values)
         pfx = "afc" if key == "country" else "afn"
-        await cb.message.edit_text(
+        await safe_edit(
+            cb.message,
             "Страна:" if key == "country" else "Ниша:",
-            reply_markup=kb.options_kb(values, pfx),
+            kb.options_kb(values, pfx),
         )
         return
     if key == "status":
-        await cb.message.edit_text(
-            "Статус:",
-            reply_markup=kb.options_kb([lbl for _, lbl in config.STATUSES], "afs"),
+        await safe_edit(
+            cb.message, "Статус:",
+            kb.options_kb([lbl for _, lbl in config.STATUSES], "afs"),
         )
         return
     if key == "date":
-        await cb.message.edit_text(
-            "Дата:", reply_markup=kb.options_kb([lbl for lbl, _ in DATE_PRESETS], "afd")
+        await safe_edit(
+            cb.message, "Дата:",
+            kb.options_kb([lbl for lbl, _ in DATE_PRESETS], "afd"),
         )
 
 
@@ -159,7 +164,7 @@ async def _set_filter(cb: CallbackQuery, state: FSMContext, **values):
     flt.update(values)
     await state.update_data(flt=flt)
     await cb.answer()
-    await cb.message.edit_text(flt_text(flt), reply_markup=kb.filters_kb())
+    await safe_edit(cb.message, flt_text(flt), kb.filters_kb())
 
 
 @router.callback_query(F.data.startswith("afw:"))
@@ -169,8 +174,13 @@ async def filter_worker(cb: CallbackQuery, state: FSMContext):
         await _set_filter(cb, state, worker_id=None, worker_name=None)
         return
     d = await state.get_data()
-    i = int(key)
-    await _set_filter(cb, state, worker_id=d["opts"][i], worker_name=d["opt_names"][i])
+    wid = pick(d.get("opts", []), key)
+    if wid is None:
+        await cb.answer(STALE, show_alert=True)
+        return
+    await _set_filter(
+        cb, state, worker_id=wid, worker_name=pick(d.get("opt_names", []), key)
+    )
 
 
 @router.callback_query(F.data.startswith("afc:"))
@@ -180,7 +190,11 @@ async def filter_country(cb: CallbackQuery, state: FSMContext):
         await _set_filter(cb, state, country=None)
         return
     d = await state.get_data()
-    await _set_filter(cb, state, country=d["opts"][int(key)])
+    val = pick(d.get("opts", []), key)
+    if val is None:
+        await cb.answer(STALE, show_alert=True)
+        return
+    await _set_filter(cb, state, country=val)
 
 
 @router.callback_query(F.data.startswith("afn:"))
@@ -190,7 +204,11 @@ async def filter_niche(cb: CallbackQuery, state: FSMContext):
         await _set_filter(cb, state, niche=None)
         return
     d = await state.get_data()
-    await _set_filter(cb, state, niche=d["opts"][int(key)])
+    val = pick(d.get("opts", []), key)
+    if val is None:
+        await cb.answer(STALE, show_alert=True)
+        return
+    await _set_filter(cb, state, niche=val)
 
 
 @router.callback_query(F.data.startswith("afs:"))
@@ -199,7 +217,11 @@ async def filter_status(cb: CallbackQuery, state: FSMContext):
     if key == "any":
         await _set_filter(cb, state, status=None)
         return
-    await _set_filter(cb, state, status=config.STATUSES[int(key)][0])
+    pair = pick(config.STATUSES, key)
+    if pair is None:
+        await cb.answer(STALE, show_alert=True)
+        return
+    await _set_filter(cb, state, status=pair[0])
 
 
 @router.callback_query(F.data.startswith("afd:"))
@@ -208,7 +230,11 @@ async def filter_date(cb: CallbackQuery, state: FSMContext):
     if key == "any":
         await _set_filter(cb, state, days=None, days_label=None)
         return
-    label, days = DATE_PRESETS[int(key)]
+    preset = pick(DATE_PRESETS, key)
+    if preset is None:
+        await cb.answer(STALE, show_alert=True)
+        return
+    label, days = preset
     await _set_filter(cb, state, days=days, days_label=label)
 
 
@@ -228,9 +254,10 @@ async def all_page(cb: CallbackQuery, state: FSMContext):
     async with Session() as s:
         leads, total = await page(s, conds, offset)
     await cb.answer()
-    await cb.message.edit_text(
+    await safe_edit(
+        cb.message,
         list_text(leads, total, offset),
-        reply_markup=kb.leads_list_kb(leads, "alp", "acd", offset, total),
+        kb.leads_list_kb(leads, "alp", "acd", offset, total),
     )
 
 
@@ -271,7 +298,11 @@ async def status_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("stv:"))
 async def status_set(cb: CallbackQuery):
-    _, lead_id, new = cb.data.split(":")
+    parts = cb.data.split(":")
+    if len(parts) != 3 or parts[2] not in config.STATUS_LABELS:
+        await cb.answer("Неизвестный статус", show_alert=True)
+        return
+    _, lead_id, new = parts
     lead_id = int(lead_id)
     async with Session() as s, s.begin():
         lead = await s.get(Lead, lead_id)
@@ -328,7 +359,11 @@ async def draft_save(message: Message, state: FSMContext):
         return
     d = await state.get_data()
     async with Session() as s, s.begin():
-        lead = await s.get(Lead, d["lead_id"])
+        lead = await s.get(Lead, d.get("lead_id", 0))
+        if lead is None:
+            await state.clear()
+            await message.answer("Запись не найдена.")
+            return
         lead.draft_url = val
     await state.clear()
     await message.answer("Ссылка сохранена.")
@@ -346,7 +381,11 @@ async def note_ask(cb: CallbackQuery, state: FSMContext):
 async def note_save(message: Message, state: FSMContext):
     d = await state.get_data()
     async with Session() as s, s.begin():
-        lead = await s.get(Lead, d["lead_id"])
+        lead = await s.get(Lead, d.get("lead_id", 0))
+        if lead is None:
+            await state.clear()
+            await message.answer("Запись не найдена.")
+            return
         lead.admin_note = (message.text or "").strip() or None
     await state.clear()
     await message.answer("Заметка сохранена.")
@@ -360,7 +399,9 @@ async def delete_lead(cb: CallbackQuery):
         if not lead or lead.deleted_at:
             await cb.answer("Запись недоступна", show_alert=True)
             return
-        now = func.now()
+        # datetime, а не func.now(): при expire_on_commit=False в атрибуте объекта
+        # осталась бы SQL-конструкция вместо даты
+        now = datetime.now(config.TZ)
         lead.deleted_at = now
         await s.execute(
             update(Contact).where(Contact.lead_id == lead_id).values(deleted_at=now)
@@ -390,8 +431,17 @@ async def search_run(message: Message, state: FSMContext):
     await _search_page(message, q, 0)
 
 
+def like_pattern(q: str) -> str:
+    """% и _ из ввода — литералы, а не подстановочные знаки."""
+    esc_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc_q}%"
+
+
 async def _search_page(target: Message, q: str, offset: int):
-    conds = [*ACTIVE, Lead.name.ilike(f"%{q}%")]
+    if not q:
+        await target.answer("Запрос потерялся, нажмите «🔍 Поиск» заново.")
+        return
+    conds = [*ACTIVE, Lead.name.ilike(like_pattern(q), escape="\\")]
     async with Session() as s:
         leads, total = await page(s, conds, offset)
     await target.answer(
@@ -420,8 +470,10 @@ async def _cancelled_page(target: Message, offset: int, edit: bool):
         leads, total = await page(s, conds, offset)
     markup = kb.leads_list_kb(leads, "cxp", "acd", offset, total)
     text = list_text(leads, total, offset)
-    await (target.edit_text(text, reply_markup=markup) if edit
-           else target.answer(text, reply_markup=markup))
+    if edit:
+        await safe_edit(target, text, markup)
+    else:
+        await target.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("cxp:"))
@@ -474,10 +526,12 @@ async def _workers_page(target: Message, offset: int, edit: bool):
             select(Worker).where(Worker.deleted_at.is_(None))
             .order_by(Worker.id).offset(offset).limit(config.PAGE_SIZE)
         ))
-        counts = dict(await s.execute(
+        # .all() обязателен: у Result есть .keys(), поэтому dict() принимает его
+        # за мапу и пытается индексировать — «object is not subscriptable»
+        counts = dict((await s.execute(
             select(Lead.worker_id, func.count(Lead.id)).where(*ACTIVE)
             .group_by(Lead.worker_id)
-        ))
+        )).all())
     lines = [f"Работников: {total}"] + [
         f"{esc(w.name)} — {counts.get(w.id, 0)}"
         f"{'' if w.is_active else ' (отключён)'}"
@@ -485,8 +539,10 @@ async def _workers_page(target: Message, offset: int, edit: bool):
     ]
     markup = kb.workers_kb(workers, offset, total)
     text = "\n".join(lines) if workers else "Пока никого."
-    await (target.edit_text(text, reply_markup=markup) if edit
-           else target.answer(text, reply_markup=markup))
+    if edit:
+        await safe_edit(target, text, markup)
+    else:
+        await target.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("wlp:"))
@@ -534,16 +590,27 @@ async def worker_limit_ask(cb: CallbackQuery, state: FSMContext):
     )
 
 
+MAX_DAILY_LIMIT = 1000
+
+
 @router.message(Adm.limit)
 async def worker_limit_save(message: Message, state: FSMContext):
     raw = (message.text or "").strip()
-    if not raw.isdigit():
-        await message.answer("Нужно число:", reply_markup=kb.cancel_kb())
+    # isdecimal, а не isdigit: у isdigit истинны «²» и подобные, а int() на них падает.
+    # Верхняя граница — чтобы не переполнить int4 в колонке daily_limit.
+    if not raw.isdecimal() or int(raw) > MAX_DAILY_LIMIT:
+        await message.answer(
+            f"Нужно число от 0 до {MAX_DAILY_LIMIT}:", reply_markup=kb.cancel_kb()
+        )
         return
     value = int(raw)
     d = await state.get_data()
     async with Session() as s, s.begin():
-        worker = await s.get(Worker, d["worker_id"])
+        worker = await s.get(Worker, d.get("worker_id", 0))
+        if worker is None:
+            await state.clear()
+            await message.answer("Работник не найден.")
+            return
         worker.daily_limit = value or None
     await state.clear()
     await message.answer(
@@ -556,11 +623,43 @@ async def worker_toggle(cb: CallbackQuery):
     wid = int(cb.data.split(":")[1])
     async with Session() as s, s.begin():
         worker = await s.get(Worker, wid)
+        if worker is None:
+            await cb.answer("Работник не найден", show_alert=True)
+            return
         worker.is_active = not worker.is_active
         active = worker.is_active
     await cb.answer("Готово")
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("Работник включён." if active else "Работник отключён.")
+
+
+@router.callback_query(F.data.startswith("wdl:"))
+async def worker_delete_ask(cb: CallbackQuery):
+    wid = int(cb.data.split(":")[1])
+    await cb.answer()
+    await cb.message.answer(
+        "Удалить работника? Добавленные им компании останутся в базе, "
+        "но доступ к боту закроется навсегда — повторно зарегистрироваться "
+        "по общему коду он не сможет.",
+        reply_markup=kb.worker_delete_kb(wid),
+    )
+
+
+@router.callback_query(F.data.startswith("wdy:"))
+async def worker_delete(cb: CallbackQuery):
+    wid = int(cb.data.split(":")[1])
+    async with Session() as s, s.begin():
+        worker = await s.get(Worker, wid)
+        if worker is None or worker.deleted_at:
+            await cb.answer("Работник не найден", show_alert=True)
+            return
+        worker.deleted_at = datetime.now(config.TZ)
+        worker.is_active = False
+        name = worker.name
+    log.info("worker %s soft-deleted by tg_id=%s", wid, cb.from_user.id)
+    await cb.answer("Удалено")
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer(f"{esc(name)} удалён, доступ к боту закрыт.")
 
 
 # --- рассылка ----------------------------------------------------------------
@@ -582,9 +681,19 @@ async def broadcast_send(message: Message, state: FSMContext):
         ))
     sent = 0
     for tg_id in targets:
+        # parse_mode=None: по умолчанию у бота HTML, и любой «<» в тексте админа
+        # ронял бы отправку каждому получателю
         try:
-            await message.bot.send_message(tg_id, text)
+            await message.bot.send_message(tg_id, text, parse_mode=None)
             sent += 1
+        except TelegramRetryAfter as e:
+            log.warning("broadcast flood limit, wait %s s", e.retry_after)
+            await asyncio.sleep(e.retry_after)
+            try:
+                await message.bot.send_message(tg_id, text, parse_mode=None)
+                sent += 1
+            except Exception as e2:
+                log.warning("broadcast failed for %s: %s", tg_id, e2)
         except Exception as e:
             log.warning("broadcast failed for %s: %s", tg_id, e)
         await asyncio.sleep(0.05)
@@ -592,6 +701,12 @@ async def broadcast_send(message: Message, state: FSMContext):
 
 
 # --- CSV ---------------------------------------------------------------------
+
+def csv_safe(v):
+    """Гасит формулы Excel: значение работника вида =HYPERLINK(...) там исполнится."""
+    s = "" if v is None else str(v)
+    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+
 
 CSV_HEADER = [
     "id", "дата", "работник", "название", "сайт", "источник", "страна", "город",
@@ -619,10 +734,10 @@ async def export_csv(message: Message):
                     if not leads:
                         break
                     ids = [l.id for l in leads]
-                    names = dict(await s.execute(
+                    names = dict((await s.execute(
                         select(Worker.id, Worker.name)
                         .where(Worker.id.in_([l.worker_id for l in leads]))
-                    ))
+                    )).all())
                     contacts = list(await s.scalars(
                         select(Contact).where(
                             Contact.lead_id.in_(ids), Contact.deleted_at.is_(None)
@@ -634,7 +749,7 @@ async def export_csv(message: Message):
                         config.CONTACT_TYPE_LABELS.get(c.ctype, c.ctype)
                     by_lead.setdefault(c.lead_id, []).append(f"{label}: {c.value}")
                 for l in leads:
-                    writer.writerow([
+                    writer.writerow([csv_safe(v) for v in (
                         l.id, local(l.created_at), names.get(l.worker_id, ""), l.name,
                         l.website_url or "", l.source_url, l.country, l.city,
                         l.language, l.niche, l.google_rating or "",
@@ -642,7 +757,7 @@ async def export_csv(message: Message):
                         "да" if l.possible_duplicate else "",
                         l.found_via, l.note or "",
                         " | ".join(by_lead.get(l.id, [])),
-                    ])
+                    )])
                     rows_written += 1
                 last_id = ids[-1]
         await message.answer_document(

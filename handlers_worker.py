@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -45,6 +46,29 @@ def contact_label(c: Contact) -> str:
 
 def local(dt: datetime) -> str:
     return dt.astimezone(config.TZ).strftime("%d.%m.%Y %H:%M")
+
+
+# Клавиатуры живут в чате вечно, а состояние — в памяти процесса. После
+# перезапуска бота старая кнопка приходит без данных, по которым её рисовали.
+STALE = "Кнопка устарела, откройте меню заново."
+
+
+async def safe_edit(message: Message, text, reply_markup=None):
+    """edit_text, не падающий на повторном нажатии той же кнопки пагинации."""
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+
+
+def pick(options, key: str):
+    """Индекс из callback_data → элемент списка. None, если список изменился."""
+    # isdecimal, а не isdigit: у isdigit истинны «²» и подобные, а int() на них падает
+    if not key.isdecimal():
+        return None
+    i = int(key)
+    return options[i] if i < len(options) else None
 
 
 async def get_contacts(session, lead_id):
@@ -119,6 +143,28 @@ class Reg(StatesGroup):
     name = State()
 
 
+# Счётчик попыток подбора кода живёт в памяти процесса, а не в FSM: любой /start
+# чистит состояние и обнулил бы его. Сбрасывается при перезапуске бота, и это
+# приемлемо — цель в том, чтобы перебор был бессмысленно медленным.
+MAX_CODE_TRIES = 5
+CODE_BLOCK_MIN = 15
+_code_tries: dict[int, int] = {}
+_code_blocked: dict[int, datetime] = {}
+
+
+def code_block_left(tg_id: int) -> int:
+    """Минут до конца блокировки подбора кода. 0 — не заблокирован."""
+    until = _code_blocked.get(tg_id)
+    if until is None:
+        return 0
+    left = (until - datetime.now(config.TZ)).total_seconds()
+    if left <= 0:
+        _code_blocked.pop(tg_id, None)
+        _code_tries.pop(tg_id, None)
+        return 0
+    return int(left // 60) + 1
+
+
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext, worker: Worker | None):
     await state.clear()
@@ -127,15 +173,35 @@ async def start(message: Message, state: FSMContext, worker: Worker | None):
             f"С возвращением, {esc(worker.name)}!", reply_markup=kb.worker_menu()
         )
         return
+    left = code_block_left(message.from_user.id)
+    if left:
+        await message.answer(f"Слишком много неверных попыток. Повторите через {left} мин.")
+        return
     await state.set_state(Reg.code)
     await message.answer("Введите код доступа:")
 
 
 @router.message(Reg.code)
 async def reg_code(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    left = code_block_left(tg_id)
+    if left:
+        await message.answer(f"Слишком много неверных попыток. Повторите через {left} мин.")
+        return
     if message.text != config.ACCESS_CODE:
+        tries = _code_tries.get(tg_id, 0) + 1
+        _code_tries[tg_id] = tries
+        log.warning("wrong access code from tg_id=%s (%s/%s)", tg_id, tries, MAX_CODE_TRIES)
+        if tries >= MAX_CODE_TRIES:
+            _code_blocked[tg_id] = datetime.now(config.TZ) + timedelta(minutes=CODE_BLOCK_MIN)
+            await state.clear()
+            await message.answer(
+                f"Слишком много неверных попыток. Повторите через {CODE_BLOCK_MIN} мин."
+            )
+            return
         await message.answer("Неверный код. Попробуйте ещё раз:")
         return
+    _code_tries.pop(tg_id, None)
     await state.set_state(Reg.name)
     await message.answer("Код принят. Как вас зовут?")
 
@@ -147,10 +213,35 @@ async def reg_name(message: Message, state: FSMContext):
         await message.answer("Введите имя текстом:")
         return
     async with Session() as s, s.begin():
-        s.add(Worker(tg_id=message.from_user.id, name=name))
+        # tg_id уникален: у удалённого работника строка в базе осталась, и вставка
+        # упала бы на IntegrityError вместо внятного отказа. Заодно это и есть
+        # смысл удаления — иначе человек просто вернулся бы по общему коду.
+        existing = await s.scalar(
+            select(Worker).where(Worker.tg_id == message.from_user.id)
+        )
+        if existing is None:
+            s.add(Worker(tg_id=message.from_user.id, name=name))
     await state.clear()
+    if existing is not None:
+        if existing.deleted_at or not existing.is_active:
+            log.warning("blocked re-registration tg_id=%s", message.from_user.id)
+            await message.answer("Доступ закрыт администратором.")
+        else:
+            await message.answer(
+                f"Вы уже зарегистрированы, {esc(existing.name)}.",
+                reply_markup=kb.worker_menu(),
+            )
+        return
     log.info("worker registered tg_id=%s", message.from_user.id)
     await message.answer(f"Готово, {esc(name)}!", reply_markup=kb.worker_menu())
+    # админ должен знать о каждом, кто получил доступ по общему коду
+    try:
+        await message.bot.send_message(
+            config.ADMIN_TG_ID,
+            f"👤 Новый работник: {esc(name)} (tg id {message.from_user.id})",
+        )
+    except Exception as e:
+        log.warning("admin notify failed: %s", e)
 
 
 # --- добавление компании -----------------------------------------------------
@@ -295,7 +386,11 @@ async def add_country(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Add.country_other)
         await cb.message.answer("Впишите страну:", reply_markup=kb.cancel_kb())
         return
-    await state.update_data(country=COUNTRY_NAMES[int(key)])
+    val = pick(COUNTRY_NAMES, key)
+    if val is None:
+        await cb.message.answer(STALE)
+        return
+    await state.update_data(country=val)
     await _ask_city(cb.message, state)
 
 
@@ -335,7 +430,11 @@ async def add_language(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Add.language_other)
         await cb.message.answer("Впишите язык:", reply_markup=kb.cancel_kb())
         return
-    await state.update_data(language=config.LANGUAGES[int(key)])
+    val = pick(config.LANGUAGES, key)
+    if val is None:
+        await cb.message.answer(STALE)
+        return
+    await state.update_data(language=val)
     await _ask_niche(cb.message, state)
 
 
@@ -363,7 +462,11 @@ async def add_niche(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Add.niche_other)
         await cb.message.answer("Впишите нишу:", reply_markup=kb.cancel_kb())
         return
-    await state.update_data(niche=config.NICHES[int(key)])
+    val = pick(config.NICHES, key)
+    if val is None:
+        await cb.message.answer(STALE)
+        return
+    await state.update_data(niche=val)
     await _ask_contact_type(cb.message, state)
 
 
@@ -393,8 +496,11 @@ async def add_contact_type(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Add.c_other)
         await cb.message.answer("Впишите название канала:", reply_markup=kb.cancel_kb())
         return
-    ctype = config.CONTACT_TYPES[int(key)][0]
-    await state.update_data(cur_type=ctype, cur_other=None)
+    pair = pick(config.CONTACT_TYPES, key)
+    if pair is None:
+        await cb.message.answer(STALE)
+        return
+    await state.update_data(cur_type=pair[0], cur_other=None)
     await _ask_contact_value(cb.message, state)
 
 
@@ -408,10 +514,13 @@ async def add_contact_other(message: Message, state: FSMContext):
     await _ask_contact_value(message, state)
 
 
-def contact_error(ctype: str, value: str) -> str | None:
+def contact_error(ctype: str, value: str, region: str | None = None) -> str | None:
+    # region обязан быть тем же, с каким номер потом ляжет в value_norm, иначе
+    # проверка и запись разойдутся и дубликат пройдёт мимо уникального индекса
     if ctype == "phone":
-        if not normalize_phone(value):
-            return "Не похоже на номер. Введите телефон, лучше в формате +380…:"
+        if not normalize_phone(value, region):
+            return ("Не разобрал номер. Введите в международном формате, "
+                    "например +380501234567:")
     elif ctype == "email":
         if not is_email(value):
             return "Email должен содержать @ и домен. Повторите:"
@@ -427,12 +536,17 @@ async def add_contact_value(message: Message, state: FSMContext):
     if not val:
         await message.answer("Введите значение текстом:", reply_markup=kb.cancel_kb())
         return
-    err = contact_error(d["cur_type"], val)
+    ctype = d.get("cur_type")
+    if ctype is None:
+        await state.clear()
+        await message.answer(STALE, reply_markup=kb.worker_menu())
+        return
+    err = contact_error(ctype, val, config.COUNTRY_ISO.get(d.get("country")))
     if err:
         await message.answer(err, reply_markup=kb.cancel_kb())
         return
-    contacts = d["contacts"]
-    contacts.append({"ctype": d["cur_type"], "ctype_other": d.get("cur_other"), "value": val})
+    contacts = d.get("contacts", [])
+    contacts.append({"ctype": ctype, "ctype_other": d.get("cur_other"), "value": val})
     await state.update_data(contacts=contacts)
     if len(contacts) >= config.MAX_CONTACTS:
         await _ask_rating(message, state)
@@ -533,7 +647,11 @@ async def add_found_via(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Add.found_via_other)
         await cb.message.answer("Впишите источник:", reply_markup=kb.cancel_kb())
         return
-    await state.update_data(found_via=config.FOUND_VIA[int(key)])
+    val = pick(config.FOUND_VIA, key)
+    if val is None:
+        await cb.message.answer(STALE)
+        return
+    await state.update_data(found_via=val)
     await _show_summary(cb.message, state)
 
 
@@ -555,9 +673,20 @@ async def add_redo(cb: CallbackQuery, state: FSMContext):
     await cb.message.answer("1/12. Название компании:", reply_markup=kb.cancel_kb())
 
 
+class LimitReached(Exception):
+    """Лимит исчерпан между открытием формы и её отправкой."""
+
+
 async def save_lead(d: dict, worker: Worker, possible_dup: bool) -> int:
     region = config.COUNTRY_ISO.get(d["country"])
     async with Session() as s, s.begin():
+        # форма из 12 шагов переживает и полночь, и снижение лимита админом,
+        # поэтому проверка на входе в форму ничего не гарантирует
+        fresh = await s.get(Worker, worker.id)
+        limit = (fresh.daily_limit if fresh and fresh.daily_limit is not None
+                 else config.DEFAULT_DAILY_LIMIT)
+        if await used_today(s, worker.id) >= limit:
+            raise LimitReached
         lead = Lead(
             worker_id=worker.id, name=d["name"], website_url=d.get("website_url"),
             domain_norm=d.get("domain_norm"), source_url=d["source_url"],
@@ -582,6 +711,13 @@ async def _commit_and_reply(cb: CallbackQuery, state: FSMContext, worker: Worker
     d = await state.get_data()
     try:
         lead_id = await save_lead(d, worker, possible_dup)
+    except LimitReached:
+        await state.clear()
+        await cb.message.answer(
+            "Лимит на сегодня исчерпан, запись не сохранена.",
+            reply_markup=kb.worker_menu(),
+        )
+        return
     except IntegrityError as e:
         log.warning("dup on insert: %s", e.orig)
         await state.clear()
@@ -670,9 +806,10 @@ async def my_list_page(cb: CallbackQuery, worker: Worker):
     async with Session() as s:
         leads, total = await my_page(s, worker.id, offset)
     await cb.answer()
-    await cb.message.edit_text(
+    await safe_edit(
+        cb.message,
         list_text(leads, total, offset),
-        reply_markup=kb.leads_list_kb(leads, "mlp", "mcd", offset, total),
+        kb.leads_list_kb(leads, "mlp", "mcd", offset, total),
     )
 
 
@@ -753,7 +890,9 @@ async def cancel_lead(cb: CallbackQuery, worker: Worker):
         if not cancel_open(lead):
             await cb.answer("Окно отмены истекло", show_alert=True)
             return
-        now = func.now()
+        # именно datetime, а не func.now(): при expire_on_commit=False в атрибуте
+        # объекта осталась бы SQL-конструкция вместо даты
+        now = datetime.now(config.TZ)
         lead.cancelled_at = now
         lead.cancelled_by = worker.id
         await s.execute(
@@ -812,15 +951,25 @@ async def edit_menu(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool
     )
 
 
-async def apply_field(lead_id, field, value, actor_tg_id) -> str | None:
+async def apply_field(lead_id, field, value, actor_tg_id, worker, is_admin) -> str | None:
+    # setattr пишет в произвольный атрибут модели, поэтому имя поля берём только
+    # из белого списка: иначе ошибка в клавиатуре открыла бы запись в status
+    if field not in config.FIELD_LABELS:
+        log.warning("edit of non-editable field %r by tg_id=%s", field, actor_tg_id)
+        return "Это поле нельзя редактировать."
     try:
         async with Session() as s, s.begin():
-            lead = await s.get(Lead, lead_id)
+            # права проверялись при открытии меню; пока работник набирал текст,
+            # админ мог сменить статус записи или удалить её
+            lead = await load_editable(s, lead_id, worker, is_admin)
+            if lead is None:
+                return "Редактирование больше недоступно."
             old = getattr(lead, field)
             setattr(lead, field, value)
             if field == "website_url":
                 lead.domain_norm = normalize_domain(value)
-            log_event(s, lead_id, "field_edit", actor_tg_id, field, str(old), str(value))
+            log_event(s, lead_id, "field_edit", actor_tg_id, field,
+                      None if old is None else str(old), str(value))
     except IntegrityError as e:
         log.warning("dup on edit lead=%s field=%s: %s", lead_id, field, e.orig)
         return dup_message(e)
@@ -828,8 +977,8 @@ async def apply_field(lead_id, field, value, actor_tg_id) -> str | None:
 
 
 async def _finish_edit(target: Message, state: FSMContext, lead_id, field, value,
-                       actor_tg_id):
-    err = await apply_field(lead_id, field, value, actor_tg_id)
+                       actor_tg_id, worker, is_admin):
+    err = await apply_field(lead_id, field, value, actor_tg_id, worker, is_admin)
     await state.clear()
     if err:
         await target.answer(f"{err} Старое значение осталось.")
@@ -842,7 +991,11 @@ async def _finish_edit(target: Message, state: FSMContext, lead_id, field, value
 
 @edit_router.callback_query(F.data.startswith("ef:"))
 async def edit_field(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
-    _, lead_id, field = cb.data.split(":")
+    parts = cb.data.split(":")
+    if len(parts) != 3 or parts[2] not in config.FIELD_LABELS:
+        await cb.answer("Это поле нельзя редактировать", show_alert=True)
+        return
+    _, lead_id, field = parts
     lead_id = int(lead_id)
     async with Session() as s:
         lead = await load_editable(s, lead_id, worker, is_admin)
@@ -868,46 +1021,66 @@ async def edit_field(cb: CallbackQuery, state: FSMContext, worker, is_admin: boo
 
 
 @edit_router.callback_query(Ed.other, F.data.startswith("ev:"))
-async def edit_choice(cb: CallbackQuery, state: FSMContext):
+async def edit_choice(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
     key = cb.data.split(":")[1]
     d = await state.get_data()
-    options = CHOICE_FIELDS[d["field"]][0]
+    field, lead_id = d.get("field"), d.get("lead_id")
+    if field not in CHOICE_FIELDS or lead_id is None:
+        await cb.answer(STALE, show_alert=True)
+        return
     await cb.answer()
     if key == "oth":
         await state.update_data(choice=False)
         await cb.message.answer("Впишите значение:", reply_markup=kb.cancel_kb())
         return
+    val = pick(CHOICE_FIELDS[field][0], key)
+    if val is None:
+        await cb.message.answer(STALE)
+        return
     await _finish_edit(
-        cb.message, state, d["lead_id"], d["field"], options[int(key)], cb.from_user.id
+        cb.message, state, lead_id, field, val, cb.from_user.id, worker, is_admin
     )
 
 
 @edit_router.message(Ed.other)
-async def edit_choice_other(message: Message, state: FSMContext):
+async def edit_choice_other(message: Message, state: FSMContext, worker, is_admin: bool):
     d = await state.get_data()
     val = (message.text or "").strip()
     if not val:
         await message.answer("Впишите значение текстом:", reply_markup=kb.cancel_kb())
         return
-    await _finish_edit(message, state, d["lead_id"], d["field"], val, message.from_user.id)
+    field, lead_id = d.get("field"), d.get("lead_id")
+    if field is None or lead_id is None:
+        await state.clear()
+        await message.answer(STALE)
+        return
+    await _finish_edit(
+        message, state, lead_id, field, val, message.from_user.id, worker, is_admin
+    )
 
 
 @edit_router.message(Ed.value, F.photo)
-async def edit_photo(message: Message, state: FSMContext):
+async def edit_photo(message: Message, state: FSMContext, worker, is_admin: bool):
     d = await state.get_data()
-    if d["field"] != "screenshot_file_id":
+    lead_id = d.get("lead_id")
+    if d.get("field") != "screenshot_file_id" or lead_id is None:
         return
     await _finish_edit(
-        message, state, d["lead_id"], d["field"],
-        message.photo[-1].file_id, message.from_user.id,
+        message, state, lead_id, "screenshot_file_id",
+        message.photo[-1].file_id, message.from_user.id, worker, is_admin,
     )
 
 
 @edit_router.message(Ed.value)
-async def edit_value(message: Message, state: FSMContext):
+async def edit_value(message: Message, state: FSMContext, worker, is_admin: bool):
     d = await state.get_data()
-    field = d["field"]
+    field = d.get("field")
+    lead_id = d.get("lead_id")
     val = (message.text or "").strip()
+    if field is None or lead_id is None:
+        await state.clear()
+        await message.answer(STALE)
+        return
     if field == "screenshot_file_id":
         await message.answer("Пришлите фото:", reply_markup=kb.cancel_kb())
         return
@@ -920,7 +1093,9 @@ async def edit_value(message: Message, state: FSMContext):
             reply_markup=kb.cancel_kb(),
         )
         return
-    await _finish_edit(message, state, d["lead_id"], field, val, message.from_user.id)
+    await _finish_edit(
+        message, state, lead_id, field, val, message.from_user.id, worker, is_admin
+    )
 
 
 # --- редактирование контактов ------------------------------------------------
@@ -968,7 +1143,11 @@ async def contact_type(cb: CallbackQuery, state: FSMContext):
         await state.set_state(Ed.c_other)
         await cb.message.answer("Впишите название канала:", reply_markup=kb.cancel_kb())
         return
-    await state.update_data(ctype=config.CONTACT_TYPES[int(key)][0], ctype_other=None)
+    pair = pick(config.CONTACT_TYPES, key)
+    if pair is None:
+        await cb.message.answer(STALE)
+        return
+    await state.update_data(ctype=pair[0], ctype_other=None)
     await state.set_state(Ed.c_value)
     await cb.message.answer("Значение:", reply_markup=kb.cancel_kb())
 
@@ -1006,24 +1185,38 @@ async def contact_edit(cb: CallbackQuery, state: FSMContext, worker, is_admin: b
 
 
 @edit_router.message(Ed.c_value)
-async def contact_value(message: Message, state: FSMContext):
+async def contact_value(message: Message, state: FSMContext, worker, is_admin: bool):
     d = await state.get_data()
     val = (message.text or "").strip()
     if not val:
         await message.answer("Введите значение текстом:", reply_markup=kb.cancel_kb())
         return
-    err = contact_error(d["ctype"], val)
+    ctype, lead_id = d.get("ctype"), d.get("lead_id")
+    if ctype is None or lead_id is None:
+        await state.clear()
+        await message.answer(STALE)
+        return
+    async with Session() as s:
+        lead = await load_editable(s, lead_id, worker, is_admin)
+    if lead is None:
+        await state.clear()
+        await message.answer("Редактирование больше недоступно.")
+        return
+    # регион нужен до проверки: contact_error и value_norm обязаны считать одинаково
+    region = config.COUNTRY_ISO.get(lead.country)
+    err = contact_error(ctype, val, region)
     if err:
         await message.answer(err, reply_markup=kb.cancel_kb())
         return
-    lead_id = d["lead_id"]
     try:
         async with Session() as s, s.begin():
-            lead = await s.get(Lead, lead_id)
-            region = config.COUNTRY_ISO.get(lead.country)
-            norm = normalize_phone(val, region) if d["ctype"] == "phone" else None
+            norm = normalize_phone(val, region) if ctype == "phone" else None
             if d.get("contact_id"):
                 contact = await s.get(Contact, d["contact_id"])
+                if contact is None or contact.deleted_at:
+                    await state.clear()
+                    await message.answer("Контакт больше недоступен.")
+                    return
                 old = contact.value
                 contact.value = val
                 contact.value_norm = norm
@@ -1031,7 +1224,7 @@ async def contact_value(message: Message, state: FSMContext):
                           contact_label(contact), old, val)
             else:
                 contact = Contact(
-                    lead_id=lead_id, ctype=d["ctype"], ctype_other=d.get("ctype_other"),
+                    lead_id=lead_id, ctype=ctype, ctype_other=d.get("ctype_other"),
                     value=val, value_norm=norm,
                 )
                 s.add(contact)
@@ -1064,7 +1257,7 @@ async def contact_delete(cb: CallbackQuery, worker, is_admin: bool):
         if len(alive) <= 1:
             await cb.answer("Должен остаться хотя бы один контакт", show_alert=True)
             return
-        contact.deleted_at = func.now()
+        contact.deleted_at = datetime.now(config.TZ)
         log_event(s, contact.lead_id, "contact_delete", cb.from_user.id,
                   contact_label(contact), contact.value, None)
         lead_id = contact.lead_id
@@ -1074,6 +1267,20 @@ async def contact_delete(cb: CallbackQuery, worker, is_admin: bool):
     await cb.message.edit_reply_markup(
         reply_markup=kb.contacts_menu_kb(lead_id, contacts)
     )
+
+
+# Кнопки формы добавления отфильтрованы по состоянию. После перезапуска бота
+# состояния нет, ни один хендлер не срабатывает, и в чате навсегда виснут часики.
+# Хендлер объявлен последним в router, поэтому перехватывает только то, что не
+# разобрали обработчики выше.
+FORM_PREFIXES = (
+    "ws:", "co:", "la:", "ni:", "ct:", "cm:", "rt:", "nt:", "sc:", "fv:", "cf:", "dup:",
+)
+
+
+@router.callback_query(F.data.startswith(FORM_PREFIXES))
+async def stale_form_button(cb: CallbackQuery):
+    await cb.answer(STALE, show_alert=True)
 
 
 async def edits_count(session, lead_id) -> int:

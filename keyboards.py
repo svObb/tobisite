@@ -201,7 +201,16 @@ def worker_card_kb(worker):
         text="✅ Включить" if not worker.is_active else "🚫 Отключить",
         callback_data=f"wof:{worker.id}",
     )
+    b.button(text="🗑 Удалить", callback_data=f"wdl:{worker.id}")
     b.button(text="⬅️ К списку", callback_data="wlp:0")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def worker_delete_kb(worker_id):
+    b = InlineKeyboardBuilder()
+    b.button(text="🗑 Да, удалить", callback_data=f"wdy:{worker_id}")
+    b.button(text="⬅️ Отмена", callback_data=f"wcd:{worker_id}")
     b.adjust(1)
     return b.as_markup()
 

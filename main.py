@@ -109,6 +109,19 @@ async def main():
     @dp.errors()
     async def on_error(event: ErrorEvent):
         log.exception("handler error: %s", event.exception)
+        # без ответа падение хендлера выглядит как зависший бот: у callback'а
+        # крутятся часики, на сообщение просто нет реакции
+        cb = event.update.callback_query
+        target = event.update.message or (cb.message if cb else None)
+        try:
+            if cb:
+                await cb.answer()
+            if target:
+                await target.answer(
+                    "⚠️ Что-то пошло не так. Попробуйте ещё раз или нажмите /start."
+                )
+        except Exception as e:
+            log.warning("error notify failed: %s", e)
         return True
 
     me = await bot.get_me()

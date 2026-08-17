@@ -15,16 +15,21 @@ def normalize_domain(url: str | None) -> str | None:
 
 
 def normalize_phone(raw: str, region: str | None = None) -> str | None:
+    """Телефон → E.164, либо None, если номер не разобрался.
+
+    Фолбэка «оставить одни цифры» здесь сознательно нет. Он давал на выходе
+    строку вроде +0501234567, которая никогда не совпадёт с настоящим
+    +380501234567, — то есть ровно ломал ту дедупликацию, ради которой поле
+    value_norm и заведено. Номер, который phonenumbers не понимает, лучше
+    отклонить на вводе и попросить международный формат.
+    """
     raw = raw.strip()
     if not raw:
         return None
     try:
         parsed = phonenumbers.parse(raw, region)
-        if phonenumbers.is_valid_number(parsed):
-            return phonenumbers.format_number(
-                parsed, phonenumbers.PhoneNumberFormat.E164
-            )
     except phonenumbers.NumberParseException:
-        pass
-    digits = re.sub(r"\D", "", raw)
-    return f"+{digits}" if digits else None
+        return None
+    if not phonenumbers.is_valid_number(parsed):
+        return None
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
