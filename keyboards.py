@@ -31,15 +31,23 @@ def worker_menu():
 
 
 def admin_menu():
+    # BTN_ADD и BTN_MY — те же константы, что у работника: админ заносит компании
+    # тем же мастером. Двусмысленности нет, роутеры разведены фильтром is_admin.
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_A_STATS), KeyboardButton(text=BTN_A_ALL)],
-            [KeyboardButton(text=BTN_A_SEARCH), KeyboardButton(text=BTN_A_CANCELLED)],
-            [KeyboardButton(text=BTN_A_WORKERS), KeyboardButton(text=BTN_A_BROADCAST)],
-            [KeyboardButton(text=BTN_A_CSV)],
+            [KeyboardButton(text=BTN_ADD)],
+            [KeyboardButton(text=BTN_MY), KeyboardButton(text=BTN_A_STATS)],
+            [KeyboardButton(text=BTN_A_ALL), KeyboardButton(text=BTN_A_SEARCH)],
+            [KeyboardButton(text=BTN_A_CANCELLED), KeyboardButton(text=BTN_A_WORKERS)],
+            [KeyboardButton(text=BTN_A_BROADCAST), KeyboardButton(text=BTN_A_CSV)],
         ],
         resize_keyboard=True,
     )
+
+
+def menu(is_admin: bool):
+    """Меню по роли. Форма добавления общая, а возвращаться из неё надо в своё."""
+    return admin_menu() if is_admin else worker_menu()
 
 
 def _cancel(b: InlineKeyboardBuilder):
@@ -118,6 +126,20 @@ def saved_kb(lead_id):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Редактировать", callback_data=f"led:{lead_id}")
     b.button(text="🚫 Отменить отправку", callback_data=f"lcx:{lead_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_saved_kb(lead_id):
+    """Итог сохранения для админа: утвердить свою же компанию в одно нажатие.
+
+    Работницкий saved_kb не подходит — в нём «Отменить отправку», а её хендлер
+    живёт в роутере с фильтром ~is_admin. Оба callback'а ниже уже обслуживаются
+    существующими хендлерами админки.
+    """
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Утвердить", callback_data=f"stv:{lead_id}:verified")
+    b.button(text="🗂 Открыть карточку", callback_data=f"acd:{lead_id}")
     b.adjust(1)
     return b.as_markup()
 

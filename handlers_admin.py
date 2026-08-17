@@ -29,6 +29,11 @@ router = Router()
 
 DATE_PRESETS = [("Сегодня", 0), ("7 дней", 6), ("30 дней", 29)]
 ACTIVE = (Lead.cancelled_at.is_(None), Lead.deleted_at.is_(None))
+# Строка админа в workers нужна его же лидам как автор, но управлять админом как
+# работником нельзя: отключить, удалить или разослать самому себе — бессмыслица.
+# В статистике по работникам и в фильтре «Работник» он при этом остаётся —
+# иначе свои компании не найти.
+NOT_ADMIN = Worker.tg_id != config.ADMIN_TG_ID
 
 
 class Adm(StatesGroup):
@@ -48,7 +53,11 @@ async def start(message: Message, state: FSMContext):
 # --- статистика --------------------------------------------------------------
 
 @router.message(F.text == kb.BTN_A_STATS)
-async def stats(message: Message):
+async def stats(message: Message, state: FSMContext):
+    # кнопка нижнего меню прерывает форму добавления: без сброса состояния
+    # следующее сообщение ушло бы в брошенную форму. set_state(None), а не
+    # clear(): в тех же данных лежат фильтры списка
+    await state.set_state(None)
     async with Session() as s:
         total = await s.scalar(select(func.count()).select_from(Lead).where(*ACTIVE))
         today = await s.scalar(
@@ -105,6 +114,7 @@ async def get_flt(state: FSMContext) -> dict:
 
 @router.message(F.text == kb.BTN_A_ALL)
 async def all_leads(message: Message, state: FSMContext):
+    await state.set_state(None)
     flt = await get_flt(state)
     await message.answer(flt_text(flt), reply_markup=kb.filters_kb())
 
@@ -258,6 +268,25 @@ async def all_page(cb: CallbackQuery, state: FSMContext):
         cb.message,
         list_text(leads, total, offset),
         kb.leads_list_kb(leads, "alp", "acd", offset, total),
+    )
+
+
+@router.message(F.text == kb.BTN_MY)
+async def my_leads(message: Message, state: FSMContext, worker: Worker):
+    """Свои компании — тем же списком и той же карточкой, что и чужие.
+
+    Работницкий «Мои компании» админу не подошёл бы: там нет смены статуса,
+    а именно она и нужна — утвердить то, что сам занёс. Фильтр кладётся
+    в состояние, поэтому пагинация «alp:» продолжает работать по нему же.
+    """
+    await state.set_state(None)
+    flt = {"worker_id": worker.id, "worker_name": worker.name}
+    await state.update_data(flt=flt)
+    async with Session() as s:
+        leads, total = await page(s, flt_conditions(flt), 0)
+    await message.answer(
+        list_text(leads, total, 0),
+        reply_markup=kb.leads_list_kb(leads, "alp", "acd", 0, total),
     )
 
 
@@ -416,7 +445,8 @@ async def delete_lead(cb: CallbackQuery):
 
 @router.message(F.text == kb.BTN_A_SEARCH)
 async def search_ask(message: Message, state: FSMContext):
-    await state.set_state(Adm.search)
+    await state.set_state(Adm.search)  # заодно гасит форму добавления
+
     await message.answer("Название компании:", reply_markup=kb.cancel_kb())
 
 
@@ -460,7 +490,8 @@ async def search_page(cb: CallbackQuery, state: FSMContext):
 # --- отменённые --------------------------------------------------------------
 
 @router.message(F.text == kb.BTN_A_CANCELLED)
-async def cancelled_list(message: Message):
+async def cancelled_list(message: Message, state: FSMContext):
+    await state.set_state(None)
     await _cancelled_page(message, 0, edit=False)
 
 
@@ -513,17 +544,19 @@ async def restore_lead(cb: CallbackQuery):
 # --- работники ---------------------------------------------------------------
 
 @router.message(F.text == kb.BTN_A_WORKERS)
-async def workers_list(message: Message):
+async def workers_list(message: Message, state: FSMContext):
+    await state.set_state(None)
     await _workers_page(message, 0, edit=False)
 
 
 async def _workers_page(target: Message, offset: int, edit: bool):
     async with Session() as s:
         total = await s.scalar(
-            select(func.count()).select_from(Worker).where(Worker.deleted_at.is_(None))
+            select(func.count()).select_from(Worker)
+            .where(Worker.deleted_at.is_(None), NOT_ADMIN)
         )
         workers = list(await s.scalars(
-            select(Worker).where(Worker.deleted_at.is_(None))
+            select(Worker).where(Worker.deleted_at.is_(None), NOT_ADMIN)
             .order_by(Worker.id).offset(offset).limit(config.PAGE_SIZE)
         ))
         # .all() обязателен: у Result есть .keys(), поэтому dict() принимает его
@@ -558,6 +591,11 @@ async def worker_card(cb: CallbackQuery):
         worker = await s.get(Worker, wid)
         if not worker:
             await cb.answer("Не найден", show_alert=True)
+            return
+        # в список строка админа не попадает, но старое сообщение с кнопкой живёт
+        # в чате вечно, а с карточки доступны «Отключить» и «Удалить»
+        if worker.tg_id == config.ADMIN_TG_ID:
+            await cb.answer("Это строка админа, а не работник", show_alert=True)
             return
         total = await s.scalar(
             select(func.count()).select_from(Lead)
@@ -677,7 +715,7 @@ async def broadcast_send(message: Message, state: FSMContext):
     async with Session() as s:
         targets = list(await s.scalars(
             select(Worker.tg_id).where(Worker.is_active.is_(True),
-                                       Worker.deleted_at.is_(None))
+                                       Worker.deleted_at.is_(None), NOT_ADMIN)
         ))
     sent = 0
     for tg_id in targets:
@@ -716,7 +754,8 @@ CSV_HEADER = [
 
 
 @router.message(F.text == kb.BTN_A_CSV)
-async def export_csv(message: Message):
+async def export_csv(message: Message, state: FSMContext):
+    await state.set_state(None)
     fd, path = tempfile.mkstemp(suffix=".csv", prefix="qdif_")
     os.close(fd)
     rows_written = 0

@@ -2,8 +2,9 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer,
-    Text, func, text,
+    Text, func, select, text,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -47,6 +48,42 @@ class Worker(Base, TimesMixin):
     daily_limit: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+async def _load_admin_worker() -> Worker | None:
+    """Строка админа, если она уже есть. Заодно оживляет отключённую и удалённую."""
+    async with Session() as s, s.begin():
+        worker = await s.scalar(
+            select(Worker).where(Worker.tg_id == config.ADMIN_TG_ID)
+        )
+        # без оживления случайное «🗑 Удалить» на своей же карточке — или строка,
+        # оставшаяся с тех пор, когда админ регистрировался работником, —
+        # навсегда закрыли бы админу добавление компаний
+        if worker is not None and (worker.deleted_at or not worker.is_active):
+            worker.deleted_at = None
+            worker.is_active = True
+    return worker
+
+
+async def ensure_admin_worker() -> Worker:
+    """Строка админа в workers: у лида worker_id обязателен, а регистрацию админ не проходит.
+
+    Заводится лениво, а не миграцией: так она одинаково появляется и в боевой
+    базе, и в тестовой ветке Neon, и в одноразовом Postgres в CI.
+    """
+    worker = await _load_admin_worker()
+    if worker is not None:
+        return worker
+    try:
+        async with Session() as s, s.begin():
+            worker = Worker(tg_id=config.ADMIN_TG_ID, name=config.ADMIN_NAME)
+            s.add(worker)
+    except IntegrityError:
+        # tg_id уникален: параллельный апдейт успел вставить строку первым
+        worker = await _load_admin_worker()
+    if worker is None:
+        raise RuntimeError("не удалось создать строку админа в workers")
+    return worker
 
 
 class Lead(Base, TimesMixin):

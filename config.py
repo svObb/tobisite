@@ -25,6 +25,10 @@ def _pick(test_name: str, prod_name: str) -> str:
 BOT_TOKEN = _pick("BOT_TEST_TOKEN", "BOT_TOKEN")
 ADMIN_TG_ID = int(_req("ADMIN_TG_ID"))
 ACCESS_CODE = _req("ACCESS_CODE")
+# Имя строки админа в workers: админ тоже заносит компании, а у лида worker_id
+# обязателен. Под этим именем админ виден в статистике по работникам и в CSV.
+# Необязательная: с _req выкат кода потребовал бы сначала править .env на сервере.
+ADMIN_NAME = (os.getenv("ADMIN_NAME") or "").strip() or "Администратор"
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "15"))
 CANCEL_WINDOW_MIN = int(os.getenv("CANCEL_WINDOW_MIN", "60"))
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Kyiv"))

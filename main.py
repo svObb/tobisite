@@ -13,7 +13,7 @@ import config
 import handlers_admin
 import handlers_worker
 import keyboards as kb
-from models import Session, Worker
+from models import Session, Worker, ensure_admin_worker
 
 log = logging.getLogger("qdif")
 
@@ -39,7 +39,12 @@ class Auth(BaseMiddleware):
 
         is_admin = user.id == config.ADMIN_TG_ID
         worker = None
-        if not is_admin:
+        if is_admin:
+            # админ тоже заносит компании, а у лида worker_id обязателен. Один
+            # запрос по уникальному tg_id на апдейт — ровно столько же платит
+            # каждый работник строкой ниже
+            worker = await ensure_admin_worker()
+        else:
             async with Session() as s:
                 worker = await s.scalar(
                     select(Worker).where(
@@ -80,9 +85,7 @@ common = Router()
 async def cancel_any(cb: CallbackQuery, state, is_admin: bool):
     await state.clear()
     await cb.answer("Отменено")
-    await cb.message.answer(
-        "Отменено.", reply_markup=kb.admin_menu() if is_admin else kb.worker_menu()
-    )
+    await cb.message.answer("Отменено.", reply_markup=kb.menu(is_admin))
 
 
 async def main():
@@ -105,6 +108,10 @@ async def main():
     dp.include_router(handlers_admin.router)
     dp.include_router(handlers_worker.edit_router)
     dp.include_router(handlers_worker.router)
+    # add_router общий для обеих ролей и обязан идти последним: в нём есть
+    # message(Add.name), который иначе перехватил бы «/start» посреди формы и
+    # записал его в название компании. /start — заявленный выход из залипания.
+    dp.include_router(handlers_worker.add_router)
 
     @dp.errors()
     async def on_error(event: ErrorEvent):

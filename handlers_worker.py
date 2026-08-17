@@ -21,7 +21,11 @@ from models import (
 log = logging.getLogger(__name__)
 
 router = Router()
+# Оба роутера ниже — общие для работника и админа: у router в main.py стоит
+# фильтр ~is_admin, у этих его нет. Админ заносит компании тем же мастером
+# и правит их теми же хендлерами.
 edit_router = Router()
+add_router = Router()
 
 
 def esc(v) -> str:
@@ -284,23 +288,29 @@ async def used_today(session, worker_id: int) -> int:
     )
 
 
-@router.message(F.text == kb.BTN_ADD)
-async def add_start(message: Message, state: FSMContext, worker: Worker | None):
+@add_router.message(F.text == kb.BTN_ADD)
+async def add_start(message: Message, state: FSMContext, worker: Worker | None,
+                    is_admin: bool):
     if not worker:
         await message.answer("Сначала /start")
         return
-    limit = worker.daily_limit if worker.daily_limit is not None else config.DEFAULT_DAILY_LIMIT
-    async with Session() as s:
-        used = await used_today(s, worker.id)
-    if used >= limit:
-        await message.answer("Лимит на сегодня исчерпан.")
-        return
+    # лимит нормирует работу наёмных людей, к владельцу базы он не относится
+    if not is_admin:
+        limit = (worker.daily_limit if worker.daily_limit is not None
+                 else config.DEFAULT_DAILY_LIMIT)
+        async with Session() as s:
+            used = await used_today(s, worker.id)
+        if used >= limit:
+            await message.answer("Лимит на сегодня исчерпан.")
+            return
     await state.set_state(Add.name)
-    await state.update_data(contacts=[])
+    # set_data, а не update_data: иначе повторный вход в форму тащит за собой
+    # поля прошлой попытки
+    await state.set_data({"contacts": []})
     await message.answer("1/12. Название компании:", reply_markup=kb.cancel_kb())
 
 
-@router.message(Add.name)
+@add_router.message(Add.name)
 async def add_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()
     if not name:
@@ -319,15 +329,15 @@ async def _after_website(target: Message, state: FSMContext):
     )
 
 
-@router.callback_query(Add.website, F.data == "ws:none")
+@add_router.callback_query(Add.website, F.data == "ws:none")
 async def add_website_none(cb: CallbackQuery, state: FSMContext):
     await state.update_data(website_url=None, domain_norm=None)
     await cb.answer()
     await _after_website(cb.message, state)
 
 
-@router.message(Add.website)
-async def add_website(message: Message, state: FSMContext):
+@add_router.message(Add.website)
+async def add_website(message: Message, state: FSMContext, is_admin: bool):
     raw = (message.text or "").strip()
     if not is_url(raw):
         await message.answer(
@@ -349,14 +359,14 @@ async def add_website(message: Message, state: FSMContext):
         await state.clear()
         await message.answer(
             "❌ Эта компания уже есть в базе. Добавление отменено.",
-            reply_markup=kb.worker_menu(),
+            reply_markup=kb.menu(is_admin),
         )
         return
     await state.update_data(website_url=raw, domain_norm=dom)
     await _after_website(message, state)
 
 
-@router.message(Add.source_url)
+@add_router.message(Add.source_url)
 async def add_source(message: Message, state: FSMContext):
     raw = (message.text or "").strip()
     if not is_url(raw):
@@ -378,7 +388,7 @@ async def _ask_city(target: Message, state: FSMContext):
     await target.answer("5/12. Город:", reply_markup=kb.cancel_kb())
 
 
-@router.callback_query(Add.country, F.data.startswith("co:"))
+@add_router.callback_query(Add.country, F.data.startswith("co:"))
 async def add_country(cb: CallbackQuery, state: FSMContext):
     key = cb.data.split(":")[1]
     await cb.answer()
@@ -394,7 +404,7 @@ async def add_country(cb: CallbackQuery, state: FSMContext):
     await _ask_city(cb.message, state)
 
 
-@router.message(Add.country_other)
+@add_router.message(Add.country_other)
 async def add_country_other(message: Message, state: FSMContext):
     val = (message.text or "").strip()
     if not val:
@@ -404,7 +414,7 @@ async def add_country_other(message: Message, state: FSMContext):
     await _ask_city(message, state)
 
 
-@router.message(Add.city)
+@add_router.message(Add.city)
 async def add_city(message: Message, state: FSMContext):
     val = (message.text or "").strip()
     if not val:
@@ -422,7 +432,7 @@ async def _ask_niche(target: Message, state: FSMContext):
     await target.answer("7/12. Ниша:", reply_markup=kb.choices_kb(config.NICHES, "ni"))
 
 
-@router.callback_query(Add.language, F.data.startswith("la:"))
+@add_router.callback_query(Add.language, F.data.startswith("la:"))
 async def add_language(cb: CallbackQuery, state: FSMContext):
     key = cb.data.split(":")[1]
     await cb.answer()
@@ -438,7 +448,7 @@ async def add_language(cb: CallbackQuery, state: FSMContext):
     await _ask_niche(cb.message, state)
 
 
-@router.message(Add.language_other)
+@add_router.message(Add.language_other)
 async def add_language_other(message: Message, state: FSMContext):
     val = (message.text or "").strip()
     if not val:
@@ -454,7 +464,7 @@ async def _ask_contact_type(target: Message, state: FSMContext):
     await target.answer("8/12. Тип контакта:", reply_markup=kb.choices_kb(labels, "ct"))
 
 
-@router.callback_query(Add.niche, F.data.startswith("ni:"))
+@add_router.callback_query(Add.niche, F.data.startswith("ni:"))
 async def add_niche(cb: CallbackQuery, state: FSMContext):
     key = cb.data.split(":")[1]
     await cb.answer()
@@ -470,7 +480,7 @@ async def add_niche(cb: CallbackQuery, state: FSMContext):
     await _ask_contact_type(cb.message, state)
 
 
-@router.message(Add.niche_other)
+@add_router.message(Add.niche_other)
 async def add_niche_other(message: Message, state: FSMContext):
     val = (message.text or "").strip()
     if not val:
@@ -488,7 +498,7 @@ async def _ask_contact_value(target: Message, state: FSMContext):
     )
 
 
-@router.callback_query(Add.c_type, F.data.startswith("ct:"))
+@add_router.callback_query(Add.c_type, F.data.startswith("ct:"))
 async def add_contact_type(cb: CallbackQuery, state: FSMContext):
     key = cb.data.split(":")[1]
     await cb.answer()
@@ -504,7 +514,7 @@ async def add_contact_type(cb: CallbackQuery, state: FSMContext):
     await _ask_contact_value(cb.message, state)
 
 
-@router.message(Add.c_other)
+@add_router.message(Add.c_other)
 async def add_contact_other(message: Message, state: FSMContext):
     val = (message.text or "").strip()
     if not val:
@@ -529,8 +539,8 @@ def contact_error(ctype: str, value: str, region: str | None = None) -> str | No
     return None
 
 
-@router.message(Add.c_value)
-async def add_contact_value(message: Message, state: FSMContext):
+@add_router.message(Add.c_value)
+async def add_contact_value(message: Message, state: FSMContext, is_admin: bool):
     val = (message.text or "").strip()
     d = await state.get_data()
     if not val:
@@ -539,7 +549,7 @@ async def add_contact_value(message: Message, state: FSMContext):
     ctype = d.get("cur_type")
     if ctype is None:
         await state.clear()
-        await message.answer(STALE, reply_markup=kb.worker_menu())
+        await message.answer(STALE, reply_markup=kb.menu(is_admin))
         return
     err = contact_error(ctype, val, config.COUNTRY_ISO.get(d.get("country")))
     if err:
@@ -562,13 +572,13 @@ async def _ask_rating(target: Message, state: FSMContext):
     )
 
 
-@router.callback_query(Add.c_more, F.data == "cm:yes")
+@add_router.callback_query(Add.c_more, F.data == "cm:yes")
 async def add_more_yes(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await _ask_contact_type(cb.message, state)
 
 
-@router.callback_query(Add.c_more, F.data == "cm:next")
+@add_router.callback_query(Add.c_more, F.data == "cm:next")
 async def add_more_next(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await _ask_rating(cb.message, state)
@@ -579,13 +589,13 @@ async def _ask_note(target: Message, state: FSMContext):
     await target.answer("10/12. Заметка:", reply_markup=kb.skip_kb("nt"))
 
 
-@router.callback_query(Add.rating, F.data == "rt:skip")
+@add_router.callback_query(Add.rating, F.data == "rt:skip")
 async def add_rating_skip(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await _ask_note(cb.message, state)
 
 
-@router.message(Add.rating)
+@add_router.message(Add.rating)
 async def add_rating(message: Message, state: FSMContext):
     await state.update_data(google_rating=(message.text or "").strip() or None)
     await _ask_note(message, state)
@@ -596,13 +606,13 @@ async def _ask_screenshot(target: Message, state: FSMContext):
     await target.answer("11/12. Скриншот сайта (фото):", reply_markup=kb.skip_kb("sc"))
 
 
-@router.callback_query(Add.note, F.data == "nt:skip")
+@add_router.callback_query(Add.note, F.data == "nt:skip")
 async def add_note_skip(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await _ask_screenshot(cb.message, state)
 
 
-@router.message(Add.note)
+@add_router.message(Add.note)
 async def add_note(message: Message, state: FSMContext):
     await state.update_data(note=(message.text or "").strip() or None)
     await _ask_screenshot(message, state)
@@ -615,19 +625,19 @@ async def _ask_found_via(target: Message, state: FSMContext):
     )
 
 
-@router.callback_query(Add.screenshot, F.data == "sc:skip")
+@add_router.callback_query(Add.screenshot, F.data == "sc:skip")
 async def add_screenshot_skip(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await _ask_found_via(cb.message, state)
 
 
-@router.message(Add.screenshot, F.photo)
+@add_router.message(Add.screenshot, F.photo)
 async def add_screenshot(message: Message, state: FSMContext):
     await state.update_data(screenshot_file_id=message.photo[-1].file_id)
     await _ask_found_via(message, state)
 
 
-@router.message(Add.screenshot)
+@add_router.message(Add.screenshot)
 async def add_screenshot_bad(message: Message, state: FSMContext):
     await message.answer("Пришлите фото или нажмите «Пропустить».",
                          reply_markup=kb.skip_kb("sc"))
@@ -639,7 +649,7 @@ async def _show_summary(target: Message, state: FSMContext):
     await target.answer(fmt_summary(d), reply_markup=kb.confirm_kb())
 
 
-@router.callback_query(Add.found_via, F.data.startswith("fv:"))
+@add_router.callback_query(Add.found_via, F.data.startswith("fv:"))
 async def add_found_via(cb: CallbackQuery, state: FSMContext):
     key = cb.data.split(":")[1]
     await cb.answer()
@@ -655,7 +665,7 @@ async def add_found_via(cb: CallbackQuery, state: FSMContext):
     await _show_summary(cb.message, state)
 
 
-@router.message(Add.found_via_other)
+@add_router.message(Add.found_via_other)
 async def add_found_via_other(message: Message, state: FSMContext):
     val = (message.text or "").strip()
     if not val:
@@ -665,7 +675,7 @@ async def add_found_via_other(message: Message, state: FSMContext):
     await _show_summary(message, state)
 
 
-@router.callback_query(Add.confirm, F.data == "cf:redo")
+@add_router.callback_query(Add.confirm, F.data == "cf:redo")
 async def add_redo(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await state.set_state(Add.name)
@@ -677,16 +687,17 @@ class LimitReached(Exception):
     """Лимит исчерпан между открытием формы и её отправкой."""
 
 
-async def save_lead(d: dict, worker: Worker, possible_dup: bool) -> int:
+async def save_lead(d: dict, worker: Worker, possible_dup: bool, is_admin: bool) -> int:
     region = config.COUNTRY_ISO.get(d["country"])
     async with Session() as s, s.begin():
         # форма из 12 шагов переживает и полночь, и снижение лимита админом,
         # поэтому проверка на входе в форму ничего не гарантирует
-        fresh = await s.get(Worker, worker.id)
-        limit = (fresh.daily_limit if fresh and fresh.daily_limit is not None
-                 else config.DEFAULT_DAILY_LIMIT)
-        if await used_today(s, worker.id) >= limit:
-            raise LimitReached
+        if not is_admin:
+            fresh = await s.get(Worker, worker.id)
+            limit = (fresh.daily_limit if fresh and fresh.daily_limit is not None
+                     else config.DEFAULT_DAILY_LIMIT)
+            if await used_today(s, worker.id) >= limit:
+                raise LimitReached
         lead = Lead(
             worker_id=worker.id, name=d["name"], website_url=d.get("website_url"),
             domain_norm=d.get("domain_norm"), source_url=d["source_url"],
@@ -707,30 +718,31 @@ async def save_lead(d: dict, worker: Worker, possible_dup: bool) -> int:
 
 
 async def _commit_and_reply(cb: CallbackQuery, state: FSMContext, worker: Worker,
-                            possible_dup: bool):
+                            possible_dup: bool, is_admin: bool):
     d = await state.get_data()
     try:
-        lead_id = await save_lead(d, worker, possible_dup)
+        lead_id = await save_lead(d, worker, possible_dup, is_admin)
     except LimitReached:
         await state.clear()
         await cb.message.answer(
             "Лимит на сегодня исчерпан, запись не сохранена.",
-            reply_markup=kb.worker_menu(),
+            reply_markup=kb.menu(is_admin),
         )
         return
     except IntegrityError as e:
         log.warning("dup on insert: %s", e.orig)
         await state.clear()
-        await cb.message.answer(dup_message(e), reply_markup=kb.worker_menu())
+        await cb.message.answer(dup_message(e), reply_markup=kb.menu(is_admin))
         return
     await state.clear()
     await cb.message.answer(
-        f"✅ Компания #{lead_id} принята", reply_markup=kb.saved_kb(lead_id)
+        f"✅ Компания #{lead_id} принята",
+        reply_markup=kb.admin_saved_kb(lead_id) if is_admin else kb.saved_kb(lead_id),
     )
 
 
-@router.callback_query(Add.confirm, F.data == "cf:send")
-async def add_send(cb: CallbackQuery, state: FSMContext, worker: Worker):
+@add_router.callback_query(Add.confirm, F.data == "cf:send")
+async def add_send(cb: CallbackQuery, state: FSMContext, worker: Worker, is_admin: bool):
     await cb.answer()
     d = await state.get_data()
     async with Session() as s:
@@ -749,13 +761,14 @@ async def add_send(cb: CallbackQuery, state: FSMContext, worker: Worker):
             reply_markup=kb.dup_kb(),
         )
         return
-    await _commit_and_reply(cb, state, worker, False)
+    await _commit_and_reply(cb, state, worker, False, is_admin)
 
 
-@router.callback_query(Add.dup, F.data == "dup:yes")
-async def add_send_dup(cb: CallbackQuery, state: FSMContext, worker: Worker):
+@add_router.callback_query(Add.dup, F.data == "dup:yes")
+async def add_send_dup(cb: CallbackQuery, state: FSMContext, worker: Worker,
+                       is_admin: bool):
     await cb.answer()
-    await _commit_and_reply(cb, state, worker, True)
+    await _commit_and_reply(cb, state, worker, True, is_admin)
 
 
 # --- мои компании / статистика / инструкция ----------------------------------
@@ -790,8 +803,14 @@ def list_text(leads, total, offset):
     return head + "\n" + "\n".join(body)
 
 
+# Кнопки нижнего меню перехватывают ввод формы: add_router подключён последним,
+# поэтому нажатие «Мои компании» посреди формы открывает раздел, а не становится
+# названием города. Состояние при этом надо погасить, иначе следующее сообщение
+# уйдёт в брошенную форму. set_state(None), а не clear(): в тех же данных у
+# админа лежат фильтры списка.
 @router.message(F.text == kb.BTN_MY)
-async def my_list(message: Message, worker: Worker):
+async def my_list(message: Message, state: FSMContext, worker: Worker):
+    await state.set_state(None)
     async with Session() as s:
         leads, total = await my_page(s, worker.id, 0)
     await message.answer(
@@ -842,7 +861,8 @@ async def my_card(cb: CallbackQuery, worker: Worker):
 
 
 @router.message(F.text == kb.BTN_MY_STATS)
-async def my_stats(message: Message, worker: Worker):
+async def my_stats(message: Message, state: FSMContext, worker: Worker):
+    await state.set_state(None)
     base = [
         Lead.worker_id == worker.id,
         Lead.cancelled_at.is_(None),
@@ -870,7 +890,8 @@ async def my_stats(message: Message, worker: Worker):
 
 
 @router.message(F.text == kb.BTN_HELP)
-async def help_text(message: Message):
+async def help_text(message: Message, state: FSMContext):
+    await state.set_state(None)
     await message.answer(config.INSTRUCTION_TEXT)
 
 
@@ -1271,14 +1292,14 @@ async def contact_delete(cb: CallbackQuery, worker, is_admin: bool):
 
 # Кнопки формы добавления отфильтрованы по состоянию. После перезапуска бота
 # состояния нет, ни один хендлер не срабатывает, и в чате навсегда виснут часики.
-# Хендлер объявлен последним в router, поэтому перехватывает только то, что не
-# разобрали обработчики выше.
+# Хендлер объявлен последним в add_router, а сам add_router подключается
+# последним в main.py — поэтому перехватывает только то, что не разобрали выше.
 FORM_PREFIXES = (
     "ws:", "co:", "la:", "ni:", "ct:", "cm:", "rt:", "nt:", "sc:", "fv:", "cf:", "dup:",
 )
 
 
-@router.callback_query(F.data.startswith(FORM_PREFIXES))
+@add_router.callback_query(F.data.startswith(FORM_PREFIXES))
 async def stale_form_button(cb: CallbackQuery):
     await cb.answer(STALE, show_alert=True)
 
