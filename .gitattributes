@@ -2,3 +2,6 @@
 # о «\r: command not found», а systemd затащит \r внутрь ExecStart.
 *.sh text eol=lf
 *.service text eol=lf
+# в шагах run: | раннер отдаёт содержимое bash'у, и \r превращается
+# в «command not found» на каждой строке
+*.yml text eol=lf
