@@ -1,0 +1,20 @@
+# .env исключён намеренно: секреты приезжают в контейнер через env_file,
+# внутрь образа они попадать не должны — образ лежит в реестре.
+.env
+.env.*
+!.env.example
+
+.git
+.gitattributes
+.gitignore
+.github/
+.venv/
+__pycache__/
+*.pyc
+*.log
+
+# серверная обвязка в образе не нужна: она выполняется на хосте
+deploy/
+
+# tools/ НУЖНЫ: разовые скрипты обслуживания запускаются внутри контейнера,
+# через docker compose run --rm bot python tools/renorm_phones.py

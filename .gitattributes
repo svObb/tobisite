@@ -5,3 +5,7 @@
 # в шагах run: | раннер отдаёт содержимое bash'у, и \r превращается
 # в «command not found» на каждой строке
 *.yml text eol=lf
+*.yaml text eol=lf
+# \r в конце строки RUN уезжает в саму команду и ломает сборку
+Dockerfile text eol=lf
+.dockerignore text eol=lf

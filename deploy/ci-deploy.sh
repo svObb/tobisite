@@ -12,12 +12,14 @@
 # Плюс сломанный скрипт в плохом коммите не должен лишать возможности
 # выкатить следующий.
 #
+# Образ здесь не собирается — он приезжает из GHCR готовым, тем самым, который
+# прошёл проверки в CI. Откат поэтому мгновенный: вернуть IMAGE_TAG и поднять.
+#
 # Миграции скрипт НЕ накатывает — только отказывается ехать на старой схеме.
 # Схема меняется вручную через deploy/deploy.sh, см. deploy/README.md.
 set -Eeuo pipefail
 
 APP=/opt/qdif-bot
-SERVICE=qdif-bot
 SHA="${SSH_ORIGINAL_COMMAND:-}"
 
 # Единственная защита от «ключ утёк — на сервере выполнили что угодно».
@@ -28,7 +30,15 @@ if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 cd "$APP"
-PREV=$(git rev-parse HEAD)
+
+# IMAGE_TAG в .env — это и есть «что сейчас запущено». Отсюда же берётся точка,
+# в которую откатываемся.
+PREV=$(grep '^IMAGE_TAG=' .env | head -1 | cut -d= -f2-)
+if [ -z "$PREV" ]; then
+    echo "!! в .env нет заполненного IMAGE_TAG — первый выкат делается вручную,"
+    echo "!! см. deploy/README.md, шаг 14"
+    exit 1
+fi
 echo "==> было $PREV"
 echo "==> ставим $SHA"
 
@@ -38,11 +48,19 @@ git cat-file -e "$SHA^{commit}"
 # ...и он из main, а не из чьей-то ветки и не старый уязвимый
 git merge-base --is-ancestor "$SHA" origin/main
 
+# .env перезаписывается целиком, поэтому только через временный файл: обрыв
+# посреди записи оставил бы сервер без токена бота и пароля к базе.
+set_tag() {
+    sed "s|^IMAGE_TAG=.*|IMAGE_TAG=$1|" .env > .env.new
+    chmod 600 .env.new
+    mv .env.new .env
+}
+
 rollback() {
     echo "==> откат на $PREV"
-    git reset --hard --quiet "$PREV"
-    .venv/bin/pip install --quiet -r requirements.txt || true
-    sudo systemctl restart "$SERVICE" || true
+    git reset --hard --quiet "$PREV" 2>/dev/null || true
+    set_tag "$PREV"
+    docker compose up -d || true
 }
 
 git reset --hard --quiet "$SHA"
@@ -53,40 +71,48 @@ if ! cmp -s /usr/local/bin/qdif-deploy deploy/ci-deploy.sh; then
     echo "::warning::deploy/ci-deploy.sh в репозитории отличается от /usr/local/bin/qdif-deploy — переустановите его на сервере"
 fi
 
-echo "==> зависимости"
-if ! .venv/bin/pip install --quiet -r requirements.txt; then
+echo "==> образ"
+set_tag "$SHA"
+if ! docker compose pull bot; then
+    echo "!! образ $SHA не скачался — сборка в CI не дошла до реестра или нет доступа"
     rollback
     exit 1
 fi
 
 echo "==> схема"
-# alembic current печатает «(head)» только когда база догнала миграции.
-# Пустой вывод (база вообще без alembic_version) сюда же — ехать нельзя.
-if ! .venv/bin/alembic current 2>/dev/null | grep -q '(head)'; then
-    echo "!! есть неналитая миграция — служба не тронута, код откатывается"
-    echo "!! накатите вручную: sudo -u qdif bash -c 'cd $APP && .venv/bin/alembic upgrade head'"
+# Миграции автодеплой не накатывает — только отказывается ехать на старой схеме.
+# alembic current печатает «(head)», лишь когда база догнала миграции; пустой
+# вывод (база вообще без alembic_version) сюда же — ехать нельзя.
+if ! docker compose run --rm bot alembic current 2>/dev/null | grep -q '(head)'; then
+    echo "!! есть неналитая миграция — контейнер не тронут, код и тег откатываются"
+    echo "!! накатите вручную: $APP/deploy/deploy.sh"
     rollback
     exit 1
 fi
 
-echo "==> перезапуск"
-STAMP=$(date '+%Y-%m-%d %H:%M:%S')
-sudo systemctl restart "$SERVICE"
-# RestartSec=5, так что за 12 секунд цикл падений успевает проявиться дважды
+echo "==> запуск"
+STAMP=$(date '+%Y-%m-%dT%H:%M:%S')
+docker compose up -d
+# у db стоит restart: unless-stopped с интервалом в секунды, так что за 12
+# секунд цикл падений успевает проявиться дважды
 sleep 12
 
-# is-active тут недостаточно: с Restart=always и StartLimitIntervalSec=0
-# падающий на старте бот бесконечно перезапускается и почти всё время
-# выглядит живым. Считаем строки, которые main.py пишет после успешного
-# get_me(): 0 — не поднялся, 1 — норма, больше — цикл падений.
-STARTS=$(journalctl -u "$SERVICE" --since "$STAMP" --no-pager | grep -c 'bot started' || true)
+# docker compose ps здесь недостаточно ровно по той же причине, по которой
+# не хватало systemctl is-active: с restart: unless-stopped падающий контейнер
+# почти всё время выглядит запущенным. Считаем строки, которые main.py пишет
+# после успешного get_me(): 0 — не поднялся, 1 — норма, больше — цикл падений.
+STARTS=$(docker compose logs --since "$STAMP" bot 2>/dev/null | grep -c 'bot started' || true)
+RUNNING=$(docker inspect --format '{{.State.Running}}' qdif-bot 2>/dev/null || echo false)
 
-if systemctl is-active --quiet "$SERVICE" && [ "${STARTS:-0}" -eq 1 ]; then
+if [ "$RUNNING" = "true" ] && [ "${STARTS:-0}" -eq 1 ]; then
     echo "==> бот работает на $SHA"
+    # сносит только висячие слои; образ PREV помечен тегом и остаётся
+    # доступным для отката
+    docker image prune -f >/dev/null
     exit 0
 fi
 
-echo "!! не поднялся (стартов с $STAMP: ${STARTS:-0})"
-journalctl -u "$SERVICE" --since "$STAMP" --no-pager | tail -40
+echo "!! не поднялся (запущен: $RUNNING, стартов с $STAMP: ${STARTS:-0})"
+docker compose logs --since "$STAMP" bot 2>/dev/null | tail -40
 rollback
 exit 1

@@ -1,0 +1,51 @@
+# Забирает свежий дамп с сервера в OneDrive. Запускается Планировщиком заданий
+# ежедневно в 04:00 — после серверного дампа в 03:30.
+#
+# Дамп, лежащий только на сервере, не спасает от потери сервера. Раньше в README
+# это был ручной еженедельный scp, то есть шаг, который не делается.
+#
+# Регистрация задачи (PowerShell от администратора, один раз):
+#   $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
+#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\qDif-handler\deploy\fetch-backup.ps1'
+#   Register-ScheduledTask -TaskName 'qDif backup fetch' -Action $act `
+#       -Trigger (New-ScheduledTaskTrigger -Daily -At 04:00) `
+#       -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
+#
+# -StartWhenAvailable обязателен: без него задача, выпавшая на спящий ноутбук,
+# просто не выполнится, и копии молча перестанут появляться.
+#
+# Секретов здесь нет: ходим по тому же ssh-ключу, которым сервер и так
+# администрируется.
+$ErrorActionPreference = 'Stop'
+
+# $Host — встроенная переменная PowerShell, перезаписать её нельзя
+$Server = 'root@ЗАМЕНИ_НА_IP'
+$Dir    = "$env:USERPROFILE\OneDrive\qdif-backups"
+$Keep   = 14
+
+New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+
+# Имя файла спрашиваем у сервера, а не собираем из даты: часовые пояса ноутбука
+# и сервера не совпадают, и в полночь мы бы просили ещё не созданный дамп.
+$name = ssh $Server 'ls -1t /var/backups/qdif/qdif-*.dump 2>/dev/null | head -1'
+if ($LASTEXITCODE -ne 0) { throw "ssh завершился с кодом $LASTEXITCODE" }
+$name = ($name | Select-Object -First 1)
+if (-not $name) { throw "на сервере нет ни одного дампа — проверьте cron qdif-backup" }
+$name = $name.Trim()
+
+$local = Join-Path $Dir (Split-Path $name -Leaf)
+scp "${Server}:$name" $local
+if ($LASTEXITCODE -ne 0) { throw "scp завершился с кодом $LASTEXITCODE" }
+
+# Пустой или обрезанный файл выглядит как успешная копия — это худший вид
+# отказа, потому что обнаруживается в момент восстановления.
+if ((Get-Item $local).Length -lt 1024) { throw "дамп подозрительно мал, проверьте сервер" }
+
+Get-ChildItem $Dir -Filter 'qdif-*.dump' |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -Skip $Keep |
+    Remove-Item -Force
+
+# Дату отсюда достаточно проверять раз в месяц: отстала — задача не отрабатывает
+Set-Content -Encoding utf8 -Path (Join-Path $Dir 'last-ok.txt') -Value (Get-Date -Format 'u')
+Write-Host "OK $local"
