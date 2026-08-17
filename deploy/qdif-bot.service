@@ -1,8 +1,11 @@
 [Unit]
 Description=qDif Handler — Telegram-бот сбора компаний
 Documentation=https://github.com/svObb/qDif-handler
-After=network-online.target
-Wants=network-online.target
+# база локальная, поэтому postgresql должен подняться раньше бота: иначе после
+# перезагрузки сервера бот падает на первом подключении и стартует только со
+# второй-третьей попытки Restart=always, засоряя журнал
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
 # без этого systemd сдаётся после 5 падений подряд и бот остаётся лежать
 StartLimitIntervalSec=0
 

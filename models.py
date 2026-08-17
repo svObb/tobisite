@@ -11,7 +11,7 @@ import config
 
 engine = create_async_engine(
     config.DATABASE_URL,
-    connect_args={"statement_cache_size": 0},  # pooled PgBouncer (Neon/Supabase)
+    connect_args=config.CONNECT_ARGS,  # см. config.POOLED_DB
     pool_pre_ping=True,
 )
 Session = async_sessionmaker(engine, expire_on_commit=False)

@@ -43,6 +43,22 @@ if _db_url.startswith("postgresql://"):
     _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 DATABASE_URL = _db_url
 
+# PgBouncer в transaction-режиме (так работают pooled-хосты Neon и Supabase) не
+# переваривает prepared statements asyncpg — прилетает DuplicatePreparedStatement.
+# Прямое подключение к локальному Postgres их переваривает, и кэш там нужен:
+# он экономит round-trip на каждом повторном запросе. Боевая база локальная,
+# тестовая — pooled в Neon, поэтому режим определяется по хосту, а не жёстко.
+# DB_POOLED=1/0 в .env перебивает автоопределение, если хост назван иначе.
+_pooled = os.getenv("DB_POOLED", "").strip().lower()
+if _pooled in ("1", "true", "yes"):
+    POOLED_DB = True
+elif _pooled in ("0", "false", "no"):
+    POOLED_DB = False
+else:
+    POOLED_DB = "pooler" in DATABASE_URL
+
+CONNECT_ARGS = {"statement_cache_size": 0} if POOLED_DB else {}
+
 # [("Украина", "UA"), ...]
 COUNTRIES = []
 for part in os.getenv("COUNTRIES", "").split(","):
