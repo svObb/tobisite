@@ -19,7 +19,7 @@
 $ErrorActionPreference = 'Stop'
 
 # $Host — встроенная переменная PowerShell, перезаписать её нельзя
-$Server = 'root@ЗАМЕНИ_НА_IP'
+$Server = 'root@178.104.114.82'
 $Dir    = "$env:USERPROFILE\OneDrive\qdif-backups"
 $Keep   = 14
 
