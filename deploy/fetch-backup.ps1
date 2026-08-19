@@ -17,14 +17,14 @@
 # Секретов здесь нет: ходим по тому же ssh-ключу, которым сервер и так
 # администрируется.
 #
-# Ходим под qdif, а не под root: ключа root на ноутбуке нет, и раньше задача
+# Ходим под tobisite, а не под root: ключа root на ноутбуке нет, и раньше задача
 # из-за этого падала каждый день, а папка копий так и не появилась. Дампы
-# снимает крон того же qdif — pg_dump выполняется внутри контейнера, и права
+# снимает крон того же tobisite — pg_dump выполняется внутри контейнера, и права
 # root для этого не нужны.
 $ErrorActionPreference = 'Stop'
 
 # $Host — встроенная переменная PowerShell, перезаписать её нельзя
-$Server = 'qdif@178.104.114.82'
+$Server = 'tobisite@178.104.114.82'
 $Dir    = "$env:USERPROFILE\OneDrive\tobisite-backups"
 $Keep   = 14
 
@@ -35,7 +35,7 @@ New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 $name = ssh $Server 'ls -1t ~/backups/tobisite-*.dump 2>/dev/null | head -1'
 if ($LASTEXITCODE -ne 0) { throw "ssh завершился с кодом $LASTEXITCODE" }
 $name = ($name | Select-Object -First 1)
-if (-not $name) { throw "на сервере нет ни одного дампа — проверьте crontab -l у qdif" }
+if (-not $name) { throw "на сервере нет ни одного дампа — проверьте crontab -l у tobisite" }
 $name = $name.Trim()
 
 $local = Join-Path $Dir (Split-Path $name -Leaf)
