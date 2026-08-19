@@ -85,7 +85,7 @@ cat /home/tobisite/.ssh/id_ed25519.pub
 
 ```bash
 sudo -u tobisite ssh -T git@github.com   # должно ответить: successfully authenticated
-sudo -u tobisite git clone git@github.com:svObb/tobisite-handler.git /opt/tobisite-bot
+sudo -u tobisite git clone git@github.com:svObb/tobisite.git /opt/tobisite-bot
 ```
 
 ## 5. Доступ к реестру образов
@@ -382,7 +382,7 @@ chmod 644 /etc/cron.d/tobisite-backup
 
 ```powershell
 $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite-handler\deploy\fetch-backup.ps1'
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite\deploy\fetch-backup.ps1'
 Register-ScheduledTask -TaskName 'Tobisite backup fetch' -Action $act `
     -Trigger (New-ScheduledTaskTrigger -Daily -At 04:00) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)

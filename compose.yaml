@@ -32,7 +32,7 @@ services:
     # compose, а с хоста — через docker compose exec
 
   bot:
-    image: ghcr.io/svobb/tobisite-handler:${IMAGE_TAG:?не задан IMAGE_TAG в .env}
+    image: ghcr.io/svobb/tobisite:${IMAGE_TAG:?не задан IMAGE_TAG в .env}
     container_name: tobisite-bot
     restart: unless-stopped
     env_file:
