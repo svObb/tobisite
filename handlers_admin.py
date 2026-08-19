@@ -17,8 +17,8 @@ from sqlalchemy.exc import IntegrityError
 import config
 import keyboards as kb
 from handlers_worker import (
-    STALE, edits_count, esc, fmt_lead, get_contacts, is_url, list_text, local,
-    pick, safe_edit,
+    STALE, cb_id, edits_count, esc, fmt_lead, get_contacts, is_url, list_text,
+    local, pick, safe_edit, send_screenshot,
 )
 from models import (
     Contact, Lead, LeadEvent, Session, Worker, day_start, log_event,
@@ -34,6 +34,23 @@ ACTIVE = (Lead.cancelled_at.is_(None), Lead.deleted_at.is_(None))
 # В статистике по работникам и в фильтре «Работник» он при этом остаётся —
 # иначе свои компании не найти.
 NOT_ADMIN = Worker.tg_id != config.ADMIN_TG_ID
+
+
+async def guard_admin_row(cb: CallbackQuery, wid: int) -> bool:
+    """False — это строка админа либо строки нет; управлять ею нельзя.
+
+    В список работников админ не попадает, но старое сообщение с кнопками живёт
+    в чате вечно, а с карточки доступны «Отключить», «Удалить» и смена лимита.
+    """
+    async with Session() as s:
+        worker = await s.get(Worker, wid)
+    if worker is None:
+        await cb.answer("Работник не найден", show_alert=True)
+        return False
+    if worker.tg_id == config.ADMIN_TG_ID:
+        await cb.answer("Это строка админа, а не работник", show_alert=True)
+        return False
+    return True
 
 
 class Adm(StatesGroup):
@@ -72,7 +89,9 @@ async def stats(message: Message, state: FSMContext):
             select(Worker.name, func.count(Lead.id))
             .join(Lead, Lead.worker_id == Worker.id)
             .where(*ACTIVE)
-            .group_by(Worker.name)
+            # по id, а не по имени: двух работников-тёзок группировка
+            # по имени сливала в одну строку
+            .group_by(Worker.id, Worker.name)
             .order_by(func.count(Lead.id).desc())
         )
     lines = [f"Всего: {total}", f"За сегодня: {today}", f"За 7 дней: {week}", "", "По работникам:"]
@@ -259,7 +278,9 @@ async def page(session, conds, offset):
 
 @router.callback_query(F.data.startswith("alp:"))
 async def all_page(cb: CallbackQuery, state: FSMContext):
-    offset = int(cb.data.split(":")[1])
+    offset = await cb_id(cb)
+    if offset is None:
+        return
     conds = flt_conditions(await get_flt(state))
     async with Session() as s:
         leads, total = await page(s, conds, offset)
@@ -295,32 +316,38 @@ async def my_leads(message: Message, state: FSMContext, worker: Worker):
 async def show_card(target: Message, lead_id: int):
     async with Session() as s:
         lead = await s.get(Lead, lead_id)
-        if not lead:
+        # deleted_at: запись нигде не показывается, но кнопка на неё могла
+        # остаться в старом сообщении
+        if not lead or lead.deleted_at:
             await target.answer("Запись не найдена.")
             return
         contacts = await get_contacts(s, lead_id)
         author = await s.get(Worker, lead.worker_id)
         edits = await edits_count(s, lead_id)
-    if lead.screenshot_file_id:
-        await target.answer_photo(lead.screenshot_file_id)
+    shown = await send_screenshot(target, lead.screenshot_file_id)
     markup = (
         kb.cancelled_card_kb(lead_id) if lead.cancelled_at else kb.admin_card_kb(lead_id)
     )
-    await target.answer(
-        fmt_lead(lead, contacts, author=author, edits=edits, admin=True),
-        reply_markup=markup,
-    )
+    text = fmt_lead(lead, contacts, author=author, edits=edits, admin=True)
+    if not shown:
+        text += '\n📷 Скриншот недоступен (сохранён прежним ботом).'
+    await target.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("acd:"))
 async def admin_card(cb: CallbackQuery):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     await cb.answer()
-    await show_card(cb.message, int(cb.data.split(":")[1]))
+    await show_card(cb.message, lead_id)
 
 
 @router.callback_query(F.data.startswith("sts:"))
 async def status_menu(cb: CallbackQuery):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     await cb.answer()
     await cb.message.answer("Новый статус:", reply_markup=kb.statuses_kb(lead_id))
 
@@ -331,12 +358,14 @@ async def status_set(cb: CallbackQuery):
     if len(parts) != 3 or parts[2] not in config.STATUS_LABELS:
         await cb.answer("Неизвестный статус", show_alert=True)
         return
-    _, lead_id, new = parts
-    lead_id = int(lead_id)
+    new = parts[2]
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s, s.begin():
         lead = await s.get(Lead, lead_id)
-        if not lead:
-            await cb.answer("Запись не найдена", show_alert=True)
+        if not lead or lead.deleted_at:
+            await cb.answer("Запись недоступна", show_alert=True)
             return
         old = lead.status
         lead.status = new
@@ -351,7 +380,9 @@ async def status_set(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("hst:"))
 async def history(cb: CallbackQuery):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s:
         events = list(await s.scalars(
             select(LeadEvent).where(LeadEvent.lead_id == lead_id)
@@ -374,8 +405,11 @@ async def history(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("drf:"))
 async def draft_ask(cb: CallbackQuery, state: FSMContext):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     await state.set_state(Adm.draft)
-    await state.update_data(lead_id=int(cb.data.split(":")[1]))
+    await state.update_data(lead_id=lead_id)
     await cb.answer()
     await cb.message.answer("Ссылка на черновик:", reply_markup=kb.cancel_kb())
 
@@ -389,9 +423,9 @@ async def draft_save(message: Message, state: FSMContext):
     d = await state.get_data()
     async with Session() as s, s.begin():
         lead = await s.get(Lead, d.get("lead_id", 0))
-        if lead is None:
+        if lead is None or lead.deleted_at:
             await state.clear()
-            await message.answer("Запись не найдена.")
+            await message.answer("Запись недоступна.")
             return
         lead.draft_url = val
     await state.clear()
@@ -400,8 +434,11 @@ async def draft_save(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("anz:"))
 async def note_ask(cb: CallbackQuery, state: FSMContext):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     await state.set_state(Adm.note)
-    await state.update_data(lead_id=int(cb.data.split(":")[1]))
+    await state.update_data(lead_id=lead_id)
     await cb.answer()
     await cb.message.answer("Текст заметки:", reply_markup=kb.cancel_kb())
 
@@ -411,9 +448,9 @@ async def note_save(message: Message, state: FSMContext):
     d = await state.get_data()
     async with Session() as s, s.begin():
         lead = await s.get(Lead, d.get("lead_id", 0))
-        if lead is None:
+        if lead is None or lead.deleted_at:
             await state.clear()
-            await message.answer("Запись не найдена.")
+            await message.answer("Запись недоступна.")
             return
         lead.admin_note = (message.text or "").strip() or None
     await state.clear()
@@ -422,7 +459,9 @@ async def note_save(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("del:"))
 async def delete_lead(cb: CallbackQuery):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s, s.begin():
         lead = await s.get(Lead, lead_id)
         if not lead or lead.deleted_at:
@@ -456,7 +495,9 @@ async def search_run(message: Message, state: FSMContext):
     if not q:
         await message.answer("Введите текст:", reply_markup=kb.cancel_kb())
         return
-    await state.clear()
+    # set_state(None), а не clear(): в тех же данных лежат фильтры списка,
+    # и поиск — не повод их терять
+    await state.set_state(None)
     await state.update_data(query=q)
     await _search_page(message, q, 0)
 
@@ -482,9 +523,12 @@ async def _search_page(target: Message, q: str, offset: int):
 
 @router.callback_query(F.data.startswith("spg:"))
 async def search_page(cb: CallbackQuery, state: FSMContext):
+    offset = await cb_id(cb)
+    if offset is None:
+        return
     d = await state.get_data()
     await cb.answer()
-    await _search_page(cb.message, d.get("query", ""), int(cb.data.split(":")[1]))
+    await _search_page(cb.message, d.get("query", ""), offset)
 
 
 # --- отменённые --------------------------------------------------------------
@@ -509,13 +553,18 @@ async def _cancelled_page(target: Message, offset: int, edit: bool):
 
 @router.callback_query(F.data.startswith("cxp:"))
 async def cancelled_page(cb: CallbackQuery):
+    offset = await cb_id(cb)
+    if offset is None:
+        return
     await cb.answer()
-    await _cancelled_page(cb.message, int(cb.data.split(":")[1]), edit=True)
+    await _cancelled_page(cb.message, offset, edit=True)
 
 
 @router.callback_query(F.data.startswith("rst:"))
 async def restore_lead(cb: CallbackQuery):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     try:
         async with Session() as s, s.begin():
             lead = await s.get(Lead, lead_id)
@@ -580,23 +629,22 @@ async def _workers_page(target: Message, offset: int, edit: bool):
 
 @router.callback_query(F.data.startswith("wlp:"))
 async def workers_page(cb: CallbackQuery):
+    offset = await cb_id(cb)
+    if offset is None:
+        return
     await cb.answer()
-    await _workers_page(cb.message, int(cb.data.split(":")[1]), edit=True)
+    await _workers_page(cb.message, offset, edit=True)
 
 
 @router.callback_query(F.data.startswith("wcd:"))
 async def worker_card(cb: CallbackQuery):
-    wid = int(cb.data.split(":")[1])
+    wid = await cb_id(cb)
+    if wid is None:
+        return
+    if not await guard_admin_row(cb, wid):
+        return
     async with Session() as s:
         worker = await s.get(Worker, wid)
-        if not worker:
-            await cb.answer("Не найден", show_alert=True)
-            return
-        # в список строка админа не попадает, но старое сообщение с кнопкой живёт
-        # в чате вечно, а с карточки доступны «Отключить» и «Удалить»
-        if worker.tg_id == config.ADMIN_TG_ID:
-            await cb.answer("Это строка админа, а не работник", show_alert=True)
-            return
         total = await s.scalar(
             select(func.count()).select_from(Lead)
             .where(*ACTIVE, Lead.worker_id == wid)
@@ -619,8 +667,11 @@ async def worker_card(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("wlm:"))
 async def worker_limit_ask(cb: CallbackQuery, state: FSMContext):
+    wid = await cb_id(cb)
+    if wid is None or not await guard_admin_row(cb, wid):
+        return
     await state.set_state(Adm.limit)
-    await state.update_data(worker_id=int(cb.data.split(":")[1]))
+    await state.update_data(worker_id=wid)
     await cb.answer()
     await cb.message.answer(
         "Новый дневной лимит (число, или 0 — вернуть значение по умолчанию):",
@@ -658,7 +709,9 @@ async def worker_limit_save(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("wof:"))
 async def worker_toggle(cb: CallbackQuery):
-    wid = int(cb.data.split(":")[1])
+    wid = await cb_id(cb)
+    if wid is None or not await guard_admin_row(cb, wid):
+        return
     async with Session() as s, s.begin():
         worker = await s.get(Worker, wid)
         if worker is None:
@@ -673,7 +726,9 @@ async def worker_toggle(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("wdl:"))
 async def worker_delete_ask(cb: CallbackQuery):
-    wid = int(cb.data.split(":")[1])
+    wid = await cb_id(cb)
+    if wid is None or not await guard_admin_row(cb, wid):
+        return
     await cb.answer()
     await cb.message.answer(
         "Удалить работника? Добавленные им компании останутся в базе, "
@@ -685,7 +740,9 @@ async def worker_delete_ask(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("wdy:"))
 async def worker_delete(cb: CallbackQuery):
-    wid = int(cb.data.split(":")[1])
+    wid = await cb_id(cb)
+    if wid is None or not await guard_admin_row(cb, wid):
+        return
     async with Session() as s, s.begin():
         worker = await s.get(Worker, wid)
         if worker is None or worker.deleted_at:
