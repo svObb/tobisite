@@ -6,7 +6,7 @@
 #
 # Регистрация задачи (PowerShell от администратора, один раз):
 #   $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
-#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite-handler\deploy\fetch-backup.ps1'
+#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite\deploy\fetch-backup.ps1'
 #   Register-ScheduledTask -TaskName 'Tobisite backup fetch' -Action $act `
 #       -Trigger (New-ScheduledTaskTrigger -Daily -At 04:00) `
 #       -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
