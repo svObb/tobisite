@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Тестовый режим: python main.py --test, для alembic — переменная QDIF_TEST=1.
+# Тестовый режим: python main.py --test, для alembic — переменная TOBISITE_TEST=1.
 # Боевой запуск (systemd) идёт без флага и в тест уйти не может.
-TEST_MODE = "--test" in sys.argv or os.getenv("QDIF_TEST") == "1"
+TEST_MODE = "--test" in sys.argv or os.getenv("TOBISITE_TEST") == "1"
 
 
 def _req(name: str) -> str:

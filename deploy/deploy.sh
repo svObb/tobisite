@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Ручной деплой qDif Handler. Запускать на сервере от пользователя qdif:
-#   /opt/qdif-bot/deploy/deploy.sh
+# Ручной деплой Tobisite Handler. Запускать на сервере от пользователя tobisite:
+#   /opt/tobisite-bot/deploy/deploy.sh
 #
 # Обычные правки кода приезжают сами, из GitHub Actions (deploy/ci-deploy.sh).
 # Этот скрипт нужен для одного случая: выкат вместе с миграцией. Автодеплой
@@ -11,7 +11,7 @@
 # запускать надо ровно то, что прошло проверки в CI.
 set -euo pipefail
 
-cd /opt/qdif-bot
+cd /opt/tobisite-bot
 
 echo "==> код"
 git pull --ff-only
@@ -25,7 +25,7 @@ docker compose pull bot
 
 echo "==> резервная копия перед миграцией"
 # Схему alembic downgrade вернёт, а удалённые колонкой данные — нет.
-docker exec qdif-db pg_dump -U qdif -Fc qdif > "/tmp/qdif-before-migration-$(date +%F_%H%M).dump"
+docker exec tobisite-db pg_dump -U tobisite -Fc tobisite > "/tmp/tobisite-before-migration-$(date +%F_%H%M).dump"
 
 echo "==> миграции"
 docker compose run --rm bot alembic upgrade head
@@ -39,7 +39,7 @@ sleep 12
 # бесконечно перезапускается и почти всё время выглядит живым. Считаем строки,
 # которые main.py пишет после успешного get_me().
 STARTS=$(docker compose logs --since "$STAMP" bot 2>/dev/null | grep -c 'bot started' || true)
-RUNNING=$(docker inspect --format '{{.State.Running}}' qdif-bot 2>/dev/null || echo false)
+RUNNING=$(docker inspect --format '{{.State.Running}}' tobisite-bot 2>/dev/null || echo false)
 
 if [ "$RUNNING" = "true" ] && [ "${STARTS:-0}" -eq 1 ]; then
     echo "==> бот работает"
