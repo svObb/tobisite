@@ -66,6 +66,43 @@ async def safe_edit(message: Message, text, reply_markup=None):
             raise
 
 
+MAX_ID_DIGITS = 19  # bigint: длиннее числа в базе всё равно нет
+
+
+async def cb_id(cb: CallbackQuery) -> int | None:
+    """Число из callback_data вида «pfx:123». None — данные не от нашей кнопки.
+
+    Клиент вправе прислать в callback_query что угодно, а int() на этом падает:
+    без проверки вместо внятного ответа пользователь видел «что-то пошло не так»,
+    а в лог сыпался traceback.
+    """
+    part = (cb.data or "").split(":")
+    key = part[1] if len(part) > 1 else ""
+    # isascii вдобавок к isdecimal: без него проходят арабо-индийские цифры,
+    # int() их принимает, и в запрос уходил бы id, которого мы не рисовали
+    if not (key.isascii() and key.isdecimal()) or len(key) > MAX_ID_DIGITS:
+        await cb.answer(STALE, show_alert=True)
+        return None
+    return int(key)
+
+
+async def send_screenshot(target: Message, file_id: str | None) -> bool:
+    """Скриншот в чат. False — file_id больше не открывается.
+
+    file_id привязан к боту: после смены токена все снимки, сохранённые прежним
+    ботом, отдают 400. Без этой обёртки карточка такой записи не открывалась
+    вовсе — падение уходило в общий обработчик ошибок.
+    """
+    if not file_id:
+        return True
+    try:
+        await target.answer_photo(file_id)
+        return True
+    except TelegramBadRequest as e:
+        log.warning("screenshot unavailable: %s", e)
+        return False
+
+
 def pick(options, key: str):
     """Индекс из callback_data → элемент списка. None, если список изменился."""
     # isdecimal, а не isdigit: у isdigit истинны «²» и подобные, а int() на них падает
@@ -152,8 +189,23 @@ class Reg(StatesGroup):
 # приемлемо — цель в том, чтобы перебор был бессмысленно медленным.
 MAX_CODE_TRIES = 5
 CODE_BLOCK_MIN = 15
+# Ключ — tg_id любого, кто написал боту, поэтому у словарей обязан быть потолок:
+# иначе поток чужих /start растит их в памяти процесса неограниченно.
+MAX_TRACKED = 10_000
 _code_tries: dict[int, int] = {}
 _code_blocked: dict[int, datetime] = {}
+
+
+def forget_stale() -> None:
+    """Снимает истёкшие блокировки и подрезает словари до потолка."""
+    now = datetime.now(config.TZ)
+    for tg_id in [k for k, until in _code_blocked.items() if until <= now]:
+        _code_blocked.pop(tg_id, None)
+        _code_tries.pop(tg_id, None)
+    # dict хранит порядок вставки, поэтому «первый» — самый давний
+    for d in (_code_tries, _code_blocked):
+        while len(d) > MAX_TRACKED:
+            d.pop(next(iter(d)))
 
 
 def code_block_left(tg_id: int) -> int:
@@ -193,6 +245,7 @@ async def reg_code(message: Message, state: FSMContext):
         await message.answer(f"Слишком много неверных попыток. Повторите через {left} мин.")
         return
     if message.text != config.ACCESS_CODE:
+        forget_stale()
         tries = _code_tries.get(tg_id, 0) + 1
         _code_tries[tg_id] = tries
         log.warning("wrong access code from tg_id=%s (%s/%s)", tg_id, tries, MAX_CODE_TRIES)
@@ -216,19 +269,24 @@ async def reg_name(message: Message, state: FSMContext):
     if not name:
         await message.answer("Введите имя текстом:")
         return
-    async with Session() as s, s.begin():
-        # tg_id уникален: у удалённого работника строка в базе осталась, и вставка
-        # упала бы на IntegrityError вместо внятного отказа. Заодно это и есть
-        # смысл удаления — иначе человек просто вернулся бы по общему коду.
-        existing = await s.scalar(
-            select(Worker).where(Worker.tg_id == message.from_user.id)
-        )
-        if existing is None:
-            s.add(Worker(tg_id=message.from_user.id, name=name))
+    tg_id = message.from_user.id
+    try:
+        async with Session() as s, s.begin():
+            # tg_id уникален: у удалённого работника строка в базе осталась,
+            # и вставка упала бы на IntegrityError вместо внятного отказа.
+            # Заодно это и есть смысл удаления — иначе человек просто вернулся
+            # бы по общему коду.
+            existing = await s.scalar(select(Worker).where(Worker.tg_id == tg_id))
+            if existing is None:
+                s.add(Worker(tg_id=tg_id, name=name))
+    except IntegrityError:
+        # два сообщения подряд успели пройти проверку до вставки друг друга
+        async with Session() as s:
+            existing = await s.scalar(select(Worker).where(Worker.tg_id == tg_id))
     await state.clear()
     if existing is not None:
         if existing.deleted_at or not existing.is_active:
-            log.warning("blocked re-registration tg_id=%s", message.from_user.id)
+            log.warning("blocked re-registration tg_id=%s", tg_id)
             await message.answer("Доступ закрыт администратором.")
         else:
             await message.answer(
@@ -236,13 +294,13 @@ async def reg_name(message: Message, state: FSMContext):
                 reply_markup=kb.worker_menu(),
             )
         return
-    log.info("worker registered tg_id=%s", message.from_user.id)
+    log.info("worker registered tg_id=%s", tg_id)
     await message.answer(f"Готово, {esc(name)}!", reply_markup=kb.worker_menu())
     # админ должен знать о каждом, кто получил доступ по общему коду
     try:
         await message.bot.send_message(
             config.ADMIN_TG_ID,
-            f"👤 Новый работник: {esc(name)} (tg id {message.from_user.id})",
+            f"👤 Новый работник: {esc(name)} (tg id {tg_id})",
         )
     except Exception as e:
         log.warning("admin notify failed: %s", e)
@@ -821,7 +879,9 @@ async def my_list(message: Message, state: FSMContext, worker: Worker):
 
 @router.callback_query(F.data.startswith("mlp:"))
 async def my_list_page(cb: CallbackQuery, worker: Worker):
-    offset = int(cb.data.split(":")[1])
+    offset = await cb_id(cb)
+    if offset is None:
+        return
     async with Session() as s:
         leads, total = await my_page(s, worker.id, offset)
     await cb.answer()
@@ -843,7 +903,9 @@ def cancel_open(lead: Lead) -> bool:
 
 @router.callback_query(F.data.startswith("mcd:"))
 async def my_card(cb: CallbackQuery, worker: Worker):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s:
         lead = await s.get(Lead, lead_id)
         if not lead or lead.worker_id != worker.id or lead.deleted_at or lead.cancelled_at:
@@ -852,11 +914,12 @@ async def my_card(cb: CallbackQuery, worker: Worker):
         contacts = await get_contacts(s, lead_id)
     await cb.answer()
     can_edit = lead.status == "new"
-    if lead.screenshot_file_id:
-        await cb.message.answer_photo(lead.screenshot_file_id)
+    shown = await send_screenshot(cb.message, lead.screenshot_file_id)
+    text = fmt_lead(lead, contacts)
+    if not shown:
+        text += '\n📷 Скриншот недоступен (сохранён прежним ботом).'
     await cb.message.answer(
-        fmt_lead(lead, contacts),
-        reply_markup=kb.my_card_kb(lead_id, can_edit, cancel_open(lead)),
+        text, reply_markup=kb.my_card_kb(lead_id, can_edit, cancel_open(lead))
     )
 
 
@@ -899,7 +962,9 @@ async def help_text(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("lcx:"))
 async def cancel_lead(cb: CallbackQuery, worker: Worker):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s, s.begin():
         lead = await s.get(Lead, lead_id, with_for_update=True)
         if not lead or lead.worker_id != worker.id or lead.deleted_at:
@@ -915,7 +980,9 @@ async def cancel_lead(cb: CallbackQuery, worker: Worker):
         # объекта осталась бы SQL-конструкция вместо даты
         now = datetime.now(config.TZ)
         lead.cancelled_at = now
-        lead.cancelled_by = worker.id
+        # tg_id, а не workers.id: в lead_events actor записан именно так,
+        # и колонка на два разных пространства идентификаторов бесполезна
+        lead.cancelled_by = cb.from_user.id
         await s.execute(
             update(Contact).where(Contact.lead_id == lead_id)
             .values(lead_cancelled_at=now)
@@ -959,7 +1026,9 @@ async def load_editable(session, lead_id, worker, is_admin):
 
 @edit_router.callback_query(F.data.startswith("led:"))
 async def edit_menu(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s:
         lead = await load_editable(s, lead_id, worker, is_admin)
     if not lead:
@@ -1016,8 +1085,10 @@ async def edit_field(cb: CallbackQuery, state: FSMContext, worker, is_admin: boo
     if len(parts) != 3 or parts[2] not in config.FIELD_LABELS:
         await cb.answer("Это поле нельзя редактировать", show_alert=True)
         return
-    _, lead_id, field = parts
-    lead_id = int(lead_id)
+    field = parts[2]
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s:
         lead = await load_editable(s, lead_id, worker, is_admin)
     if not lead:
@@ -1123,7 +1194,9 @@ async def edit_value(message: Message, state: FSMContext, worker, is_admin: bool
 
 @edit_router.callback_query(F.data.startswith("ecm:"))
 async def edit_contacts_menu(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s:
         lead = await load_editable(s, lead_id, worker, is_admin)
         if not lead:
@@ -1139,7 +1212,9 @@ async def edit_contacts_menu(cb: CallbackQuery, state: FSMContext, worker, is_ad
 
 @edit_router.callback_query(F.data.startswith("eca:"))
 async def contact_add(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
-    lead_id = int(cb.data.split(":")[1])
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
     async with Session() as s:
         lead = await load_editable(s, lead_id, worker, is_admin)
         if not lead:
@@ -1186,7 +1261,9 @@ async def contact_type_other(message: Message, state: FSMContext):
 
 @edit_router.callback_query(F.data.startswith("ece:"))
 async def contact_edit(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
-    contact_id = int(cb.data.split(":")[1])
+    contact_id = await cb_id(cb)
+    if contact_id is None:
+        return
     async with Session() as s:
         contact = await s.get(Contact, contact_id)
         if not contact or contact.deleted_at:
@@ -1264,7 +1341,9 @@ async def contact_value(message: Message, state: FSMContext, worker, is_admin: b
 
 @edit_router.callback_query(F.data.startswith("ecd:"))
 async def contact_delete(cb: CallbackQuery, worker, is_admin: bool):
-    contact_id = int(cb.data.split(":")[1])
+    contact_id = await cb_id(cb)
+    if contact_id is None:
+        return
     async with Session() as s, s.begin():
         contact = await s.get(Contact, contact_id)
         if not contact or contact.deleted_at:

@@ -6,7 +6,7 @@ from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, ErrorEvent, Message
+from aiogram.types import BotCommand, CallbackQuery, ErrorEvent, Message
 from sqlalchemy import select
 
 import config
@@ -132,6 +132,15 @@ async def main():
         return True
 
     me = await bot.get_me()
+    # Список команд у бота пустой по умолчанию: без него в чате нет кнопки
+    # «Меню», и /start приходится набирать руками. Не критично для запуска,
+    # поэтому отказ только логируется.
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Начать заново"),
+        ])
+    except Exception as e:
+        log.warning("set_my_commands failed: %s", e)
     log.info(
         "bot started: @%s, режим %s",
         me.username, "ТЕСТОВЫЙ" if config.TEST_MODE else "боевой",
