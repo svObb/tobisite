@@ -124,7 +124,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
 
       # Ключ на сервере ограничен форсированной командой: всё, что мы можем
-      # отправить, — это коммит. Сам выкат делает /usr/local/bin/qdif-deploy.
+      # отправить, — это коммит. Сам выкат делает /usr/local/bin/tobisite-deploy.
       - name: выкат
         run: |
           ssh -i ~/.ssh/id_ed25519 \

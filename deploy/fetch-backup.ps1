@@ -6,8 +6,8 @@
 #
 # Регистрация задачи (PowerShell от администратора, один раз):
 #   $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
-#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\qDif-handler\deploy\fetch-backup.ps1'
-#   Register-ScheduledTask -TaskName 'qDif backup fetch' -Action $act `
+#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite-handler\deploy\fetch-backup.ps1'
+#   Register-ScheduledTask -TaskName 'Tobisite backup fetch' -Action $act `
 #       -Trigger (New-ScheduledTaskTrigger -Daily -At 04:00) `
 #       -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
 #
@@ -20,17 +20,17 @@ $ErrorActionPreference = 'Stop'
 
 # $Host — встроенная переменная PowerShell, перезаписать её нельзя
 $Server = 'root@178.104.114.82'
-$Dir    = "$env:USERPROFILE\OneDrive\qdif-backups"
+$Dir    = "$env:USERPROFILE\OneDrive\tobisite-backups"
 $Keep   = 14
 
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 
 # Имя файла спрашиваем у сервера, а не собираем из даты: часовые пояса ноутбука
 # и сервера не совпадают, и в полночь мы бы просили ещё не созданный дамп.
-$name = ssh $Server 'ls -1t /var/backups/qdif/qdif-*.dump 2>/dev/null | head -1'
+$name = ssh $Server 'ls -1t /var/backups/tobisite/tobisite-*.dump 2>/dev/null | head -1'
 if ($LASTEXITCODE -ne 0) { throw "ssh завершился с кодом $LASTEXITCODE" }
 $name = ($name | Select-Object -First 1)
-if (-not $name) { throw "на сервере нет ни одного дампа — проверьте cron qdif-backup" }
+if (-not $name) { throw "на сервере нет ни одного дампа — проверьте cron tobisite-backup" }
 $name = $name.Trim()
 
 $local = Join-Path $Dir (Split-Path $name -Leaf)
@@ -41,7 +41,7 @@ if ($LASTEXITCODE -ne 0) { throw "scp завершился с кодом $LASTEX
 # отказа, потому что обнаруживается в момент восстановления.
 if ((Get-Item $local).Length -lt 1024) { throw "дамп подозрительно мал, проверьте сервер" }
 
-Get-ChildItem $Dir -Filter 'qdif-*.dump' |
+Get-ChildItem $Dir -Filter 'tobisite-*.dump' |
     Sort-Object LastWriteTime -Descending |
     Select-Object -Skip $Keep |
     Remove-Item -Force
