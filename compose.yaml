@@ -1,4 +1,4 @@
-name: qdif
+name: tobisite
 
 # У драйвера json-file нет ротации по умолчанию: без этих опций логи растут,
 # пока не кончится диск. У journald, из-под которого бот жил раньше, ротация
@@ -14,16 +14,16 @@ services:
     # мажорная версия совпадает с той, что была на хосте: pg_restore не примет
     # дамп, снятый более новым сервером
     image: postgres:16
-    container_name: qdif-db
+    container_name: tobisite-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: qdif
-      POSTGRES_DB: qdif
+      POSTGRES_USER: tobisite
+      POSTGRES_DB: tobisite
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?не задан POSTGRES_PASSWORD в .env}
     volumes:
-      - qdif-pgdata:/var/lib/postgresql/data
+      - tobisite-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U qdif -d qdif"]
+      test: ["CMD-SHELL", "pg_isready -U tobisite -d tobisite"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -32,8 +32,8 @@ services:
     # compose, а с хоста — через docker compose exec
 
   bot:
-    image: ghcr.io/svobb/qdif-handler:${IMAGE_TAG:?не задан IMAGE_TAG в .env}
-    container_name: qdif-bot
+    image: ghcr.io/svobb/tobisite-handler:${IMAGE_TAG:?не задан IMAGE_TAG в .env}
+    container_name: tobisite-bot
     restart: unless-stopped
     env_file:
       - .env
@@ -41,7 +41,7 @@ services:
       # пароль задан ровно один раз, в POSTGRES_PASSWORD; environment
       # перекрывает env_file, поэтому старая строка DATABASE_URL из .env
       # ни на что не влияет
-      DATABASE_URL: postgresql+asyncpg://qdif:${POSTGRES_PASSWORD}@db:5432/qdif
+      DATABASE_URL: postgresql+asyncpg://tobisite:${POSTGRES_PASSWORD}@db:5432/tobisite
       # лог только в stdout: файл внутри контейнера некуда писать и незачем
       LOG_FILE: ''
     depends_on:
@@ -58,4 +58,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  qdif-pgdata:
+  tobisite-pgdata:

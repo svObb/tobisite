@@ -1,4 +1,4 @@
-# Развёртывание qDif Handler на VPS
+# Развёртывание Tobisite Handler на VPS
 
 Бот не слушает порты и не принимает входящие соединения — только сам ходит
 в Telegram. База лежит на этом же сервере, в контейнере рядом с ботом, и наружу
@@ -55,15 +55,15 @@ dpkg-reconfigure -f noninteractive unattended-upgrades
 ## 3. Пользователь бота
 
 ```bash
-adduser --disabled-password --gecos "" qdif
-usermod -aG docker qdif
-mkdir -p /opt/qdif-bot
-chown qdif:qdif /opt/qdif-bot
+adduser --disabled-password --gecos "" tobisite
+usermod -aG docker tobisite
+mkdir -p /opt/tobisite-bot
+chown tobisite:tobisite /opt/tobisite-bot
 ```
 
 ⚠️ **Группа `docker` — это фактически права root.** Член группы запускает
 контейнер с примонтированным `/` и читает или меняет на диске что угодно.
-Отдельного правила sudo боту больше не нужно, но и барьера между `qdif` и root
+Отдельного правила sudo боту больше не нужно, но и барьера между `tobisite` и root
 теперь нет. Это осознанная плата за контейнеры; если она смущает, обратно
 к systemd можно вернуться по истории git.
 
@@ -73,19 +73,19 @@ chown qdif:qdif /opt/qdif-bot
 `compose.yaml`, миграции и скрипты деплоя.
 
 ```bash
-sudo -u qdif mkdir -p /home/qdif/.ssh
-sudo -u qdif chmod 700 /home/qdif/.ssh
-sudo -u qdif ssh-keygen -t ed25519 -C "qdif-vps" -f /home/qdif/.ssh/id_ed25519 -N ""
-sudo -u qdif bash -c 'ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts'
-cat /home/qdif/.ssh/id_ed25519.pub
+sudo -u tobisite mkdir -p /home/tobisite/.ssh
+sudo -u tobisite chmod 700 /home/tobisite/.ssh
+sudo -u tobisite ssh-keygen -t ed25519 -C "tobisite-vps" -f /home/tobisite/.ssh/id_ed25519 -N ""
+sudo -u tobisite bash -c 'ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts'
+cat /home/tobisite/.ssh/id_ed25519.pub
 ```
 
 Публичный ключ — в репозиторий: **Settings → Deploy keys → Add deploy key**,
 галочку *Allow write access* **не ставить**, серверу нужно только читать.
 
 ```bash
-sudo -u qdif ssh -T git@github.com   # должно ответить: successfully authenticated
-sudo -u qdif git clone git@github.com:svObb/qDif-handler.git /opt/qdif-bot
+sudo -u tobisite ssh -T git@github.com   # должно ответить: successfully authenticated
+sudo -u tobisite git clone git@github.com:svObb/tobisite-handler.git /opt/tobisite-bot
 ```
 
 ## 5. Доступ к реестру образов
@@ -97,12 +97,12 @@ GitHub → Settings → Developer settings → Personal access tokens → **Toke
 (classic)** → Generate new token. Единственная галочка — `read:packages`.
 
 ```bash
-sudo -iu qdif
+sudo -iu tobisite
 echo '<ТОКЕН>' | docker login ghcr.io -u svObb --password-stdin
 exit
 ```
 
-Токен ляжет в `/home/qdif/.docker/config.json` и больше нигде не понадобится.
+Токен ляжет в `/home/tobisite/.docker/config.json` и больше нигде не понадобится.
 
 ## 6. База
 
@@ -120,7 +120,7 @@ openssl rand -hex 24
 Порт наружу база не публикует. С хоста она доступна так:
 
 ```bash
-sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose exec db psql -U qdif -d qdif'
+sudo -u tobisite bash -c 'cd /opt/tobisite-bot && docker compose exec db psql -U tobisite -d tobisite'
 ```
 
 ## 7. Файл .env
@@ -129,15 +129,15 @@ sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose exec db psql -U qdif -d
 руками. С локальной машины, из папки проекта:
 
 ```bash
-scp .env root@<IP>:/tmp/qdif.env
+scp .env root@<IP>:/tmp/tobisite.env
 ```
 
 На сервере:
 
 ```bash
-mv /tmp/qdif.env /opt/qdif-bot/.env
-chown qdif:qdif /opt/qdif-bot/.env
-chmod 600 /opt/qdif-bot/.env
+mv /tmp/tobisite.env /opt/tobisite-bot/.env
+chown tobisite:tobisite /opt/tobisite-bot/.env
+chmod 600 /opt/tobisite-bot/.env
 ```
 
 Права `600` обязательны: внутри токен бота, код регистрации и пароль к базе.
@@ -163,8 +163,8 @@ chmod 600 /opt/qdif-bot/.env
 нет, — бот упадёт на старте, а автодеплой увидит это и откатит выкат.
 
 ```bash
-sudo -u qdif nano /opt/qdif-bot/.env
-sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose up -d'
+sudo -u tobisite nano /opt/tobisite-bot/.env
+sudo -u tobisite bash -c 'cd /opt/tobisite-bot && docker compose up -d'
 ```
 
 ⚠️ Именно `up -d`, а не `restart`: `restart` перезапускает контейнер со старым
@@ -174,7 +174,7 @@ sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose up -d'
 Посмотреть, что в файле сейчас:
 
 ```bash
-sudo -u qdif grep -v -e '^#' -e '^$' /opt/qdif-bot/.env
+sudo -u tobisite grep -v -e '^#' -e '^$' /opt/tobisite-bot/.env
 ```
 
 И держите [.env.example](../.env.example) в актуальном состоянии: добавили
@@ -183,8 +183,8 @@ sudo -u qdif grep -v -e '^#' -e '^$' /opt/qdif-bot/.env
 ## 8. Схема базы
 
 ```bash
-sudo -iu qdif
-cd /opt/qdif-bot
+sudo -iu tobisite
+cd /opt/tobisite-bot
 docker compose up -d db
 docker compose run --rm bot alembic upgrade head
 ```
@@ -201,8 +201,8 @@ docker compose run --rm bot alembic upgrade head
 точку отката и на пустом значении откажется работать.
 
 ```bash
-sudo -iu qdif
-cd /opt/qdif-bot
+sudo -iu tobisite
+cd /opt/tobisite-bot
 sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$(git rev-parse HEAD)|" .env
 docker compose up -d
 docker compose ps
@@ -223,16 +223,16 @@ docker compose logs -f bot
 
 ## 10. Шпаргалка команд
 
-Все выполняются от `qdif` из `/opt/qdif-bot`.
+Все выполняются от `tobisite` из `/opt/tobisite-bot`.
 
 | Было (systemd) | Стало (docker) |
 |---|---|
-| `systemctl status qdif-bot` | `docker compose ps` |
-| `journalctl -u qdif-bot -f` | `docker compose logs -f bot` |
-| `journalctl -u qdif-bot -n 50` | `docker compose logs --tail 50 bot` |
-| `systemctl restart qdif-bot` | `docker compose up -d` |
-| `systemctl stop qdif-bot` | `docker compose stop` |
-| `psql -U qdif qdif` | `docker compose exec db psql -U qdif -d qdif` |
+| `systemctl status tobisite-bot` | `docker compose ps` |
+| `journalctl -u tobisite-bot -f` | `docker compose logs -f bot` |
+| `journalctl -u tobisite-bot -n 50` | `docker compose logs --tail 50 bot` |
+| `systemctl restart tobisite-bot` | `docker compose up -d` |
+| `systemctl stop tobisite-bot` | `docker compose stop` |
+| `psql -U tobisite tobisite` | `docker compose exec db psql -U tobisite -d tobisite` |
 | `.venv/bin/alembic upgrade head` | `docker compose run --rm bot alembic upgrade head` |
 | `.venv/bin/python tools/x.py` | `docker compose run --rm bot python tools/x.py` |
 
@@ -247,7 +247,7 @@ docker compose logs -f bot
 не трогает и на неналитой миграции просто откажется ехать.
 
 ```bash
-sudo -u qdif /opt/qdif-bot/deploy/deploy.sh
+sudo -u tobisite /opt/tobisite-bot/deploy/deploy.sh
 ```
 
 Скрипт подтягивает код, проставляет `IMAGE_TAG`, забирает образ из реестра,
@@ -261,7 +261,7 @@ sudo -u qdif /opt/qdif-bot/deploy/deploy.sh
 
 Бит исполнения у скрипта приезжает из git — режим файла хранится в коммите.
 Если команда ответит `command not found`, проверьте:
-`stat -c '%a %n' /opt/qdif-bot/deploy/deploy.sh` должно показать `755`.
+`stat -c '%a %n' /opt/tobisite-bot/deploy/deploy.sh` должно показать `755`.
 Чинить в репозитории, а не через `chmod` на сервере: ручной `chmod` станет
 локальным изменением, из-за которого `git pull --ff-only` внутри самого
 скрипта потом откажется обновляться.
@@ -273,7 +273,7 @@ sudo -u qdif /opt/qdif-bot/deploy/deploy.sh
 с флагом `--apply`:
 
 ```bash
-sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose run --rm bot python tools/renorm_phones.py'
+sudo -u tobisite bash -c 'cd /opt/tobisite-bot && docker compose run --rm bot python tools/renorm_phones.py'
 ```
 
 `renorm_phones.py` пересчитывает `value_norm` у телефонов, записанных по старым
@@ -313,7 +313,7 @@ sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose run --rm bot python too
 Откат схемы:
 
 ```bash
-sudo -u qdif bash -c 'cd /opt/qdif-bot && docker compose run --rm bot alembic downgrade -1'
+sudo -u tobisite bash -c 'cd /opt/tobisite-bot && docker compose run --rm bot alembic downgrade -1'
 ```
 
 Он вернёт структуру, но не удалённые данные: за них отвечает только дамп.
@@ -339,19 +339,19 @@ Telegram не разрешает двум процессам держать long
 ### 13.1. Дамп на сервере
 
 ```bash
-mkdir -p /var/backups/qdif
-chmod 700 /var/backups/qdif
+mkdir -p /var/backups/tobisite
+chmod 700 /var/backups/tobisite
 ```
 
 ```bash
-cat > /usr/local/bin/qdif-backup.sh <<'EOF'
+cat > /usr/local/bin/tobisite-backup.sh <<'EOF'
 #!/bin/sh
 set -eu
 umask 077
-docker exec qdif-db pg_dump -U qdif -Fc qdif > "/var/backups/qdif/qdif-$(date +%F).dump"
-find /var/backups/qdif -name 'qdif-*.dump' -mtime +14 -delete
+docker exec tobisite-db pg_dump -U tobisite -Fc tobisite > "/var/backups/tobisite/tobisite-$(date +%F).dump"
+find /var/backups/tobisite -name 'tobisite-*.dump' -mtime +14 -delete
 EOF
-chmod 755 /usr/local/bin/qdif-backup.sh
+chmod 755 /usr/local/bin/tobisite-backup.sh
 ```
 
 `pg_dump` берётся из того же контейнера, что и сервер, — версии совпадают
@@ -360,14 +360,14 @@ chmod 755 /usr/local/bin/qdif-backup.sh
 Раз в сутки, от root: доступ к базе теперь даёт docker, а не peer-авторизация.
 
 ```bash
-echo '30 3 * * * root /usr/local/bin/qdif-backup.sh' > /etc/cron.d/qdif-backup
-chmod 644 /etc/cron.d/qdif-backup
+echo '30 3 * * * root /usr/local/bin/tobisite-backup.sh' > /etc/cron.d/tobisite-backup
+chmod 644 /etc/cron.d/tobisite-backup
 ```
 
 Проверить сразу, не дожидаясь ночи:
 
 ```bash
-/usr/local/bin/qdif-backup.sh && ls -lh /var/backups/qdif
+/usr/local/bin/tobisite-backup.sh && ls -lh /var/backups/tobisite
 ```
 
 ### 13.2. Копия вне сервера
@@ -382,8 +382,8 @@ chmod 644 /etc/cron.d/qdif-backup
 
 ```powershell
 $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\qDif-handler\deploy\fetch-backup.ps1'
-Register-ScheduledTask -TaskName 'qDif backup fetch' -Action $act `
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite-handler\deploy\fetch-backup.ps1'
+Register-ScheduledTask -TaskName 'Tobisite backup fetch' -Action $act `
     -Trigger (New-ScheduledTaskTrigger -Daily -At 04:00) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
 ```
@@ -392,7 +392,7 @@ Register-ScheduledTask -TaskName 'qDif backup fetch' -Action $act `
 просто не выполнится, и копии молча перестанут появляться. Проверить руками:
 
 ```powershell
-Start-ScheduledTask -TaskName 'qDif backup fetch'
+Start-ScheduledTask -TaskName 'Tobisite backup fetch'
 ```
 
 Скрипт кладёт рядом `last-ok.txt` с датой последнего успеха. Раз в месяц
@@ -405,10 +405,10 @@ Start-ScheduledTask -TaskName 'qDif backup fetch'
 
 ```bash
 docker run --rm -d --name pg-test \
-    -e POSTGRES_USER=qdif -e POSTGRES_DB=qdif -e POSTGRES_PASSWORD=x postgres:16
+    -e POSTGRES_USER=tobisite -e POSTGRES_DB=tobisite -e POSTGRES_PASSWORD=x postgres:16
 sleep 5
-docker exec -i pg-test pg_restore -U qdif -d qdif < /var/backups/qdif/qdif-$(date +%F).dump
-docker exec pg-test psql -qAt -U qdif -d qdif -c 'select count(*) from leads'
+docker exec -i pg-test pg_restore -U tobisite -d tobisite < /var/backups/tobisite/tobisite-$(date +%F).dump
+docker exec pg-test psql -qAt -U tobisite -d tobisite -c 'select count(*) from leads'
 docker rm -f pg-test
 ```
 
@@ -416,9 +416,9 @@ docker rm -f pg-test
 прямо во время наката:
 
 ```bash
-cd /opt/qdif-bot
+cd /opt/tobisite-bot
 docker compose stop bot
-docker exec -i qdif-db pg_restore -U qdif -d qdif --clean --if-exists < /var/backups/qdif/qdif-2026-08-17.dump
+docker exec -i tobisite-db pg_restore -U tobisite -d tobisite --clean --if-exists < /var/backups/tobisite/tobisite-2026-08-17.dump
 docker compose up -d
 ```
 
@@ -440,12 +440,12 @@ docker compose up -d
 
 ### 14.1. Скрипт выката
 
-Ставится **вне** `/opt/qdif-bot`: скрипт делает `git reset --hard`, то есть
+Ставится **вне** `/opt/tobisite-bot`: скрипт делает `git reset --hard`, то есть
 переписал бы файл, который bash в этот момент ещё дочитывает.
 
 ```bash
-sudo -u qdif git -C /opt/qdif-bot pull --ff-only
-install -m 755 -o root -g root /opt/qdif-bot/deploy/ci-deploy.sh /usr/local/bin/qdif-deploy
+sudo -u tobisite git -C /opt/tobisite-bot pull --ff-only
+install -m 755 -o root -g root /opt/tobisite-bot/deploy/ci-deploy.sh /usr/local/bin/tobisite-deploy
 ```
 
 Автообновления у копии нет. Если `deploy/ci-deploy.sh` в репозитории поменяется,
@@ -457,7 +457,7 @@ install -m 755 -o root -g root /opt/qdif-bot/deploy/ci-deploy.sh /usr/local/bin/
 экземпляре, и если она потерялась — не восстанавливают, а делают новый.
 
 ```bash
-sudo -iu qdif
+sudo -iu tobisite
 sed -i '/github-actions/d' ~/.ssh/authorized_keys   # снести следы прошлых попыток
 ssh-keygen -t ed25519 -C "github-actions" -f ~/.ssh/gha -N ""
 ```
@@ -469,10 +469,10 @@ ssh-keygen -t ed25519 -C "github-actions" -f ~/.ssh/gha -N ""
 и присланное достаётся скрипту как текст, а не как команда.
 
 ```bash
-printf 'command="/usr/local/bin/qdif-deploy",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding %s\n' \
+printf 'command="/usr/local/bin/tobisite-deploy",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding %s\n' \
     "$(cat ~/.ssh/gha.pub)" >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
-grep -c '^command="/usr/local/bin/qdif-deploy"' ~/.ssh/authorized_keys   # должно быть 1
+grep -c '^command="/usr/local/bin/tobisite-deploy"' ~/.ssh/authorized_keys   # должно быть 1
 ```
 
 Приватный ключ — в секрет `SSH_PRIVATE_KEY`, **целиком**, вместе со строками
@@ -505,7 +505,7 @@ ssh-keyscan -t ed25519 <IP>
 | Имя | Значение |
 |---|---|
 | `SERVER_HOST` | IP сервера |
-| `SERVER_USER` | `qdif` |
+| `SERVER_USER` | `tobisite` |
 | `SSH_PRIVATE_KEY` | содержимое `gha` целиком, вместе со строками `BEGIN`/`END` |
 | `SSH_KNOWN_HOSTS` | строка из `ssh-keyscan` |
 
@@ -530,7 +530,7 @@ ssh-keyscan -t ed25519 <IP>
 Проверить, что ключ действительно ограничен, — с машины, где ещё лежит `gha`:
 
 ```bash
-ssh -i gha qdif@<IP> 'cat /opt/qdif-bot/.env'
+ssh -i gha tobisite@<IP> 'cat /opt/tobisite-bot/.env'
 ```
 
 Ответом должно быть `!! не коммит: cat ...`, а не содержимое файла.
@@ -548,7 +548,7 @@ ssh -i gha qdif@<IP> 'cat /opt/qdif-bot/.env'
 ## Если что-то не так
 
 ```bash
-cd /opt/qdif-bot
+cd /opt/tobisite-bot
 docker compose ps
 docker compose logs --tail 50 bot
 ```
@@ -571,7 +571,7 @@ docker compose logs --tail 50 bot
 **Выкат падает с `Permission denied (publickey)`** — секрет `SSH_PRIVATE_KEY`
 скопирован не целиком (строки `BEGIN`/`END` обязательны) или публичный ключ
 не попал в `authorized_keys`:
-`grep -c qdif-deploy /home/qdif/.ssh/authorized_keys` должно вернуть `1`.
+`grep -c tobisite-deploy /home/tobisite/.ssh/authorized_keys` должно вернуть `1`.
 
 **Выкат падает с `Host key verification failed`** — секрет `SSH_KNOWN_HOSTS`
 пуст или снят с другого адреса. Перечитайте `ssh-keyscan -t ed25519 <IP>`.

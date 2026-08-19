@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Автодеплой из GitHub Actions. Это форсированная команда ssh-ключа CI:
-# в authorized_keys прописано command="/usr/local/bin/qdif-deploy", поэтому
+# в authorized_keys прописано command="/usr/local/bin/tobisite-deploy", поэтому
 # ключ не даёт шелл, а умеет ровно одно — выкатить коммит. Сам коммит
 # приезжает в SSH_ORIGINAL_COMMAND.
 #
 # Ставится root'ом ВНЕ рабочего каталога:
-#   install -m 755 -o root -g root deploy/ci-deploy.sh /usr/local/bin/qdif-deploy
+#   install -m 755 -o root -g root deploy/ci-deploy.sh /usr/local/bin/tobisite-deploy
 #
-# Почему не запускать прямо из /opt/qdif-bot: скрипт делает git reset --hard,
+# Почему не запускать прямо из /opt/tobisite-bot: скрипт делает git reset --hard,
 # то есть переписал бы файл, который bash в этот момент ещё дочитывает.
 # Плюс сломанный скрипт в плохом коммите не должен лишать возможности
 # выкатить следующий.
@@ -19,7 +19,7 @@
 # Схема меняется вручную через deploy/deploy.sh, см. deploy/README.md.
 set -Eeuo pipefail
 
-APP=/opt/qdif-bot
+APP=/opt/tobisite-bot
 SHA="${SSH_ORIGINAL_COMMAND:-}"
 
 # Единственная защита от «ключ утёк — на сервере выполнили что угодно».
@@ -67,8 +67,8 @@ git reset --hard --quiet "$SHA"
 
 # Скрипт установлен копией, автообновления у него нет. Расхождение видно
 # в логе Actions, чтобы копия не устаревала молча.
-if ! cmp -s /usr/local/bin/qdif-deploy deploy/ci-deploy.sh; then
-    echo "::warning::deploy/ci-deploy.sh в репозитории отличается от /usr/local/bin/qdif-deploy — переустановите его на сервере"
+if ! cmp -s /usr/local/bin/tobisite-deploy deploy/ci-deploy.sh; then
+    echo "::warning::deploy/ci-deploy.sh в репозитории отличается от /usr/local/bin/tobisite-deploy — переустановите его на сервере"
 fi
 
 echo "==> образ"
@@ -102,7 +102,7 @@ sleep 12
 # почти всё время выглядит запущенным. Считаем строки, которые main.py пишет
 # после успешного get_me(): 0 — не поднялся, 1 — норма, больше — цикл падений.
 STARTS=$(docker compose logs --since "$STAMP" bot 2>/dev/null | grep -c 'bot started' || true)
-RUNNING=$(docker inspect --format '{{.State.Running}}' qdif-bot 2>/dev/null || echo false)
+RUNNING=$(docker inspect --format '{{.State.Running}}' tobisite-bot 2>/dev/null || echo false)
 
 if [ "$RUNNING" = "true" ] && [ "${STARTS:-0}" -eq 1 ]; then
     echo "==> бот работает на $SHA"

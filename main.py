@@ -15,7 +15,7 @@ import handlers_worker
 import keyboards as kb
 from models import Session, Worker, ensure_admin_worker
 
-log = logging.getLogger("qdif")
+log = logging.getLogger("tobisite")
 
 
 def setup_logging():
