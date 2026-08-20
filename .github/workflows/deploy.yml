@@ -115,6 +115,18 @@ jobs:
           # имя образа только строчными: GHCR не принимает svObb
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           docker build --platform linux/amd64 -t "$IMAGE:$GITHUB_SHA" .
+          # Импорт внутри образа, а не в раннере: check-джоба ставит
+          # requirements.txt, образ — requirements.lock. Разъехавшийся lock
+          # (модуль есть в тестах, но не в образе) валит сборку здесь,
+          # а не бота на сервере.
+          docker run --rm \
+            -e BOT_TOKEN='0:ci' -e ADMIN_TG_ID=1 -e ACCESS_CODE=ci \
+            -e DATABASE_URL='postgresql+asyncpg://ci:ci@127.0.0.1:5432/ci' \
+            -e LOG_FILE= \
+            -e COUNTRIES='Украина|UA,Словакия|SK' \
+            -e LANGUAGES='Украинский,Словацкий' \
+            "$IMAGE:$GITHUB_SHA" \
+            python -c "import main, handlers_admin, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services"
           docker push "$IMAGE:$GITHUB_SHA"
           echo "опубликован $IMAGE:$GITHUB_SHA"
 
