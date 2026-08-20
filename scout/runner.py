@@ -101,6 +101,40 @@ async def _run_cards(bot, chat_id: int, *, header: str, cards: list[RawBiz],
     text, markup = _digest(header, len(cards), rejected, stats,
                            await _spent(batch_id))
     await bot.send_message(chat_id, text, reply_markup=markup)
+    await _psi_followup(bot, chat_id, keep, niche=niche, city=city,
+                        batch_id=batch_id)
+
+
+async def _psi_followup(bot, chat_id: int, cards: list[RawBiz], *, niche: str,
+                        city: str, batch_id: str):
+    """PageSpeed лучших кандидатов (15.12): «ваш сайт 23/100 по Google» в письме
+    бьёт сильнее любых слов. Медленно (15–40 сек/URL) — поэтому только топ,
+    после дайджеста и отдельным сообщением. Ошибки глотаем: дайджест уже ушёл,
+    и «❌ Скаут упал» после успешного импорта только запутал бы."""
+    if config.PSI_MAX_PER_RUN <= 0:
+        return
+    top = sorted(
+        (c for c in cards if c.verdict == "candidate" and c.website),
+        key=lambda c: c.score, reverse=True,
+    )[:config.PSI_MAX_PER_RUN]
+    if not top:
+        return
+    try:
+        scores = await site_probe.psi_many(
+            [c.website for c in top], api_key=config.PAGESPEED_API_KEY,
+        )
+        await costs.log_cost(
+            op="scout", cost_usd=0, api_calls=len(scores),
+            note=f"pagespeed {niche} {city}", batch_id=batch_id, bot=bot,
+        )
+        lines = ["<b>📊 PageSpeed (мобильный, performance)</b>"]
+        for c in top:
+            got = scores.get(c.website)
+            lines.append(f"{c.name[:32]} — "
+                         + ("без оценки" if got is None else f"{got}/100"))
+        await bot.send_message(chat_id, "\n".join(lines))
+    except Exception:
+        log.exception("psi followup failed")
 
 
 async def run_scout(bot, chat_id: int, country: str, niche: str, city: str):

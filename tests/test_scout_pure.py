@@ -6,7 +6,7 @@ from datetime import datetime
 from handlers_admin import _parse_scout_args
 from scout.overpass import MAX_RESULTS, build_query, parse_elements
 from scout.scoring import score
-from scout.site_probe import analyze_html
+from scout.site_probe import analyze_html, parse_psi
 from scout.types import RawBiz
 
 
@@ -148,3 +148,23 @@ def test_parse_scout_args_rejects_garbage():
     assert _parse_scout_args("Франция Стоматология Париж") is None  # не наш рынок
     assert _parse_scout_args("Словакия Барбершоп Киев") is None     # нет такой ниши
     assert _parse_scout_args("Словакия Стоматология") is None       # города нет
+
+
+# --- site_probe.parse_psi (15.12) --------------------------------------------
+
+def _psi_payload(score):
+    return {"lighthouseResult": {"categories": {"performance": {"score": score}}}}
+
+
+def test_parse_psi_score():
+    assert parse_psi(_psi_payload(0.23)) == 23
+    assert parse_psi(_psi_payload(1)) == 100
+    assert parse_psi(_psi_payload(0)) == 0
+
+
+def test_parse_psi_bad_payloads():
+    # Lighthouse вернул null, ошибку или вовсе не тот JSON — это None, не падение
+    assert parse_psi(_psi_payload(None)) is None
+    assert parse_psi({"error": {"message": "Lighthouse returned error"}}) is None
+    assert parse_psi({}) is None
+    assert parse_psi({"lighthouseResult": None}) is None

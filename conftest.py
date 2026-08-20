@@ -40,7 +40,8 @@ if not (os.getenv("TEST_DATABASE_URL") or (ROOT / ".env").exists()):
 from sqlalchemy import delete, select  # noqa: E402
 
 from models import (  # noqa: E402
-    Contact, CostLedger, FsmState, Lead, LeadEvent, Session, Worker,
+    ClientService, Contact, CostLedger, FsmState, Lead, LeadEvent, Session,
+    Worker,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -61,6 +62,8 @@ async def _cleanup():
                 await s.execute(delete(LeadEvent).where(LeadEvent.lead_id.in_(lids)))
                 await s.execute(delete(CostLedger).where(CostLedger.lead_id.in_(lids)))
                 await s.execute(delete(Contact).where(Contact.lead_id.in_(lids)))
+                await s.execute(delete(ClientService)
+                                .where(ClientService.lead_id.in_(lids)))
                 await s.execute(delete(Lead).where(Lead.id.in_(lids)))
             await s.execute(delete(Worker).where(Worker.id.in_(wids)))
         await s.execute(delete(CostLedger).where(CostLedger.batch_id.like("pytest%")))

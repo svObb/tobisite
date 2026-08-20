@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramRetryAfter
@@ -23,8 +24,8 @@ from handlers_worker import (
     local, pick, safe_edit, send_screenshot,
 )
 from models import (
-    Contact, CostLedger, Lead, LeadEvent, Session, Worker, day_start, log_event,
-    month_start,
+    ClientService, Contact, CostLedger, Lead, LeadEvent, Session, Worker,
+    day_start, log_event, month_start,
 )
 from scout.niches import NICHE_TAGS
 from scout.runner import run_scout, run_scout_paste, scout_busy
@@ -166,6 +167,109 @@ async def costs_report(message: Message, state: FSMContext, command: CommandObje
     else:
         lines.append("\nМесячный кэп выключен (AI_MONTHLY_CAP_USD=0).")
     await message.answer("\n".join(lines))
+
+
+# --- подписки на доп-услуги (/subs, 16.13) -----------------------------------
+
+SUBS_USAGE = (
+    "Формат:\n"
+    "/subs — активные подписки и MRR\n"
+    "/subs add &lt;id лида&gt; &lt;услуга&gt; &lt;цена $/мес&gt; [заметка]\n"
+    "/subs cancel &lt;номер подписки&gt;\n\n"
+    "Услуги: " + ", ".join(sorted(s["id"] for s in services.SERVICES))
+)
+
+
+@router.message(Command("subs"))
+async def subs_cmd(message: Message, state: FSMContext, command: CommandObject):
+    await state.set_state(None)
+    args = (command.args or "").split()
+    if not args:
+        await _subs_list(message)
+    elif args[0] == "add" and len(args) >= 4:
+        await _subs_add(message, args[1], args[2], args[3],
+                        " ".join(args[4:]) or None)
+    elif args[0] == "cancel" and len(args) == 2:
+        await _subs_cancel(message, args[1])
+    else:
+        await message.answer(SUBS_USAGE)
+
+
+async def _subs_list(message: Message):
+    async with Session() as s:
+        rows = (await s.execute(
+            select(ClientService, Lead.name)
+            .join(Lead, Lead.id == ClientService.lead_id)
+            .where(ClientService.status == "active")
+            .order_by(ClientService.id)
+        )).all()
+    if not rows:
+        await message.answer("Активных подписок нет.\n\n" + SUBS_USAGE)
+        return
+    lines = ["<b>📦 Подписки на доп-услуги</b>"]
+    mrr = Decimal(0)
+    for cs, lead_name in rows:
+        mrr += cs.price_usd
+        lines.append(
+            f"#{cs.id} {esc(lead_name)} — {esc(cs.service_id)}, "
+            f"${cs.price_usd:.2f}/мес (с {local(cs.started_at)})"
+        )
+    lines.append(f"\nMRR доп-услуг: <b>${mrr:.2f}/мес</b>")
+    await message.answer("\n".join(lines))
+
+
+async def _subs_add(message: Message, lead_id_s: str, service_id: str,
+                    price_s: str, note: str | None):
+    # услуга — только из каталога: services.yml единственный источник истины,
+    # опечатка здесь испортила бы всю статистику по услугам
+    if service_id not in {s["id"] for s in services.SERVICES}:
+        await message.answer(
+            f"Не знаю услугу «{esc(service_id)}».\n\n{SUBS_USAGE}")
+        return
+    try:
+        lead_id = int(lead_id_s)
+        price = Decimal(price_s)
+    except (ValueError, InvalidOperation):
+        await message.answer(SUBS_USAGE)
+        return
+    if price < 0 or price >= 10 ** 8:
+        await message.answer("Цена должна быть в пределах 0–99 999 999.")
+        return
+    async with Session() as s, s.begin():
+        lead = await s.get(Lead, lead_id)
+        if lead is None or lead.deleted_at or lead.cancelled_at:
+            await message.answer(f"Лид #{lead_id} не найден или удалён.")
+            return
+        cs = ClientService(lead_id=lead_id, service_id=service_id,
+                           price_usd=price, note=note)
+        s.add(cs)
+        await s.flush()
+        log_event(s, lead_id, "sub_add", message.from_user.id,
+                  field=service_id, new=str(price))
+        num, name = cs.id, lead.name
+    await message.answer(
+        f"✅ Подписка #{num}: {esc(name)} — {esc(service_id)}, ${price:.2f}/мес")
+
+
+async def _subs_cancel(message: Message, num_s: str):
+    try:
+        num = int(num_s)
+    except ValueError:
+        await message.answer(SUBS_USAGE)
+        return
+    async with Session() as s, s.begin():
+        cs = await s.get(ClientService, num)
+        if cs is None:
+            await message.answer(f"Подписки #{num} нет.")
+            return
+        if cs.status == "canceled":
+            await message.answer(f"Подписка #{num} уже отменена.")
+            return
+        cs.status = "canceled"
+        cs.canceled_at = func.now()
+        log_event(s, cs.lead_id, "sub_cancel", message.from_user.id,
+                  field=cs.service_id, old="active", new="canceled")
+    await message.answer(f"✅ Подписка #{num} отменена.")
 
 
 # --- лид-скаут (/scout, /scout_paste) ----------------------------------------

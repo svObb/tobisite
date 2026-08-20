@@ -149,6 +149,7 @@ async def main():
             [
                 BotCommand(command="start", description="Начать заново"),
                 BotCommand(command="costs", description="Расходы на ИИ за месяц"),
+                BotCommand(command="subs", description="Подписки на доп-услуги"),
                 BotCommand(command="scout", description="Скаут: страна ниша город"),
                 BotCommand(command="scout_paste",
                            description="Скаут: домены из Ads Transparency"),

@@ -31,6 +31,9 @@ CONTACT_TYPE_KEYS = [k for k, _ in config.CONTACT_TYPES] + ["other"]
 # Типы платных операций в cost_ledger. Новый тип = новая запись здесь + миграция
 # CHECK-констрейнта, как у статусов лида.
 COST_OPS = ["scout", "classify", "draft", "letter", "qa", "other"]
+# Статусы подписки клиента на доп-услугу (16.13). Новый статус = запись здесь
+# + миграция CHECK-констрейнта, как у статусов лида.
+CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]
 
 
 def in_list(col: str, values) -> str:
@@ -229,6 +232,39 @@ class CostLedger(Base, TimesMixin):
         CheckConstraint(in_list("op", COST_OPS), name="ck_cost_ledger_op"),
         Index("ix_cost_ledger_created_at", "created_at"),
         Index("ix_cost_ledger_op", "op"),
+    )
+
+
+class ClientService(Base, TimesMixin):
+    """Реестр подписок клиентов на доп-услуги (16.13): кто, что, почём, статус.
+
+    service_id — id из services.yml; FK на YAML не бывает, поэтому список
+    проверяет /subs при записи. Сумма price_usd активных строк = MRR доп-услуг.
+    """
+    __tablename__ = "client_services"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("leads.id"), nullable=False
+    )
+    service_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active", server_default="active"
+    )
+    price_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default="0"
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(in_list("status", CLIENT_SERVICE_STATUSES),
+                        name="ck_client_services_status"),
+        Index("ix_client_services_lead_id", "lead_id"),
+        Index("ix_client_services_status", "status"),
     )
 
 

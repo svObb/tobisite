@@ -38,6 +38,11 @@ AI_MONTHLY_CAP_USD = float(os.getenv("AI_MONTHLY_CAP_USD", "150"))
 # Потолок карточек, которые скаут может импортировать за день (15.23):
 # модерация — ручной труд, топить её сотней сырых записей нельзя
 SCOUT_DAILY_RAW_LIMIT = int(os.getenv("SCOUT_DAILY_RAW_LIMIT", "50"))
+# PageSpeed Insights для лучших кандидатов скаута (15.12): бесплатно, но
+# Lighthouse думает 15–40 сек на URL — поэтому потолок на прогон; 0 выключает.
+# Ключ не обязателен: без него квота ~1 запрос/сек с IP, нашим объёмам хватает.
+PSI_MAX_PER_RUN = int(os.getenv("PSI_MAX_PER_RUN", "5"))
+PAGESPEED_API_KEY = (os.getenv("PAGESPEED_API_KEY") or "").strip()
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Kyiv"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")

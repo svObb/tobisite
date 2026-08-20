@@ -95,3 +95,49 @@ async def probe_many(urls: list[str], *, concurrency: int = 8) -> dict[str, dict
 
         await asyncio.gather(*(one(u) for u in dict.fromkeys(urls)))
     return results
+
+
+# --- PageSpeed Insights (15.12) ----------------------------------------------
+
+PSI_URL = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+PSI_TIMEOUT = aiohttp.ClientTimeout(total=75)  # Lighthouse думает 15–40 сек
+
+
+def parse_psi(data: dict) -> int | None:
+    """Оценка performance 0–100 из ответа PSI; None, если Lighthouse не осилил."""
+    try:
+        score = data["lighthouseResult"]["categories"]["performance"]["score"]
+    except (KeyError, TypeError):
+        return None
+    return round(score * 100) if isinstance(score, (int, float)) else None
+
+
+async def psi_score(session: aiohttp.ClientSession, url: str,
+                    api_key: str = "") -> int | None:
+    """Мобильный performance-скор сайта. Ошибка — это данные (None), не исключение."""
+    params = {"url": _with_scheme(url, "https"), "strategy": "mobile",
+              "category": "performance"}
+    if api_key:
+        params["key"] = api_key
+    try:
+        async with session.get(PSI_URL, params=params) as resp:
+            if resp.status != 200:
+                log.info("PSI %s → HTTP %s", url, resp.status)
+                return None
+            return parse_psi(await resp.json())
+    except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError,
+            ValueError) as e:
+        log.info("PSI %s → %s", url, e.__class__.__name__)
+        return None
+
+
+async def psi_many(urls: list[str], *, api_key: str = "",
+                   concurrency: int = 2) -> dict[str, int | None]:
+    """PSI по списку URL. Параллельность 2: без ключа квота ~1 запрос/сек."""
+    sem = asyncio.Semaphore(concurrency)
+    async with aiohttp.ClientSession(timeout=PSI_TIMEOUT) as session:
+        async def one(u: str):
+            async with sem:
+                return u, await psi_score(session, u, api_key)
+
+        return dict(await asyncio.gather(*(one(u) for u in dict.fromkeys(urls))))
