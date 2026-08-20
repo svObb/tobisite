@@ -4,9 +4,13 @@
 # Дамп, лежащий только на сервере, не спасает от потери сервера. Раньше в README
 # это был ручной еженедельный scp, то есть шаг, который не делается.
 #
-# Регистрация задачи (PowerShell от администратора, один раз):
+# Настройка (один раз):
+# 1. Адрес сервера — в переменную окружения пользователя, НЕ в этот файл
+#    (репозиторий публичный, IP боевого сервера в нём — подарок сканерам):
+#      setx TOBISITE_SERVER 'tobisite@АДРЕС_СЕРВЕРА'
+# 2. Регистрация задачи (PowerShell от администратора):
 #   $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
-#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite\deploy\fetch-backup.ps1'
+#       -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Desktop\tobisite\tobisite\deploy\fetch-backup.ps1'
 #   Register-ScheduledTask -TaskName 'Tobisite backup fetch' -Action $act `
 #       -Trigger (New-ScheduledTaskTrigger -Daily -At 04:00) `
 #       -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
@@ -23,8 +27,13 @@
 # root для этого не нужны.
 $ErrorActionPreference = 'Stop'
 
-# $Host — встроенная переменная PowerShell, перезаписать её нельзя
-$Server = 'tobisite@178.104.114.82'
+# $Host — встроенная переменная PowerShell, перезаписать её нельзя.
+# Адрес берётся из окружения: задать его — setx TOBISITE_SERVER 'user@host'
+# (планировщик запускает задачу под тем же пользователем и переменную видит).
+$Server = $env:TOBISITE_SERVER
+if (-not $Server) {
+    throw "не задана переменная окружения TOBISITE_SERVER (формат user@host); задайте: setx TOBISITE_SERVER 'tobisite@АДРЕС'"
+}
 $Dir    = "$env:USERPROFILE\OneDrive\tobisite-backups"
 $Keep   = 14
 

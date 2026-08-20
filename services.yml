@@ -1,0 +1,245 @@
+# Каталог доп-услуг — файл-истина (раздел 16 плана, Приложение А MASTER-PLAN).
+# Схема пункта 16.1; валидатор — services.py, падает на старте бота при ошибке.
+#
+# Поля:
+#   id          — слаг, только [a-z0-9-]
+#   name        — название для админа (бот русскоязычный)
+#   status      — ready | pilot | idea. Продаём только ready; pilot — только
+#                 дружественным клиентам с пометкой; idea не показывается (16.3)
+#   cogs/price/margin — юнит-экономика из Приложения А, строки как есть
+#   complexity  — low | mid | high (сколько нашей работы в услуге)
+#   niches      — all или список из config.NICHES: где услуга применима.
+#                 Список = фильтр И бонус за точное попадание в нишу
+#   countries   — all или список названий стран из COUNTRIES (.env)
+#   deps        — что должно существовать до продажи (id услуг или пункты плана)
+#   triggers    — факты лида, поднимающие услугу в рекомендации:
+#                 always      — универсальная, небольшой базовый балл
+#                 has_ads     — лид уже платит за рекламу (сегмент Ads Transparency)
+#                 no_website  — сайта нет
+#                 has_website — сайт есть (можно улучшать/аудировать)
+#   pitch_en/pitch_ua — одна фраза для письма клиенту; обязательна для
+#                 ready и pilot, у idea может быть пустой
+
+- id: missed-call-textback
+  name: "Missed-call text-back: SMS звонившему после пропущенного звонка"
+  status: pilot
+  cogs: "~$6/мес (Twilio toll-free)"
+  price: "$50–75/мес"
+  margin: "85%+"
+  complexity: mid
+  niches: all
+  countries: all
+  deps: ["17.A"]
+  triggers: [always, has_ads]
+  pitch_en: "Every missed call is a lost customer. We text them back within seconds — 20 missed calls a month at a 25% close rate and a $300 ticket is $1,500 you stop losing."
+  pitch_ua: "Кожен пропущений дзвінок — втрачений клієнт. Ми надсилаємо SMS за секунди: 20 пропущених на місяць × 25% × $300 — це $1 500, які ви перестаєте втрачати."
+
+- id: instant-form-reply
+  name: "Мгновенный автоответ на заявку с формы сайта"
+  status: ready
+  cogs: "~$0 (наш Cloudflare Worker)"
+  price: "в подписке / +$10/мес"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: ["10.8"]
+  triggers: [always]
+  pitch_en: "Leads that get a reply within 5 minutes convert several times better. Your form answers instantly, every time — even at 2 a.m."
+  pitch_ua: "Заявка, на яку відповіли за 5 хвилин, конвертується в рази краще. Ваша форма відповідає миттєво — навіть о другій ночі."
+
+- id: gbp-optimization
+  name: "Оптимизация карточки Google Business Profile"
+  status: ready
+  cogs: "$0 (наши часы)"
+  price: "$150–250 разово"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: []
+  triggers: [always, no_website]
+  pitch_en: "Most local customers find you on Google Maps before they ever see a website. We make your profile complete, correct and reviewed — it's the cheapest visibility you can buy."
+  pitch_ua: "Більшість місцевих клієнтів знаходять вас у Google Maps раніше, ніж бачать сайт. Ми доводимо картку до ладу — це найдешевша видимість, яку можна купити."
+
+- id: review-autopilot
+  name: "Отзывы-автопилот: просьба об отзыве после визита (SMS/email)"
+  status: pilot
+  cogs: "~$3/мес SMS"
+  price: "$40–60/мес"
+  margin: "~90%"
+  complexity: mid
+  niches: ["Стоматология", "Салон красоты", "Автосервис", "Кафе/ресторан", "Гостиница"]
+  countries: all
+  deps: ["17.A"]
+  triggers: [always]
+  pitch_en: "Happy customers forget to leave reviews; unhappy ones never do. A polite text after each visit steadily builds your rating — on autopilot."
+  pitch_ua: "Задоволені клієнти забувають лишити відгук. Ввічливе SMS після візиту стабільно росте ваш рейтинг — на автопілоті."
+
+- id: calcom-booking
+  name: "Онлайн-запись через Cal.com (free tier)"
+  status: ready
+  cogs: "$0 (free tier)"
+  price: "$100–150 сетап + в подписке"
+  margin: "~100%"
+  complexity: low
+  niches: ["Стоматология", "Салон красоты", "Автосервис", "Юрист"]
+  countries: all
+  deps: []
+  triggers: [always]
+  pitch_en: "Half of appointment requests come after hours. Online booking on your site captures them while your competitors' phones ring unanswered."
+  pitch_ua: "Половина запитів на запис приходить у неробочий час. Онлайн-запис на сайті ловить їх, поки телефони конкурентів мовчать."
+
+- id: monthly-report
+  name: "Месячный отчёт клиенту: визиты + заявки + аптайм"
+  status: ready
+  cogs: "$0 (скрипт, CF Analytics + UptimeRobot)"
+  price: "в подписке (удержание) / +$10/мес"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: ["19.D"]
+  triggers: [always]
+  pitch_en: "Once a month you get a one-page report: visitors, enquiries, uptime. You always know what the website earns you."
+  pitch_ua: "Раз на місяць — звіт на одну сторінку: відвідувачі, заявки, аптайм. Ви завжди знаєте, що сайт вам приносить."
+
+- id: local-seo
+  name: "Локальный SEO-пакет: citations, schema.org, NAP-консистентность"
+  status: ready
+  cogs: "наши часы"
+  price: "$200–400 разово"
+  margin: "часы"
+  complexity: mid
+  niches: all
+  countries: all
+  deps: []
+  triggers: [always, has_website]
+  pitch_en: "Consistent listings and structured data are what move you up local search. One-time cleanup, lasting effect."
+  pitch_ua: "Консистентні каталоги і структуровані дані — те, що піднімає вас у локальному пошуку. Разова чистка, тривалий ефект."
+
+- id: tg-viber-bot
+  name: "Telegram/Viber-бот заявок для клиента (наш стек)"
+  status: pilot
+  cogs: "~$1/мес"
+  price: "$150 сетап + $20/мес"
+  margin: "~90%"
+  complexity: mid
+  niches: all
+  countries: ["Украина"]
+  deps: []
+  triggers: [always]
+  pitch_en: "Your customers already live in Telegram and Viber. A booking bot meets them there — no calls, no forms."
+  pitch_ua: "Ваші клієнти вже в Telegram і Viber. Бот приймає заявки там — без дзвінків і форм."
+
+- id: site-audit
+  name: "Аудит существующего сайта: site_probe + PageSpeed → PDF-отчёт"
+  status: ready
+  cogs: "~$0 (наш конвейер)"
+  price: "$0 (лид-магнит) или $50"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: ["15.10"]
+  triggers: [has_website]
+  pitch_en: "A free 2-page audit of your current site: speed, mobile, security, what it costs you in lost customers — and what we'd fix first."
+  pitch_ua: "Безплатний аудит вашого сайту на 2 сторінки: швидкість, мобільність, безпека — і що ми виправили б першим."
+
+- id: extra-pages
+  name: "Доп. страницы/лендинги под услугу клиента"
+  status: ready
+  cogs: "наши часы"
+  price: "$100–150/страница"
+  margin: "часы"
+  complexity: low
+  niches: all
+  countries: all
+  deps: []
+  triggers: [has_website]
+  pitch_en: "A dedicated page per service ranks better and converts better than one crowded homepage. Add them one at a time."
+  pitch_ua: "Окрема сторінка під кожну послугу ранжується і конвертує краще, ніж одна перевантажена головна."
+
+- id: quarterly-texts
+  name: "Квартальное обновление текстов сайта"
+  status: ready
+  cogs: "~$0.05 ИИ"
+  price: "$75/квартал"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: []
+  triggers: [has_website]
+  pitch_en: "Fresh prices, seasonal offers, new photos — quarterly, without you thinking about it. Sites that change rank better."
+  pitch_ua: "Свіжі ціни, сезонні пропозиції, нові фото — щокварталу, без вашої участі. Живі сайти ранжуються краще."
+
+- id: logo-brandkit
+  name: "Логотип / мини-брендкит"
+  status: ready
+  cogs: "наши часы"
+  price: "$100–200"
+  margin: "часы"
+  complexity: low
+  niches: all
+  countries: all
+  deps: []
+  triggers: [always]
+  pitch_en: "A clean logo and consistent colors make a small business look established — on the site, the door and the invoice."
+  pitch_ua: "Охайний логотип і консистентні кольори роблять малий бізнес солідним — на сайті, дверях і рахунку."
+
+- id: domain-email
+  name: "Почта на домене клиента (настройка M365/Workspace)"
+  status: ready
+  cogs: "$0 (подписку платит клиент)"
+  price: "$50–100 сетап"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: []
+  triggers: [always]
+  pitch_en: "info@yourcompany.com instead of a gmail address — customers trust it, and spam filters do too."
+  pitch_ua: "info@вашакомпанія.com замість gmail — цьому довіряють і клієнти, і спам-фільтри."
+
+- id: premium-subscription
+  name: "Premium-подписка: правки за 24 часа, приоритет"
+  status: ready
+  cogs: "~$0"
+  price: "$75/мес"
+  margin: "~100%"
+  complexity: low
+  niches: all
+  countries: all
+  deps: []
+  triggers: [always]
+  pitch_en: "Any change to your site live within 24 hours, guaranteed. For businesses where the website is the storefront."
+  pitch_ua: "Будь-яка зміна на сайті — протягом 24 годин, гарантовано. Для бізнесів, де сайт і є вітрина."
+
+- id: vapi-voice
+  name: "Голосовой ИИ-приёмщик (Vapi)"
+  status: idea
+  cogs: "~$20–30/мес при 200 мин"
+  price: "$99–149/мес + сетап $300–500"
+  margin: "~75%"
+  complexity: high
+  niches: ["Стоматология", "Автосервис", "Юрист", "Салон красоты"]
+  countries: all
+  deps: ["16.28"]
+  triggers: [has_ads]
+  pitch_en: "An AI receptionist that answers every call, books appointments and never takes a sick day."
+  pitch_ua: "ШІ-адміністратор, який відповідає на кожен дзвінок, записує клієнтів і ніколи не хворіє."
+
+- id: google-ads-mgmt
+  name: "Google Ads-менеджмент"
+  status: idea
+  cogs: "наши часы + компетенция"
+  price: "10% бюджета, мин $100/мес"
+  margin: "часы"
+  complexity: high
+  niches: all
+  countries: all
+  deps: ["16.30"]
+  triggers: [has_ads]
+  pitch_en: "You already pay for clicks — we make each one land on a page built to convert, and cut the wasted spend."
+  pitch_ua: "Ви вже платите за кліки — ми робимо так, щоб кожен вів на сторінку, що конвертує, і зрізаємо змарнований бюджет."

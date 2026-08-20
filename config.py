@@ -1,5 +1,6 @@
 import os
 import sys
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -31,6 +32,12 @@ ACCESS_CODE = _req("ACCESS_CODE")
 ADMIN_NAME = (os.getenv("ADMIN_NAME") or "").strip() or "Администратор"
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "15"))
 CANCEL_WINDOW_MIN = int(os.getenv("CANCEL_WINDOW_MIN", "60"))
+# Месячный потолок расходов на ИИ и платные API, $ (раздел 20 плана).
+# 0 выключает кэп и алерты — так жить не стоит.
+AI_MONTHLY_CAP_USD = float(os.getenv("AI_MONTHLY_CAP_USD", "150"))
+# Потолок карточек, которые скаут может импортировать за день (15.23):
+# модерация — ручной труд, топить её сотней сырых записей нельзя
+SCOUT_DAILY_RAW_LIMIT = int(os.getenv("SCOUT_DAILY_RAW_LIMIT", "50"))
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Kyiv"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
@@ -38,10 +45,34 @@ if TEST_MODE and LOG_FILE:
     LOG_FILE = "test-" + LOG_FILE
 
 _db_url = _pick("TEST_DATABASE_URL", "DATABASE_URL")
-if TEST_MODE and _db_url == (os.getenv("DATABASE_URL") or "").strip():
+
+
+def db_key(url: str) -> tuple:
+    """(хост, порт, база) — то, что реально определяет, куда пойдут записи.
+
+    Сырое сравнение строк пропускало главный сценарий ошибки: у Neon pooled-хост
+    отличается от прямого только суффиксом -pooler в первой метке имени, и одна
+    и та же база под двумя строками выглядела «разными». Регистр, querystring
+    (?ssl=require), учётные данные и явный :5432 — тоже не различия.
+    """
+    u = urlsplit(url.strip())
+    host = (u.hostname or "").lower()
+    first, dot, rest = host.partition(".")
+    if first.endswith("-pooler"):
+        host = first[: -len("-pooler")] + dot + rest
+    try:
+        port = u.port or 5432
+    except ValueError:
+        port = 5432
+    return host, port, (u.path or "").rstrip("/")
+
+
+_prod_url = (os.getenv("DATABASE_URL") or "").strip()
+if TEST_MODE and _prod_url and db_key(_db_url) == db_key(_prod_url):
     raise SystemExit(
-        "TEST_DATABASE_URL совпадает с боевой DATABASE_URL — "
-        "тестовые записи попали бы в рабочую базу"
+        "TEST_DATABASE_URL указывает на ту же базу, что и боевая DATABASE_URL "
+        "(совпадают хост, порт и имя базы) — тестовые записи попали бы "
+        "в рабочую базу"
     )
 if _db_url.startswith("postgresql://"):
     _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -88,7 +119,10 @@ CONTACT_TYPES = [
 ]
 CONTACT_TYPE_LABELS = dict(CONTACT_TYPES) | {"other": "Другое"}
 
+# raw/candidate стоят до new: это стадии ДО ручной проверки — их создаёт
+# только лид-скаут (раздел 15), человек через форму так статус не выставит
 STATUSES = [
+    ("raw", "Скаут: сырой"), ("candidate", "Скаут: кандидат"),
     ("new", "Новый"), ("verified", "Проверен"), ("draft_ready", "Черновик готов"),
     ("sent", "Отправлено"), ("replied", "Ответил"), ("sold", "Продано"),
     ("refused", "Отказ"), ("rejected", "Отклонён"),

@@ -1,24 +1,36 @@
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer,
-    Text, func, select, text,
+    Numeric, Text, func, select, text,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import NullPool
 
 import config
 
-engine = create_async_engine(
-    config.DATABASE_URL,
+_engine_kwargs = dict(
     connect_args=config.CONNECT_ARGS,  # см. config.POOLED_DB
     pool_pre_ping=True,
 )
+if config.TEST_MODE:
+    # Соединения asyncpg привязаны к event loop. В pytest каждый тест живёт
+    # в своём loop, и пул отдавал бы соединение из чужого — «attached to a
+    # different loop». Тестовая база и так за PgBouncer'ом Neon, свой пул
+    # поверх ничего не экономит.
+    _engine_kwargs["poolclass"] = NullPool
+
+engine = create_async_engine(config.DATABASE_URL, **_engine_kwargs)
 Session = async_sessionmaker(engine, expire_on_commit=False)
 
 LEAD_STATUS_KEYS = [k for k, _ in config.STATUSES]
 CONTACT_TYPE_KEYS = [k for k, _ in config.CONTACT_TYPES] + ["other"]
+# Типы платных операций в cost_ledger. Новый тип = новая запись здесь + миграция
+# CHECK-констрейнта, как у статусов лида.
+COST_OPS = ["scout", "classify", "draft", "letter", "qa", "other"]
 
 
 def in_list(col: str, values) -> str:
@@ -111,6 +123,11 @@ class Lead(Base, TimesMixin):
     possible_duplicate: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # выставляет только скаут (канал Ads Transparency): компания уже платит
+    # за клики — приоритетный сегмент для missed-call и голосовых доп-услуг
+    has_ads: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     admin_note: Mapped[str | None] = mapped_column(Text)
     draft_url: Mapped[str | None] = mapped_column(Text)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -163,6 +180,58 @@ class Contact(Base, TimesMixin):
     )
 
 
+class FsmState(Base, TimesMixin):
+    """Состояние формы (aiogram FSM) в базе, а не в памяти процесса.
+
+    MemoryStorage терял недозаполненные 12-шаговые формы у всех работников при
+    каждом деплое. Здесь строка на пользователя: state — имя шага, data — JSON
+    накопленных полей. Чистится purge_stale_fsm() при старте бота.
+    """
+    __tablename__ = "fsm_states"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    state: Mapped[str | None] = mapped_column(Text)
+    data: Mapped[str | None] = mapped_column(Text)
+
+
+class CostLedger(Base, TimesMixin):
+    """Журнал расходов на ИИ и платные API (раздел 20 плана).
+
+    Пишется каждым платным вызовом через costs.log_cost(); суммы читает /costs
+    и месячный кэп config.AI_MONTHLY_CAP_USD. Токены — BigInteger: месяц
+    batch-скаута легко уходит за пределы int4.
+    """
+    __tablename__ = "cost_ledger"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    op: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    cache_read_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    api_calls: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 6), nullable=False, default=0, server_default="0"
+    )
+    lead_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("leads.id"))
+    batch_id: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(in_list("op", COST_OPS), name="ck_cost_ledger_op"),
+        Index("ix_cost_ledger_created_at", "created_at"),
+        Index("ix_cost_ledger_op", "op"),
+    )
+
+
 class LeadEvent(Base, TimesMixin):
     __tablename__ = "lead_events"
 
@@ -207,3 +276,9 @@ def day_start(days_back: int = 0) -> datetime:
     now = datetime.now(config.TZ)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return start - timedelta(days=days_back)
+
+
+def month_start() -> datetime:
+    """Начало текущего месяца по нашему поясу — окно месячного кэпа ИИ."""
+    now = datetime.now(config.TZ)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)

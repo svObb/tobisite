@@ -163,6 +163,7 @@ def admin_card_kb(lead_id):
     b.button(text="📝 Моя заметка", callback_data=f"anz:{lead_id}")
     b.button(text="📜 История", callback_data=f"hst:{lead_id}")
     b.button(text="🗑 Удалить", callback_data=f"del:{lead_id}")
+    b.button(text="💡 Что допродать", callback_data=f"ups:{lead_id}")
     b.adjust(2)
     return b.as_markup()
 

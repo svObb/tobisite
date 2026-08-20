@@ -15,7 +15,8 @@ import config
 import keyboards as kb
 from dedup import normalize_domain, normalize_phone
 from models import (
-    Contact, Lead, LeadEvent, Session, Worker, day_start, dup_message, log_event,
+    Contact, Lead, LeadEvent, Session, Worker, constraint_of, day_start,
+    dup_message, log_event,
 )
 
 log = logging.getLogger(__name__)
@@ -52,8 +53,8 @@ def local(dt: datetime) -> str:
     return dt.astimezone(config.TZ).strftime("%d.%m.%Y %H:%M")
 
 
-# Клавиатуры живут в чате вечно, а состояние — в памяти процесса. После
-# перезапуска бота старая кнопка приходит без данных, по которым её рисовали.
+# Клавиатуры живут в чате вечно, а состояние формы — нет: после отправки,
+# отмены или чистки старая кнопка приходит без данных, по которым её рисовали.
 STALE = "Кнопка устарела, откройте меню заново."
 
 
@@ -142,6 +143,8 @@ def fmt_lead(lead: Lead, contacts, *, author=None, edits=0, admin=False) -> str:
     lines.append(f"Добавлено: {local(lead.created_at)}")
     if lead.possible_duplicate:
         lines.append("⚠️ Помечено как возможный дубликат")
+    if admin and lead.has_ads:
+        lines.append("💰 Уже платит за рекламу (Ads Transparency)")
     if admin:
         if author:
             lines.append(f"Работник: {esc(author.name)} (id {author.tg_id})")
@@ -336,10 +339,13 @@ COUNTRY_NAMES = [n for n, _ in config.COUNTRIES]
 
 
 async def used_today(session, worker_id: int) -> int:
+    # Отменённые СЧИТАЮТСЯ: отмена своей записи в окне CANCEL_WINDOW_MIN иначе
+    # обнуляла бы квоту — добавил 15, отменил 15, добавил ещё 15. Лимит меряет
+    # объём работы за день, а не число выживших записей. Удалённые админом
+    # не считаются: это его решение, а не работника.
     return await session.scalar(
         select(func.count()).select_from(Lead).where(
             Lead.worker_id == worker_id,
-            Lead.cancelled_at.is_(None),
             Lead.deleted_at.is_(None),
             Lead.created_at >= day_start(),
         )
@@ -380,6 +386,12 @@ async def add_name(message: Message, state: FSMContext):
 
 
 async def _after_website(target: Message, state: FSMContext):
+    d = await state.get_data()
+    if d.get("resume_confirm"):
+        # сюда вернулись из _commit_and_reply после дубля сайта: остальная
+        # форма уже заполнена, гонять человека по шагам 3–12 заново незачем
+        await _show_summary(target, state)
+        return
     await state.set_state(Add.source_url)
     await target.answer(
         "3/12. Ссылка на источник (Google Maps, соцсеть, каталог):",
@@ -395,7 +407,7 @@ async def add_website_none(cb: CallbackQuery, state: FSMContext):
 
 
 @add_router.message(Add.website)
-async def add_website(message: Message, state: FSMContext, is_admin: bool):
+async def add_website(message: Message, state: FSMContext):
     raw = (message.text or "").strip()
     if not is_url(raw):
         await message.answer(
@@ -414,10 +426,12 @@ async def add_website(message: Message, state: FSMContext, is_admin: bool):
             ).limit(1)
         )
     if exists:
-        await state.clear()
+        # форму не чистим: у человека, может, просто опечатка в адресе,
+        # а «Сайта нет» и «Отмена» остаются доступными кнопками
         await message.answer(
-            "❌ Эта компания уже есть в базе. Добавление отменено.",
-            reply_markup=kb.menu(is_admin),
+            "❌ Такой сайт уже есть в базе. Введите другой или нажмите "
+            "«Сайта нет»:",
+            reply_markup=kb.website_kb(),
         )
         return
     await state.update_data(website_url=raw, domain_norm=dom)
@@ -582,6 +596,27 @@ async def add_contact_other(message: Message, state: FSMContext):
     await _ask_contact_value(message, state)
 
 
+async def phone_dup_exists(session, value_norm: str | None,
+                           exclude_contact_id: int | None = None) -> bool:
+    """Занят ли номер живым контактом живой записи.
+
+    Условия обязаны повторять предикат уникального индекса
+    uq_contacts_phone_norm_active: проверяем ровно то, на чём упадёт INSERT.
+    """
+    if not value_norm:
+        return False
+    conds = [
+        Contact.ctype == "phone",
+        Contact.value_norm == value_norm,
+        Contact.deleted_at.is_(None),
+        Contact.lead_cancelled_at.is_(None),
+    ]
+    if exclude_contact_id is not None:
+        conds.append(Contact.id != exclude_contact_id)
+    row = await session.scalar(select(Contact.id).where(*conds).limit(1))
+    return row is not None
+
+
 def contact_error(ctype: str, value: str, region: str | None = None) -> str | None:
     # region обязан быть тем же, с каким номер потом ляжет в value_norm, иначе
     # проверка и запись разойдутся и дубликат пройдёт мимо уникального индекса
@@ -609,11 +644,28 @@ async def add_contact_value(message: Message, state: FSMContext, is_admin: bool)
         await state.clear()
         await message.answer(STALE, reply_markup=kb.menu(is_admin))
         return
-    err = contact_error(ctype, val, config.COUNTRY_ISO.get(d.get("country")))
+    region = config.COUNTRY_ISO.get(d.get("country"))
+    err = contact_error(ctype, val, region)
     if err:
         await message.answer(err, reply_markup=kb.cancel_kb())
         return
     contacts = d.get("contacts", [])
+    # Дубль телефона ловится здесь, на шаге ввода, а не на финальном INSERT:
+    # раньше человек узнавал о нём после 12 шагов и терял всю форму.
+    if ctype == "phone":
+        norm = normalize_phone(val, region)
+        in_form = any(
+            c["ctype"] == "phone" and normalize_phone(c["value"], region) == norm
+            for c in contacts
+        )
+        async with Session() as s:
+            in_db = await phone_dup_exists(s, norm)
+        if in_form or in_db:
+            await message.answer(
+                "❌ Такой телефон уже есть в базе. Введите другой номер:",
+                reply_markup=kb.cancel_kb(),
+            )
+            return
     contacts.append({"ctype": ctype, "ctype_other": d.get("cur_other"), "value": val})
     await state.update_data(contacts=contacts)
     if len(contacts) >= config.MAX_CONTACTS:
@@ -624,6 +676,11 @@ async def add_contact_value(message: Message, state: FSMContext, is_admin: bool)
 
 
 async def _ask_rating(target: Message, state: FSMContext):
+    d = await state.get_data()
+    if d.get("resume_confirm"):
+        # контакт перевведён после дубля на сохранении: шаги 9–12 уже заполнены
+        await _show_summary(target, state)
+        return
     await state.set_state(Add.rating)
     await target.answer(
         "9/12. Рейтинг Google и число отзывов:", reply_markup=kb.skip_kb("rt")
@@ -775,6 +832,26 @@ async def save_lead(d: dict, worker: Worker, possible_dup: bool, is_admin: bool)
         return lead.id
 
 
+async def _drop_dup_phones(d: dict) -> list[str]:
+    """Убирает из данных формы телефоны, уже занятые в базе. Возвращает убранные.
+
+    Зовётся после IntegrityError на сохранении: какой именно контакт упал,
+    Postgres не говорит, поэтому проверяем каждый телефон формы тем же условием,
+    что и уникальный индекс.
+    """
+    region = config.COUNTRY_ISO.get(d.get("country"))
+    dropped, kept = [], []
+    async with Session() as s:
+        for c in d["contacts"]:
+            if c["ctype"] == "phone":
+                if await phone_dup_exists(s, normalize_phone(c["value"], region)):
+                    dropped.append(c["value"])
+                    continue
+            kept.append(c)
+    d["contacts"] = kept
+    return dropped
+
+
 async def _commit_and_reply(cb: CallbackQuery, state: FSMContext, worker: Worker,
                             possible_dup: bool, is_admin: bool):
     d = await state.get_data()
@@ -788,7 +865,39 @@ async def _commit_and_reply(cb: CallbackQuery, state: FSMContext, worker: Worker
         )
         return
     except IntegrityError as e:
+        # Дубль, проскочивший ранние проверки (гонка или обход шага). Форму
+        # не выбрасываем: 12 шагов работы человека дороже, чем пара веток кода.
         log.warning("dup on insert: %s", e.orig)
+        name = constraint_of(e)
+        if name == "uq_contacts_phone_norm_active":
+            dropped = await _drop_dup_phones(d)
+            if dropped:
+                await state.update_data(contacts=d["contacts"])
+                listed = "\n".join(f"  • {esc(v)}" for v in dropped)
+                if d["contacts"]:
+                    await cb.message.answer(
+                        "❌ Телефон уже есть в базе, контакт убран из формы:\n"
+                        f"{listed}\nОстальные данные целы — проверьте и "
+                        "отправьте ещё раз."
+                    )
+                    await _show_summary(cb.message, state)
+                    return
+                await state.update_data(resume_confirm=True)
+                await cb.message.answer(
+                    "❌ Телефон уже есть в базе, контакт убран из формы:\n"
+                    f"{listed}\nДобавьте другой контакт — остальные данные целы."
+                )
+                await _ask_contact_type(cb.message, state)
+                return
+        if name == "uq_leads_domain_norm_active":
+            await state.update_data(resume_confirm=True)
+            await state.set_state(Add.website)
+            await cb.message.answer(
+                "❌ Такой сайт уже есть в базе. Введите другой или нажмите "
+                "«Сайта нет» — остальные данные целы.",
+                reply_markup=kb.website_kb(),
+            )
+            return
         await state.clear()
         await cb.message.answer(dup_message(e), reply_markup=kb.menu(is_admin))
         return
@@ -945,10 +1054,13 @@ async def my_stats(message: Message, state: FSMContext, worker: Worker):
             select(func.count()).select_from(Lead)
             .where(*base, Lead.status.in_(config.ACCEPTED_STATUSES))
         )
+        # для остатка лимита — used_today, а не today: в квоте отменённые
+        # считаются, в статистике «за сегодня» — нет
+        used = await used_today(s, worker.id)
     limit = worker.daily_limit if worker.daily_limit is not None else config.DEFAULT_DAILY_LIMIT
     await message.answer(
         f"Всего добавлено: {total}\nЗа сегодня: {today}\nЗа 7 дней: {week}\n"
-        f"Принято: {accepted}\nОсталось по лимиту сегодня: {max(0, limit - today)}"
+        f"Принято: {accepted}\nОсталось по лимиту сегодня: {max(0, limit - used)}"
     )
 
 
@@ -1058,6 +1170,21 @@ async def apply_field(lead_id, field, value, actor_tg_id, worker, is_admin) -> s
             setattr(lead, field, value)
             if field == "website_url":
                 lead.domain_norm = normalize_domain(value)
+            if field == "country":
+                # регион разбора номеров идёт от страны лида: без пересчёта
+                # value_norm остаётся посчитанным по старой стране, и дедуп
+                # телефонов этого лида ломается (массовая версия того же —
+                # tools/renorm_phones.py)
+                region = config.COUNTRY_ISO.get(value)
+                phones = await s.scalars(
+                    select(Contact).where(
+                        Contact.lead_id == lead.id,
+                        Contact.ctype == "phone",
+                        Contact.deleted_at.is_(None),
+                    )
+                )
+                for c in phones:
+                    c.value_norm = normalize_phone(c.value, region)
             log_event(s, lead_id, "field_edit", actor_tg_id, field,
                       None if old is None else str(old), str(value))
     except IntegrityError as e:
@@ -1306,6 +1433,18 @@ async def contact_value(message: Message, state: FSMContext, worker, is_admin: b
     if err:
         await message.answer(err, reply_markup=kb.cancel_kb())
         return
+    if ctype == "phone":
+        async with Session() as s:
+            dup = await phone_dup_exists(
+                s, normalize_phone(val, region),
+                exclude_contact_id=d.get("contact_id"),
+            )
+        if dup:
+            await message.answer(
+                "❌ Такой телефон уже есть в базе. Введите другой номер:",
+                reply_markup=kb.cancel_kb(),
+            )
+            return
     try:
         async with Session() as s, s.begin():
             norm = normalize_phone(val, region) if ctype == "phone" else None
@@ -1369,8 +1508,9 @@ async def contact_delete(cb: CallbackQuery, worker, is_admin: bool):
     )
 
 
-# Кнопки формы добавления отфильтрованы по состоянию. После перезапуска бота
-# состояния нет, ни один хендлер не срабатывает, и в чате навсегда виснут часики.
+# Кнопки формы добавления отфильтрованы по состоянию. Когда форма уже отправлена,
+# отменена или вычищена, состояния нет, ни один хендлер не срабатывает, и в чате
+# навсегда виснут часики.
 # Хендлер объявлен последним в add_router, а сам add_router подключается
 # последним в main.py — поэтому перехватывает только то, что не разобрали выше.
 FORM_PREFIXES = (

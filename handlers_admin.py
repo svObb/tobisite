@@ -7,7 +7,7 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
@@ -15,14 +15,19 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
+import costs
 import keyboards as kb
+import services
 from handlers_worker import (
     STALE, cb_id, edits_count, esc, fmt_lead, get_contacts, is_url, list_text,
     local, pick, safe_edit, send_screenshot,
 )
 from models import (
-    Contact, Lead, LeadEvent, Session, Worker, day_start, log_event,
+    Contact, CostLedger, Lead, LeadEvent, Session, Worker, day_start, log_event,
+    month_start,
 )
+from scout.niches import NICHE_TAGS
+from scout.runner import run_scout, run_scout_paste, scout_busy
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -97,6 +102,158 @@ async def stats(message: Message, state: FSMContext):
     lines = [f"Всего: {total}", f"За сегодня: {today}", f"За 7 дней: {week}", "", "По работникам:"]
     lines += [f"  {esc(name)}: {cnt}" for name, cnt in rows] or ["  —"]
     await message.answer("\n".join(lines))
+
+
+# --- расходы на ИИ (/costs) --------------------------------------------------
+
+COST_WINDOWS = {
+    "day": ("за сегодня", lambda: day_start()),
+    "week": ("за 7 дней", lambda: day_start(6)),
+    "month": ("за месяц", month_start),
+}
+
+
+def _n(v) -> str:
+    """1234567 → «1 234 567»: числа токенов без разрядов не читаются."""
+    return f"{int(v):,}".replace(",", " ")
+
+
+@router.message(Command("costs"))
+async def costs_report(message: Message, state: FSMContext, command: CommandObject):
+    # /costs [day|week|month], по умолчанию month. Роутер уже отфильтрован
+    # по is_admin в main.py, отдельный гейт не нужен.
+    await state.set_state(None)
+    arg = (command.args or "month").strip().lower()
+    if arg not in COST_WINDOWS:
+        await message.answer("Формат: /costs day|week|month")
+        return
+    label, since_fn = COST_WINDOWS[arg]
+    since = since_fn()
+    async with Session() as s:
+        rows = (await s.execute(
+            select(
+                CostLedger.op, CostLedger.model,
+                func.sum(CostLedger.api_calls),
+                func.sum(CostLedger.cost_usd),
+                func.sum(CostLedger.input_tokens),
+                func.sum(CostLedger.output_tokens),
+                func.sum(CostLedger.cache_read_tokens),
+            )
+            .where(CostLedger.created_at >= since)
+            .group_by(CostLedger.op, CostLedger.model)
+            .order_by(func.sum(CostLedger.cost_usd).desc())
+        )).all()
+    spent_month = await costs.month_spent()
+    total = sum((r[3] for r in rows), start=0)
+    lines = [f"<b>💸 Расходы {label}</b> (с {local(since)})"]
+    if not rows:
+        lines.append("Записей нет.")
+    else:
+        lines.append(f"Всего: ${total:.4f}")
+        for op, model, calls, usd, t_in, t_out, t_cache in rows:
+            lines.append(
+                f"  {esc(op)}{' · ' + esc(model) if model else ''}: ${usd:.4f} — "
+                f"{_n(calls)} выз., in {_n(t_in)}, out {_n(t_out)}, кэш {_n(t_cache)}"
+            )
+    cap = config.AI_MONTHLY_CAP_USD
+    if cap > 0:
+        pct = float(spent_month) / cap * 100
+        lines.append(
+            f"\nМесячный кэп: ${float(spent_month):.2f} из ${cap:.2f} ({pct:.0f}%)"
+        )
+        if pct >= 100:
+            lines.append("⛔ Кэп исчерпан — платные операции остановлены.")
+    else:
+        lines.append("\nМесячный кэп выключен (AI_MONTHLY_CAP_USD=0).")
+    await message.answer("\n".join(lines))
+
+
+# --- лид-скаут (/scout, /scout_paste) ----------------------------------------
+
+# фоновые задачи держим за ссылку: без неё сборщик мусора вправе убить
+# задачу на середине прогона
+_bg_tasks: set = set()
+
+
+def _spawn(coro):
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+SCOUT_USAGE = (
+    "Формат: /scout <страна> <ниша> <город>\n"
+    "Пример: /scout Словакия Стоматология Košice\n"
+    f"Ниши: {', '.join(NICHE_TAGS)}\n"
+    "Город — как он назван в OpenStreetMap (обычно на местном языке)."
+)
+
+
+def _parse_scout_args(args: str) -> tuple[str, str, str] | None:
+    """«<страна> <ниша> <город>» — ниша может быть из двух слов,
+    поэтому матчим её по каталогу, а не сплитом по пробелам."""
+    parts = args.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[0] not in config.COUNTRY_ISO:
+        return None
+    country, rest = parts[0], parts[1].strip()
+    for niche in sorted(NICHE_TAGS, key=len, reverse=True):
+        if rest.lower().startswith(niche.lower()):
+            city = rest[len(niche):].strip()
+            if city:
+                return country, niche, city
+    return None
+
+
+@router.message(Command("scout"))
+async def scout_cmd(message: Message, state: FSMContext, command: CommandObject):
+    await state.set_state(None)
+    parsed = _parse_scout_args(command.args or "")
+    if parsed is None:
+        await message.answer(SCOUT_USAGE)
+        return
+    if scout_busy():
+        await message.answer("Скаут уже работает — дождитесь дайджеста.")
+        return
+    country, niche, city = parsed
+    _spawn(run_scout(message.bot, message.chat.id, country, niche, city))
+    await message.answer(
+        f"🔭 Скаут запущен: {niche}, {city} ({country}). Дайджест пришлю сюда."
+    )
+
+
+SCOUT_PASTE_USAGE = (
+    "Формат:\n/scout_paste <страна> <ниша>\n"
+    "со второй строки — домены через пробел или перенос строки.\n"
+    "Пример:\n/scout_paste Словакия Стоматология\nzubar-ke.sk dental-x.sk\n\n"
+    "Домены берутся руками из adstransparency.google.com — автоскрейпинг "
+    "нарушает ToS Google."
+)
+SCOUT_PASTE_MAX = 50
+
+
+@router.message(Command("scout_paste"))
+async def scout_paste_cmd(message: Message, state: FSMContext,
+                          command: CommandObject):
+    await state.set_state(None)
+    args = command.args or ""
+    head, _, tail = args.partition("\n")
+    parsed = _parse_scout_args(head + " —")  # «город» не нужен — добиваем заглушкой
+    domains = [d for d in tail.split() if "." in d]
+    if parsed is None or not domains:
+        await message.answer(SCOUT_PASTE_USAGE)
+        return
+    if len(domains) > SCOUT_PASTE_MAX:
+        await message.answer(f"Не больше {SCOUT_PASTE_MAX} доменов за раз.")
+        return
+    if scout_busy():
+        await message.answer("Скаут уже работает — дождитесь дайджеста.")
+        return
+    country, niche, _ = parsed
+    _spawn(run_scout_paste(message.bot, message.chat.id, country, niche, domains))
+    await message.answer(
+        f"🔭 Принято доменов: {len(domains)} ({niche}, has_ads). "
+        "Дайджест пришлю сюда."
+    )
 
 
 # --- фильтры и список --------------------------------------------------------
@@ -343,6 +500,42 @@ async def admin_card(cb: CallbackQuery):
     await show_card(cb.message, lead_id)
 
 
+@router.callback_query(F.data.startswith("ups:"))
+async def upsell_menu(cb: CallbackQuery):
+    """«Что допродать» (16.6): топ-3 услуги под факты лида, без ИИ."""
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
+    async with Session() as s:
+        lead = await s.get(Lead, lead_id)
+    if not lead or lead.deleted_at:
+        await cb.answer(STALE, show_alert=True)
+        return
+    await cb.answer()
+    recs = services.recommend(lead)
+    if not recs:
+        await cb.message.answer("Подходящих доп-услуг под этого лида не нашлось.")
+        return
+    lines = [f"<b>💡 Что допродать: {esc(lead.name)}</b>"]
+    for i, r in enumerate(recs, 1):
+        svc = r["svc"]
+        mark = " — ⚠️ pilot, только дружественным" if svc["status"] == "pilot" else ""
+        lines += [
+            "",
+            f"{i}. <b>{esc(svc['name'])}</b>{mark}",
+            f"Цена: {esc(svc['price'])} · себестоимость {esc(svc['cogs'])}",
+            f"Почему: {esc('; '.join(r['why']))}",
+            f"✉️ {esc(svc['pitch_en'])}",
+        ]
+    lines += [
+        "",
+        "<i>Порядок (16.7): сайт → подписка в момент продажи → подписка "
+        "повторно после оплаты → доп-услуги после запуска. Активные "
+        "допродажи — после 3 продаж сайтов (16.4).</i>",
+    ]
+    await cb.message.answer("\n".join(lines))
+
+
 @router.callback_query(F.data.startswith("sts:"))
 async def status_menu(cb: CallbackQuery):
     lead_id = await cb_id(cb)
@@ -384,6 +577,12 @@ async def history(cb: CallbackQuery):
     if lead_id is None:
         return
     async with Session() as s:
+        lead = await s.get(Lead, lead_id)
+        # 6.10: кнопка «История» могла остаться в старом сообщении — удалённый
+        # лид нигде не показывается, и его историю показывать тоже нечего
+        if not lead or lead.deleted_at:
+            await cb.answer(STALE, show_alert=True)
+            return
         events = list(await s.scalars(
             select(LeadEvent).where(LeadEvent.lead_id == lead_id)
             .order_by(LeadEvent.id.desc()).limit(30)
@@ -568,7 +767,13 @@ async def restore_lead(cb: CallbackQuery):
     try:
         async with Session() as s, s.begin():
             lead = await s.get(Lead, lead_id)
-            if not lead or not lead.cancelled_at:
+            # 6.9: у удалённого лида восстанавливать нечего — получилась бы
+            # запись «активная и удалённая сразу», невидимая ни в одном списке,
+            # но занимающая домен и телефоны в дедупе
+            if not lead or lead.deleted_at:
+                await cb.answer(STALE, show_alert=True)
+                return
+            if not lead.cancelled_at:
                 await cb.answer("Запись не отменена", show_alert=True)
                 return
             lead.cancelled_at = None
@@ -806,13 +1011,21 @@ def csv_safe(v):
 CSV_HEADER = [
     "id", "дата", "работник", "название", "сайт", "источник", "страна", "город",
     "язык", "ниша", "рейтинг", "статус", "возможный_дубликат", "где_нашли",
-    "заметка", "контакты",
+    "заметка", "контакты", "черновик", "заметка_админа",
 ]
 
 
 @router.message(F.text == kb.BTN_A_CSV)
 async def export_csv(message: Message, state: FSMContext):
     await state.set_state(None)
+    # выгрузка уважает фильтры «Все компании»: раньше CSV молча отдавал всю
+    # базу, и настроенный фильтр по стране/статусу выглядел применённым, но не был
+    flt = await get_flt(state)
+    conds = flt_conditions(flt)
+    filtered = any(
+        flt.get(k) is not None
+        for k in ("worker_id", "country", "niche", "status", "days")
+    )
     fd, path = tempfile.mkstemp(suffix=".csv", prefix="tobisite_")
     os.close(fd)
     rows_written = 0
@@ -824,7 +1037,7 @@ async def export_csv(message: Message, state: FSMContext):
             while True:
                 async with Session() as s:
                     leads = list(await s.scalars(
-                        select(Lead).where(*ACTIVE, Lead.id > last_id)
+                        select(Lead).where(*conds, Lead.id > last_id)
                         .order_by(Lead.id).limit(500)
                     ))
                     if not leads:
@@ -853,12 +1066,14 @@ async def export_csv(message: Message, state: FSMContext):
                         "да" if l.possible_duplicate else "",
                         l.found_via, l.note or "",
                         " | ".join(by_lead.get(l.id, [])),
+                        l.draft_url or "", l.admin_note or "",
                     )])
                     rows_written += 1
                 last_id = ids[-1]
         await message.answer_document(
             FSInputFile(path, filename="companies.csv"),
-            caption=f"Записей: {rows_written}",
+            caption=f"Записей: {rows_written}"
+                    + (" (по текущим фильтрам)" if filtered else ""),
         )
     finally:
         try:

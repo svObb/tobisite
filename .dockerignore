@@ -16,5 +16,11 @@ __pycache__/
 # серверная обвязка в образе не нужна: она выполняется на хосте
 deploy/
 
+# тесты гоняет CI до сборки образа; в боевом контейнере они мёртвый груз
+tests/
+conftest.py
+pytest.ini
+requirements-dev.txt
+
 # tools/ НУЖНЫ: разовые скрипты обслуживания запускаются внутри контейнера,
 # через docker compose run --rm bot python tools/renorm_phones.py

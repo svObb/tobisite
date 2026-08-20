@@ -5,14 +5,16 @@ import sys
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, CallbackQuery, ErrorEvent, Message
+from aiogram.types import (
+    BotCommand, BotCommandScopeChat, CallbackQuery, ErrorEvent, Message,
+)
 from sqlalchemy import select
 
 import config
 import handlers_admin
 import handlers_worker
 import keyboards as kb
+from fsm_storage import PgStorage, purge_stale_fsm
 from models import Session, Worker, ensure_admin_worker
 
 log = logging.getLogger("tobisite")
@@ -94,7 +96,9 @@ async def main():
         config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    # FSM в Postgres: MemoryStorage терял недозаполненные формы у всех
+    # работников при каждом деплое (см. fsm_storage.py)
+    dp = Dispatcher(storage=PgStorage())
     dp.message.outer_middleware(Auth())
     dp.callback_query.outer_middleware(Auth())
 
@@ -139,8 +143,26 @@ async def main():
         await bot.set_my_commands([
             BotCommand(command="start", description="Начать заново"),
         ])
+        # /costs видит только админ: работникам команда всё равно не ответит
+        # (роутер отфильтрован), нечего ей делать и в их меню
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Начать заново"),
+                BotCommand(command="costs", description="Расходы на ИИ за месяц"),
+                BotCommand(command="scout", description="Скаут: страна ниша город"),
+                BotCommand(command="scout_paste",
+                           description="Скаут: домены из Ads Transparency"),
+            ],
+            scope=BotCommandScopeChat(chat_id=config.ADMIN_TG_ID),
+        )
     except Exception as e:
         log.warning("set_my_commands failed: %s", e)
+    try:
+        purged = await purge_stale_fsm()
+        if purged:
+            log.info("purged %s stale fsm rows", purged)
+    except Exception as e:
+        log.warning("fsm purge failed: %s", e)
     log.info(
         "bot started: @%s, режим %s",
         me.username, "ТЕСТОВЫЙ" if config.TEST_MODE else "боевой",
