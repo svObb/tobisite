@@ -16,6 +16,8 @@ import asyncio
 import itertools
 import os
 import pathlib
+import time
+from types import SimpleNamespace
 
 # раньше ЛЮБОГО импорта проекта: config читает окружение на импорте
 os.environ["TOBISITE_TEST"] = "1"
@@ -119,3 +121,74 @@ def make_lead(worker_id):
         return lead
 
     return _make
+
+
+# --- админ-панель ------------------------------------------------------------
+#
+# Сети в её тестах нет вообще: RSA-ключ генерится здесь и отдаётся verifier'у
+# прямо в конструктор, поэтому за JWKS Cloudflare он не ходит, а запросы идут
+# в приложение через httpx.ASGITransport — без сокетов и без сервера.
+# Импорты внутри фикстур: этот conftest грузится и для тестов бота, которым
+# fastapi с PyJWT ни к чему.
+
+ACCESS_TEAM_DOMAIN = "pytest.cloudflareaccess.com"
+ACCESS_ISSUER = f"https://{ACCESS_TEAM_DOMAIN}"
+ACCESS_AUD = "pytest-aud"
+ACCESS_EMAIL = "founder@tobisite.com"
+ACCESS_KID = "pytest-kid"
+
+
+@pytest.fixture(scope="session")
+def access_key():
+    """RSA-ключ, JWKS с ним и фабрика токенов Cloudflare Access поверх него."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key(), as_dict=True)
+    public |= {"kid": ACCESS_KID, "alg": "RS256", "use": "sig"}
+
+    def token(*, email=ACCESS_EMAIL, aud=ACCESS_AUD, issuer=ACCESS_ISSUER,
+              kid=ACCESS_KID, lifetime=300):
+        now = int(time.time())
+        return jwt.encode(
+            {"aud": aud, "iss": issuer, "email": email, "sub": "pytest",
+             "iat": now, "exp": now + lifetime},
+            private, algorithm="RS256", headers={"kid": kid},
+        )
+
+    return SimpleNamespace(jwks={"keys": [public]}, token=token)
+
+
+@pytest.fixture
+def admin(access_key):
+    """Панель и запрос к ней: .get(path) — с валидным токеном, token=None — без.
+
+    База — та же тестовая: config.DATABASE_URL в тест-режиме указывает на неё,
+    и гейт в config.py не даёт ей совпасть с боевой.
+    """
+    import config
+    import httpx
+    from admin.app import create_app
+    from admin.auth import CF_HEADER, AccessVerifier
+
+    verifier = AccessVerifier(team_domain=ACCESS_TEAM_DOMAIN, aud=ACCESS_AUD,
+                              allowed_emails=[ACCESS_EMAIL],
+                              jwks=access_key.jwks)
+    app = create_app(db_url=config.DATABASE_URL, verifier=verifier)
+
+    async def request(method, path, token=..., headers=None, **kw):
+        sent = {} if token is None else {
+            CF_HEADER: access_key.token() if token is ... else token
+        }
+        sent.update(headers or {})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://admin") as client:
+            return await client.request(method, path, headers=sent, **kw)
+
+    async def get(path, token=..., **kw):
+        return await request("GET", path, token, **kw)
+
+    return SimpleNamespace(app=app, get=get, request=request,
+                           token=access_key.token, email=ACCESS_EMAIL)

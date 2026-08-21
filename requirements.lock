@@ -16,8 +16,12 @@ aiosignal==1.4.0
     # via aiohttp
 alembic==1.19.1
     # via -r requirements.txt
+annotated-doc==0.0.5
+    # via fastapi
 annotated-types==0.8.0
     # via pydantic
+anyio==4.14.2
+    # via starlette
 asyncpg==0.31.0
     # via -r requirements.txt
 attrs==26.1.0
@@ -30,14 +34,28 @@ botocore==1.43.77
     #   s3transfer
 certifi==2026.7.22
     # via aiogram
+cffi==2.1.1
+    # via cryptography
+click==8.4.2
+    # via uvicorn
+colorama==0.4.6 ; platform_system == "Windows"
+    # via click
+cryptography==50.0.0
+    # via -r requirements.txt
+fastapi==0.141.1
+    # via -r requirements.txt
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
 greenlet==3.5.5
     # via sqlalchemy
+h11==0.16.0
+    # via uvicorn
 idna==3.18
-    # via yarl
+    # via
+    #   anyio
+    #   yarl
 jinja2==3.1.6
     # via -r requirements.txt
 jmespath==1.1.0
@@ -62,10 +80,16 @@ propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
+pycparser==3.0
+    # via cffi
 pydantic==2.13.4
-    # via aiogram
+    # via
+    #   aiogram
+    #   fastapi
 pydantic-core==2.46.4
     # via pydantic
+pyjwt==2.13.0
+    # via -r requirements.txt
 python-dateutil==2.9.0.post0
     # via botocore
 python-dotenv==1.2.3
@@ -80,21 +104,30 @@ sqlalchemy==2.0.52
     # via
     #   -r requirements.txt
     #   alembic
+starlette==1.6.0
+    # via fastapi
 typing-extensions==4.16.0
     # via
     #   aiogram
     #   aiohttp
     #   aiosignal
     #   alembic
+    #   anyio
+    #   fastapi
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
+    #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
-    # via pydantic
+    # via
+    #   fastapi
+    #   pydantic
 tzdata==2026.3
     # via -r requirements.txt
 urllib3==2.7.0
     # via botocore
+uvicorn==0.52.4
+    # via -r requirements.txt
 yarl==1.24.5
     # via aiohttp

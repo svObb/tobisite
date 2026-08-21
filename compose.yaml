@@ -57,5 +57,52 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Панель и туннель включаются только с COMPOSE_PROFILES=admin в .env:
+  # обычный `docker compose up -d` их не видит. Интерполяция общефайловая,
+  # поэтому здесь нельзя ${VAR:?…} — без переменных упал бы и выкат бота.
+  admin:
+    image: ghcr.io/svobb/tobisite:${IMAGE_TAG:-}
+    container_name: tobisite-admin
+    profiles: ["admin"]
+    restart: unless-stopped
+    command: ["uvicorn", "admin.app:app", "--host", "0.0.0.0", "--port", "8100"]
+    env_file:
+      - .env
+    environment:
+      # панель ходит в базу только на чтение; тем же URL перекрыта и DATABASE_URL,
+      # которую читает config бота при импорте моделей — писать ей нечем
+      ADMIN_DATABASE_URL: postgresql+asyncpg://admin_ro:${ADMIN_DB_PASSWORD:-}@db:5432/tobisite
+      DATABASE_URL: postgresql+asyncpg://admin_ro:${ADMIN_DB_PASSWORD:-}@db:5432/tobisite
+      LOG_FILE: ''
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
+    # те же ужесточения, что у бота
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # ports нет: наружу панель выходит только через cloudflared
+
+  cloudflared:
+    # latest — только на первый запуск; после первого pull зафиксировать
+    # конкретный тег в CLOUDFLARED_TAG (см. admin/README.md)
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
+    container_name: tobisite-cloudflared
+    profiles: ["admin"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - admin
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   tobisite-pgdata:

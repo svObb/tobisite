@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Дашборд{% endblock %}
+{% block body %}
+<h1>Дашборд</h1>
+
+<section class="cards">
+  <div class="card">
+    <h2>MRR доп-услуг</h2>
+    <p class="big" data-mrr="{{ mrr|usd2 }}">${{ mrr|usd2 }}</p>
+    <p class="sub">активные подписки</p>
+  </div>
+  <div class="card">
+    <h2>Расходы месяца</h2>
+    <p class="big" data-spent="{{ spent|usd2 }}">${{ spent|usd2 }}</p>
+    <p class="sub">
+      {% if cap %}из ${{ cap|usd2 }} — {{ pct|round|int }}%{% else %}кэп выключен{% endif %}
+    </p>
+  </div>
+  <div class="card">
+    <h2>Лидов в базе</h2>
+    <p class="big" data-leads="{{ leads_total }}">{{ leads_total }}</p>
+    <p class="sub">без отменённых и удалённых</p>
+  </div>
+</section>
+
+<h2>Воронка</h2>
+<table class="grid">
+  <tbody>
+  {% for key, label, count in funnel %}
+    <tr data-status="{{ key }}" data-count="{{ count }}">
+      <td><a href="/leads?status={{ key }}">{{ label }}</a></td>
+      <td class="num">{{ count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Последние события</h2>
+<table class="grid">
+  <thead><tr><th>Когда</th><th>Лид</th><th>Событие</th><th>Изменение</th><th>Кто</th></tr></thead>
+  <tbody>
+  {% for event, lead_name in events %}
+    <tr>
+      <td class="nowrap">{{ event.created_at|local }}</td>
+      <td><a href="/leads/{{ event.lead_id }}">#{{ event.lead_id }} {{ lead_name }}</a></td>
+      <td>{{ event.event }}{% if event.field %} ({{ event.field }}){% endif %}</td>
+      <td>{% if event.old_value or event.new_value %}{{ event.old_value or "—" }} → {{ event.new_value or "—" }}{% endif %}</td>
+      <td class="num">tg {{ event.actor_tg_id }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">Событий нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

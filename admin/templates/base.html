@@ -1,0 +1,28 @@
+{# CSP панели — default-src 'self': ни инлайновых стилей, ни инлайновых
+   скриптов, ни единой ссылки на CDN. Всё своё, из /static. #}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Панель{% endblock %} · tobisite</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/"{% if active == 'dashboard' %} class="on"{% endif %}>Дашборд</a>
+      <a href="/leads"{% if active == 'leads' %} class="on"{% endif %}>Лиды</a>
+      <a href="/costs"{% if active == 'costs' %} class="on"{% endif %}>Расходы</a>
+      <a href="/subs"{% if active == 'subs' %} class="on"{% endif %}>Подписки</a>
+    </nav>
+    <span class="who">{{ email }}</span>
+  </header>
+  <main>
+    {% block body %}{% endblock %}
+  </main>
+  <footer>Только чтение. Изменения — через бота. Время киевское.</footer>
+</body>
+</html>

@@ -63,7 +63,7 @@ jobs:
         run: python -m compileall -q .
 
       - name: pyflakes
-        run: pyflakes *.py scout/*.py tools/*.py tests/*.py alembic/env.py alembic/versions/*.py
+        run: pyflakes *.py admin/*.py scout/*.py tools/*.py tests/*.py alembic/env.py alembic/versions/*.py
 
       - name: дедуп
         run: python test_dedup.py
@@ -126,7 +126,7 @@ jobs:
             -e COUNTRIES='Украина|UA,Словакия|SK' \
             -e LANGUAGES='Украинский,Словацкий' \
             "$IMAGE:$GITHUB_SHA" \
-            python -c "import main, handlers_admin, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services"
+            python -c "import main, handlers_admin, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services, admin.app"
           docker push "$IMAGE:$GITHUB_SHA"
           echo "опубликован $IMAGE:$GITHUB_SHA"
 

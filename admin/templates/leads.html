@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Лиды{% endblock %}
+{% block body %}
+<h1>Лиды</h1>
+
+{# action/method оставлены намеренно: без htmx форма работает обычным GET #}
+<form class="filters" action="/leads" method="get"
+      hx-get="/leads" hx-target="#leads" hx-swap="outerHTML"
+      hx-push-url="true" hx-trigger="change, submit">
+  <label>Статус
+    <select name="status">
+      <option value="">любой</option>
+      {% for key, label in statuses %}
+        <option value="{{ key }}"{% if flt.status == key %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Страна
+    <select name="country">
+      <option value="">любая</option>
+      {% for value in countries %}
+        <option value="{{ value }}"{% if flt.country == value %} selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Ниша
+    <select name="niche">
+      <option value="">любая</option>
+      {% for value in niches %}
+        <option value="{{ value }}"{% if flt.niche == value %} selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Работник
+    <select name="worker">
+      <option value="">любой</option>
+      {% for worker_id, name in workers %}
+        <option value="{{ worker_id }}"{% if flt.worker_id == worker_id %} selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Дата
+    <select name="days">
+      <option value="">любая</option>
+      {% for label, days in presets %}
+        <option value="{{ days }}"{% if flt.days == days %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Показать</button>
+</form>
+
+{% include "leads_table.html" %}
+{% endblock %}

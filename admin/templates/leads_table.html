@@ -1,0 +1,34 @@
+{# Отдаётся и целиком, и одна на htmx-запрос: id сохраняется при hx-swap=outerHTML #}
+<div id="leads" data-total="{{ total }}">
+  <p class="meta">
+    Всего: {{ total }}{% if rows %} · показаны {{ offset + 1 }}–{{ offset + rows|length }}{% endif %}
+  </p>
+  <table class="grid">
+    <thead><tr><th>#</th><th>Компания</th><th>Город</th><th>Ниша</th><th>Статус</th><th>Работник</th><th>Добавлено</th></tr></thead>
+    <tbody>
+    {% for lead, worker_name in rows %}
+      <tr data-lead="{{ lead.id }}">
+        <td class="num"><a href="/leads/{{ lead.id }}">{{ lead.id }}</a></td>
+        <td>{{ lead.name }}</td>
+        <td>{{ lead.country }}, {{ lead.city }}</td>
+        <td>{{ lead.niche }}</td>
+        <td>{{ labels.get(lead.status, lead.status) }}</td>
+        <td>{{ worker_name }}</td>
+        <td class="nowrap">{{ lead.created_at|local }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7">Пока пусто.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <nav class="pager">
+    {% if prev_url %}
+      <a href="{{ prev_url }}" hx-get="{{ prev_url }}" hx-target="#leads"
+         hx-swap="outerHTML" hx-push-url="true">← назад</a>
+    {% endif %}
+    {% if next_url %}
+      <a href="{{ next_url }}" hx-get="{{ next_url }}" hx-target="#leads"
+         hx-swap="outerHTML" hx-push-url="true">вперёд →</a>
+    {% endif %}
+  </nav>
+</div>

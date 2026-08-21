@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Расходы{% endblock %}
+{% block body %}
+<h1>Расходы {{ window_label }}</h1>
+<p class="meta">
+  с {{ since|local }} ·
+  {% for key, value in windows.items() %}
+    {% if key == window %}<b>{{ value[0] }}</b>{% else %}<a href="/costs?window={{ key }}">{{ value[0] }}</a>{% endif %}
+    {%- if not loop.last %} · {% endif %}
+  {% endfor %}
+</p>
+
+<section class="cards">
+  <div class="card">
+    <h2>Всего {{ window_label }}</h2>
+    <p class="big" data-total="{{ total|usd4 }}">${{ total|usd4 }}</p>
+  </div>
+  <div class="card">
+    <h2>Месячный кэп</h2>
+    <p class="big" data-spent="{{ spent|usd2 }}">${{ spent|usd2 }}</p>
+    <p class="sub">
+      {% if cap %}из ${{ cap|usd2 }} — {{ pct|round|int }}%{% else %}выключен (AI_MONTHLY_CAP_USD=0){% endif %}
+    </p>
+  </div>
+</section>
+
+<h2>По операциям</h2>
+<table class="grid">
+  <thead><tr><th>Операция</th><th>Модель</th><th>Вызовы</th><th>$</th><th>in</th><th>out</th><th>кэш</th></tr></thead>
+  <tbody>
+  {% for op, model, calls, usd, t_in, t_out, t_cache in rows %}
+    <tr data-op="{{ op }}" data-model="{{ model or '' }}" data-cost="{{ usd|usd4 }}">
+      <td>{{ op }}</td>
+      <td>{{ model or "—" }}</td>
+      <td class="num">{{ calls|thousands }}</td>
+      <td class="num">${{ usd|usd4 }}</td>
+      <td class="num">{{ t_in|thousands }}</td>
+      <td class="num">{{ t_out|thousands }}</td>
+      <td class="num">{{ t_cache|thousands }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7">Записей нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Последние записи</h2>
+<table class="grid">
+  <thead><tr><th>Когда</th><th>Операция</th><th>Модель</th><th>$</th><th>Лид</th><th>Заметка</th></tr></thead>
+  <tbody>
+  {% for row in recent %}
+    <tr data-cost-id="{{ row.id }}">
+      <td class="nowrap">{{ row.created_at|local }}</td>
+      <td>{{ row.op }}</td>
+      <td>{{ row.model or "—" }}</td>
+      <td class="num">${{ row.cost_usd|usd4 }}</td>
+      <td class="num">{% if row.lead_id %}<a href="/leads/{{ row.lead_id }}">#{{ row.lead_id }}</a>{% else %}—{% endif %}</td>
+      <td>{{ row.note or row.batch_id or "—" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">Записей нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

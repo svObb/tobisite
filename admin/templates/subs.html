@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Подписки{% endblock %}
+{% block body %}
+<h1>Подписки на доп-услуги</h1>
+
+<section class="cards">
+  <div class="card">
+    <h2>MRR доп-услуг</h2>
+    <p class="big" data-subs-mrr="{{ mrr|usd2 }}">${{ mrr|usd2 }}</p>
+    <p class="sub">{{ rows|length }} активных</p>
+  </div>
+</section>
+
+<h2>Активные</h2>
+<table class="grid">
+  <thead><tr><th>#</th><th>Клиент</th><th>Услуга</th><th>$/мес</th><th>С</th><th>Заметка</th></tr></thead>
+  <tbody>
+  {% for sub, lead_name in rows %}
+    <tr data-sub="{{ sub.id }}">
+      <td class="num">{{ sub.id }}</td>
+      <td><a href="/leads/{{ sub.lead_id }}">#{{ sub.lead_id }} {{ lead_name }}</a></td>
+      <td>{{ sub.service_id }}</td>
+      <td class="num">${{ sub.price_usd|usd2 }}</td>
+      <td class="nowrap">{{ sub.started_at|local }}</td>
+      <td>{{ sub.note or "—" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">Активных подписок нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Отменённые</h2>
+<table class="grid">
+  <thead><tr><th>#</th><th>Клиент</th><th>Услуга</th><th>$/мес</th><th>Отменена</th></tr></thead>
+  <tbody>
+  {% for sub, lead_name in canceled %}
+    <tr data-sub="{{ sub.id }}">
+      <td class="num">{{ sub.id }}</td>
+      <td><a href="/leads/{{ sub.lead_id }}">#{{ sub.lead_id }} {{ lead_name }}</a></td>
+      <td>{{ sub.service_id }}</td>
+      <td class="num">${{ sub.price_usd|usd2 }}</td>
+      <td class="nowrap">{% if sub.canceled_at %}{{ sub.canceled_at|local }}{% else %}—{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">Отменённых нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

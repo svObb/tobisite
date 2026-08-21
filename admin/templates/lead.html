@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}#{{ lead.id }} {{ lead.name }}{% endblock %}
+{% block body %}
+<h1 data-lead="{{ lead.id }}">#{{ lead.id }} {{ lead.name }}</h1>
+<p class="meta">
+  <a href="/leads">← к списку</a>
+  {% if lead.cancelled_at %} · <b>отменён {{ lead.cancelled_at|local }}</b>{% endif %}
+</p>
+
+<table class="grid fields">
+  <tbody>
+    <tr><th>Статус</th><td data-status="{{ lead.status }}">{{ labels.get(lead.status, lead.status) }}</td></tr>
+    <tr><th>Сайт</th><td>{% if lead.website_url %}{{ lead.website_url }}{% else %}нет{% endif %}</td></tr>
+    <tr><th>Источник</th><td>{{ lead.source_url }}</td></tr>
+    <tr><th>Страна, город</th><td>{{ lead.country }}, {{ lead.city }}</td></tr>
+    <tr><th>Язык</th><td>{{ lead.language }}</td></tr>
+    <tr><th>Ниша</th><td>{{ lead.niche }}</td></tr>
+    <tr><th>Рейтинг</th><td>{{ lead.google_rating or "—" }}</td></tr>
+    <tr><th>Где нашли</th><td>{{ lead.found_via }}</td></tr>
+    <tr><th>Заметка</th><td>{{ lead.note or "—" }}</td></tr>
+    <tr><th>Заметка админа</th><td>{{ lead.admin_note or "—" }}</td></tr>
+    <tr><th>Черновик</th><td>{{ lead.draft_url or "—" }}</td></tr>
+    <tr><th>Работник</th><td>{% if author %}{{ author.name }} (tg {{ author.tg_id }}){% else %}—{% endif %}</td></tr>
+    <tr><th>Добавлено</th><td>{{ lead.created_at|local }}</td></tr>
+    <tr><th>Метки</th><td>
+      {% if lead.possible_duplicate %}возможный дубликат{% endif %}
+      {% if lead.has_ads %}{% if lead.possible_duplicate %} · {% endif %}платит за рекламу{% endif %}
+      {% if not lead.possible_duplicate and not lead.has_ads %}—{% endif %}
+    </td></tr>
+  </tbody>
+</table>
+
+<h2>Контакты</h2>
+<table class="grid">
+  <tbody>
+  {% for contact in contacts %}
+    <tr><th>{% if contact.ctype == "other" and contact.ctype_other %}{{ contact.ctype_other }}{% else %}{{ contact_labels.get(contact.ctype, contact.ctype) }}{% endif %}</th>
+        <td data-contact="{{ contact.id }}">{{ contact.value }}</td></tr>
+  {% else %}
+    <tr><td>Контактов нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if subs %}
+<h2>Подписки</h2>
+<table class="grid">
+  <thead><tr><th>#</th><th>Услуга</th><th>Статус</th><th>$/мес</th><th>С</th></tr></thead>
+  <tbody>
+  {% for sub in subs %}
+    <tr data-sub="{{ sub.id }}">
+      <td class="num">{{ sub.id }}</td>
+      <td>{{ sub.service_id }}</td>
+      <td>{{ sub.status }}</td>
+      <td class="num">${{ sub.price_usd|usd2 }}</td>
+      <td class="nowrap">{{ sub.started_at|local }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>История</h2>
+<table class="grid">
+  <thead><tr><th>Когда</th><th>Событие</th><th>Изменение</th><th>Кто</th></tr></thead>
+  <tbody>
+  {% for event in events %}
+    <tr>
+      <td class="nowrap">{{ event.created_at|local }}</td>
+      <td>{{ event.event }}{% if event.field %} ({{ event.field }}){% endif %}</td>
+      <td>{% if event.old_value or event.new_value %}{{ event.old_value or "—" }} → {{ event.new_value or "—" }}{% endif %}</td>
+      <td class="num">tg {{ event.actor_tg_id }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">Изменений не было.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
