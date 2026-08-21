@@ -1,0 +1,49 @@
+/* Единственный CSS-вход site_factory. Собирается один раз в build/bundle.css
+   и обслуживает все превью сразу: пресеты различаются только инлайн-переменными
+   на <html> (см. base/layout.html.j2), поэтому бандл не зависит от лида.
+
+   Сборка: python tools/fetch_fonts.py && python tools/build_css.py */
+
+@import "tailwindcss";
+
+/* @font-face самохостных WOFF2. Файл генерит tools/fetch_fonts.py; ссылок
+   на fonts.googleapis.com в выдаче нет ни одной (§4, GDPR). */
+@import "../build/fonts/fonts.css";
+
+/* Tailwind не видит Jinja-шаблоны сам — перечисляем их явно. */
+@source "../base/**/*.j2";
+@source "../sections/**/*.j2";
+
+@theme {
+  /* Переменные без префикса --color-* приходят инлайном с <html>. */
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-on: var(--accent-on);
+
+  /* Производные тона: единственное место, где они считаются. */
+  --color-surface: color-mix(in oklab, var(--ink) 5%, var(--paper));
+  --color-line: color-mix(in oklab, var(--ink) 14%, var(--paper));
+  --color-muted: color-mix(in oklab, var(--ink) 72%, var(--paper));
+
+  --font-title: var(--display-font);
+  --font-body: var(--body-font);
+
+  --radius-preset: var(--radius);
+  --radius-preset-lg: calc(var(--radius) * 2.5);
+
+  --spacing-section: var(--section-py);
+  --spacing-flow: var(--flow);
+}
+
+@layer base {
+  body {
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent-ink);
+    outline-offset: 2px;
+  }
+}

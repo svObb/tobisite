@@ -1,0 +1,135 @@
+# Рецепт: ниша вне покрытия, трек rich (photo_count >= 3).
+# Тексты нейтральные: ниша известна движку словом, но в слоты она не попадает —
+# черновик описывает страницу, а не бизнес, о котором мы ничего не знаем.
+# Правила файла — см. комментарий в lawyer_rich.yaml.
+
+id: generic_rich
+version: 1
+niche: generic
+track: rich
+schema_type: LocalBusiness
+
+min_sections: 4
+roles_order: [hero, services, proof, cta, footer]
+optional_roles: [proof]
+role_substitutes:
+  services: [proof]
+
+downgrade_ladder:
+  hero: [hero_photo_left, hero_split_map, hero_type_only]
+  services: [svc_cards_3, svc_list_icons]
+  proof: [proof_stats_bar]
+  cta: [cta_form_short]
+  footer: [footer_nap]
+
+niche_affinity:
+  hero_photo_left: 0.8
+  hero_split_map: 0.6
+  hero_type_only: 0.4
+  svc_cards_3: 0.8
+  svc_list_icons: 0.6
+  proof_stats_bar: 0.6
+  cta_form_short: 1.0
+  footer_nap: 1.0
+
+enrichment_hints:
+  name: "Нужно название компании ровно так, как оно в карточке."
+  phone: "Нужен телефон — без него не собрать ни первый экран, ни форму заявки."
+  address: "Нужен адрес: улица, дом, город — он идёт в футер и в карточку."
+  services: "Нужен перечень услуг: минимум 2 позиции словами клиента."
+  hours: "Нужны часы работы — строкой, как их указывает клиент."
+  photo_count: "Нужно минимум 3 фото (интерьер, команда, работа) или ссылка на альбом."
+  images: "Нужно минимум 3 фото (интерьер, команда, работа) или ссылка на альбом."
+  proof_stats: "Нужны рейтинг и число отзывов из Google Maps."
+  lang: "Нужен язык лида — на нём собирается весь текст черновика."
+  _fallback: "Данных для черновика не хватает: пройдите карточку лида ещё раз."
+
+free_defaults:
+  uk:
+    _page:
+      skip_to_content: "Перейти до вмісту"
+      description: "Послуги, контакти та форма звернення в одному місці."
+    _common:
+      eyebrow: "Послуги"
+      headline: "Послуги, контакти та звернення в одному місці"
+      lede: "Тут зібрані напрями роботи, контакти та форма — напишіть або зателефонуйте."
+      call_label: "Зателефонувати"
+      reassurance: "Відповідаємо в робочі години"
+      portrait_alt: "Фотографія з профілю компанії"
+      map_alt: "Карта з розташуванням компанії"
+      address_label: "Адреса"
+      hours_label: "Години"
+      secondary_label: "Залишити звернення"
+      name_label: "Імʼя"
+      phone_label: "Телефон"
+      message_label: "Коротко про завдання"
+      submit_label: "Надіслати"
+      honeypot_label: "Не заповнюйте це поле"
+      privacy_note: "Контакти з форми використовуємо лише для відповіді на звернення."
+      contacts_title: "Контакти"
+      hours_title: "Години роботи"
+      legal_line: "Чернетка сайту, підготовлена для ознайомлення."
+      service_blurb:
+        - "Розповімо, що входить у послугу та скільки це займає."
+        - "Обсяг робіт і вартість узгоджуємо заздалегідь."
+        - "Тримаємо звʼязок на кожному етапі."
+        - "Працюємо за домовленим графіком."
+        - "Відповідаємо на запитання до початку робіт."
+        - "Пишіть або телефонуйте — підкажемо, з чого почати."
+    svc_cards_3:
+      section_title: "Наші послуги"
+    svc_list_icons:
+      section_title: "Наші послуги"
+    proof_stats_bar:
+      section_title: "Показники профілю"
+      stat_label:
+        rating: "Оцінка в Google"
+        reviews: "Відгуків у Google"
+      source_note: "Дані з профілю Google Business."
+    cta_form_short:
+      section_title: "Залишити звернення"
+      lede: "Напишіть кілька слів про завдання — звʼяжемося у відповідь."
+  en:
+    _page:
+      skip_to_content: "Skip to content"
+      description: "Services, contacts and an enquiry form in one place."
+    _common:
+      eyebrow: "Services"
+      headline: "Services, contacts and enquiries in one place"
+      lede: "Here are the services, the contact details and a form — write or call."
+      call_label: "Call us"
+      reassurance: "We reply during working hours"
+      portrait_alt: "Photo from the company profile"
+      map_alt: "Map showing the company location"
+      address_label: "Address"
+      hours_label: "Hours"
+      secondary_label: "Send an enquiry"
+      name_label: "Name"
+      phone_label: "Phone"
+      message_label: "Briefly about the task"
+      submit_label: "Send"
+      honeypot_label: "Leave this field empty"
+      privacy_note: "We use the details from this form only to reply to your enquiry."
+      contacts_title: "Contacts"
+      hours_title: "Working hours"
+      legal_line: "A draft site prepared for review."
+      service_blurb:
+        - "We explain what the service covers and how long it takes."
+        - "Scope and price are agreed in advance."
+        - "We keep in touch at every stage."
+        - "We work to the schedule we agree on."
+        - "We answer questions before the work starts."
+        - "Write or call — we will suggest where to start."
+    svc_cards_3:
+      section_title: "What we do"
+    svc_list_icons:
+      section_title: "What we do"
+    proof_stats_bar:
+      section_title: "Google profile"
+      stat_label:
+        rating: "Google rating"
+        reviews: "Google reviews"
+      source_note: "Figures from the Google Business profile."
+    cta_form_short:
+      section_title: "Send an enquiry"
+      lede: "Write a few lines about the task — we will get back to you."

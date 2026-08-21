@@ -1,0 +1,118 @@
+# Токен-пресеты site_factory (13-шаблоны-сайтов.md §2, этап-5 подэтап 5.1).
+#
+# Источник — архетипы дизайн-библиотеки tobisite-launch/design-library/archetypes/:
+# paper/ink/accent, шрифтовая пара, radius_px и density скопированы оттуда
+# побайтово. Всё остальное в этом файле — контракт рендера, архетипы его не знают.
+#
+# ПОРЯДОК СПИСКА presets — ЧАСТЬ КОНТРАКТА. Движок выбирает пресет как
+# hash(domain_norm) % len(presets) (§3 шаг 5), поэтому переставлять и удалять
+# пресеты нельзя: тот же лид получит другой дизайн посреди переписки.
+# Новые пресеты — только в конец списка.
+#
+# Контракт цвета (его проверяет engine/checks/a11y.py):
+#   paper       — фон страницы
+#   ink         — основной текст по paper
+#   accent      — ТОЛЬКО декор: плашки, линейки, маркеры. Текста не несёт никогда.
+#   accent_ink  — тот же тон, доведённый до контраста >= 4.5:1 по paper.
+#                 Несёт текст: ссылки, надзаголовки, заливка кнопок.
+#   accent_on   — текст поверх заливки accent_ink, контраст >= 4.5:1.
+# Там, где акцент архетипа сам проходит AA, accent_ink равен accent.
+# Производные тона (surface, line, muted) считает css/source.css через
+# color-mix — отдельными полями не хранятся, чтобы не расходились.
+#
+# Шрифты: семейства резолвятся по реестру fonts ниже. gwfh_id — идентификатор
+# в API google-webfonts-helper, по нему tools/fetch_fonts.py качает WOFF2-сабсеты
+# latin + latin-ext + cyrillic. fonts.googleapis.com в HTML запрещён (§4, GDPR).
+
+version: 1
+
+subsets: [latin, latin-ext, cyrillic]
+weights: [400, 700]
+
+fonts:
+  Inter:
+    gwfh_id: inter
+    stack: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Source Serif 4:
+    gwfh_id: source-serif-4
+    stack: "'Source Serif 4', Georgia, 'Times New Roman', serif"
+  Playfair Display:
+    gwfh_id: playfair-display
+    stack: "'Playfair Display', Georgia, 'Times New Roman', serif"
+
+# density архетипа → вертикальный ритм. Значения в clamp(), поэтому мобильный
+# отступ берётся сам и отдельного брейкпоинта не требует.
+density_scale:
+  airy:
+    section_py: "clamp(3.5rem, 9vw, 6rem)"
+    flow: "clamp(1.5rem, 4vw, 2.5rem)"
+    measure: "62ch"
+  regular:
+    section_py: "clamp(2.75rem, 7vw, 4.5rem)"
+    flow: "clamp(1.25rem, 3vw, 2rem)"
+    measure: "68ch"
+
+presets:
+  - id: corporate-trust
+    archetype: arch-04
+    mood: dual-theme
+    palette:
+      paper: "#f7f7f5"
+      ink: "#24282e"
+      accent: "#35506f"
+      accent_ink: "#35506f"
+      accent_on: "#ffffff"
+    type:
+      display: Source Serif 4
+      body: Inter
+      scheme: serif-display-sans-body
+    radius_px: 4
+    density: regular
+
+  - id: editorial-warm
+    archetype: arch-01
+    mood: light
+    palette:
+      paper: "#f5f1ed"
+      ink: "#1f1c17"
+      accent: "#b5653c"
+      accent_ink: "#9c4f2c"
+      accent_on: "#ffffff"
+    type:
+      display: Source Serif 4
+      body: Inter
+      scheme: serif-display-sans-body
+    radius_px: 6
+    density: airy
+
+  - id: clinical-light
+    archetype: arch-03
+    mood: light
+    palette:
+      paper: "#ffffff"
+      ink: "#182830"
+      accent: "#2e9bb0"
+      accent_ink: "#1f7d90"
+      accent_on: "#ffffff"
+    type:
+      display: Inter
+      body: Inter
+      scheme: sans-grotesk-only
+    radius_px: 10
+    density: regular
+
+  - id: deep-premium
+    archetype: arch-02
+    mood: dark
+    palette:
+      paper: "#141414"
+      ink: "#f0e9df"
+      accent: "#c9a26b"
+      accent_ink: "#c9a26b"
+      accent_on: "#141414"
+    type:
+      display: Playfair Display
+      body: Inter
+      scheme: serif-display-sans-body
+    radius_px: 2
+    density: airy

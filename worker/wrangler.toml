@@ -1,0 +1,40 @@
+name = "tobisite-preview"
+main = "src/index.ts"
+compatibility_date = "2026-08-21"
+
+# Один воркер на все превью. DNS зоны: одна proxied wildcard-запись `*`.
+routes = [
+  { pattern = "*.tobisitepreview.com/*", zone_name = "tobisitepreview.com" }
+]
+
+# Черновики: объект <slug>/index.html и файлы рядом с ним (tools/publish_r2.py)
+[[r2_buckets]]
+binding = "PREVIEWS"
+bucket_name = "tobisite-previews"
+
+# Общие на все превью bundle.css и fonts/ — они одни и те же, в R2 их дублировать
+# незачем. run_worker_first обязателен: без него статика уходила бы клиенту мимо
+# воркера, то есть без X-Robots-Tag и CSP.
+# Папка должна существовать на момент деплоя (собирается на этапе 5.1,
+# tools/build_css.py); иначе wrangler deploy откажется собирать проект.
+[assets]
+directory = "../site_factory/build"
+binding = "ASSETS"
+run_worker_first = true
+
+# События вовлечённости из POST /api/hit. Если на аккаунте нет Analytics Engine —
+# закомментируйте блок: биндинга просто не будет, /api/hit тихо ответит 204.
+[[analytics_engine_datasets]]
+binding = "HITS"
+dataset = "tobisite_hits"
+
+[vars]
+# Значений здесь нет намеренно: и токен бота, и id чата задаются
+# через `wrangler secret put` (см. README). Если завести тут переменную с тем
+# же именем, деплой перекроет ею уже положенный секрет.
+# TG_BOT_TOKEN     — wrangler secret put TG_BOT_TOKEN
+# TG_ADMIN_CHAT_ID — wrangler secret put TG_ADMIN_CHAT_ID
+
+# Логи console.error (недоставленная заявка видна в дашборде)
+[observability]
+enabled = true

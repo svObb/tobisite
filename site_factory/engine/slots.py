@@ -1,0 +1,332 @@
+"""Слоты: контракт между секцией и данными. Модель никогда не видит HTML (§2).
+
+Контракт варианта секции — YAML рядом с .j2. Правила, которые держит этот
+модуль:
+
+* type: fact — только из белого списка профиля (карточка лида, Google Maps,
+  старый сайт). type: free — пишет модель; в MVP это плейсхолдеры из рецепта.
+* Движок обязан положить в контекст ВСЕ объявленные слоты. Неизвестный слот
+  с optional: true кладётся как None — шаблон проверяет его через if. Слот без
+  optional отсутствовать не может: под StrictUndefined это ошибка сборки.
+* repeat-слоты с общим ключом group приходят одним списком: пара
+  {name: service_name, group: services} + {name: service_blurb, group: services}
+  превращается в s.services = [{name, blurb}, ...]. Имя ключа в элементе — имя
+  слота без singular-приставки группы (services -> service_).
+* max_chars — ограничение для генератора слотов, не для вёрстки. Молча резать
+  текст нельзя: если заготовка или факт не влезли, вариант выбывает по гейту
+  с причиной too_long, и роль берёт следующую ступень лестницы.
+
+Белый список фактов — таблица FACT_SOURCES ниже, и только она. Слот type: fact,
+которого в таблице нет, — ошибка контракта, а не повод что-нибудь придумать.
+
+source: composer — единственное исключение: значение знает не профиль, а
+compose.py (якорь соседней секции). Такие слоты заполняет apply_composer после
+того, как состав страницы окончателен.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from .gates import FACT_MISSING, NO_DEFAULT, TOO_FEW, TOO_LONG, Reason
+from .profile import Profile
+
+COMMON = "_common"        # заготовки, общие для всех вариантов рецепта
+PAGE = "_page"            # заготовки уровня страницы: title/description/ui
+RESERVED = (COMMON, PAGE)
+
+_MISSING = object()
+
+
+@dataclass(frozen=True)
+class Filled:
+    slots: dict
+    images: dict
+    reasons: tuple[Reason, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.reasons
+
+
+def build(contract: dict, profile: Profile, recipe: dict) -> Filled:
+    """Собрать JSON слотов варианта. Пустой Filled.reasons — вариант годен."""
+    if not profile.lang.known or not profile.lang.value:
+        return Filled({}, {}, (Reason("lang", FACT_MISSING,
+                                      "язык лида неизвестен"),))
+    lang = str(profile.lang.value)
+    if not (recipe.get("free_defaults") or {}).get(lang):
+        return Filled({}, {}, (Reason("lang", NO_DEFAULT,
+                                      f"в рецепте нет заготовок для языка {lang!r}"),))
+
+    slots: dict[str, Any] = {}
+    reasons: list[Reason] = []
+    groups: dict[str, list[dict]] = {}
+
+    for spec in contract.get("slots") or []:
+        group = spec.get("group")
+        if group:
+            groups.setdefault(group, []).append(spec)
+            continue
+        value, trouble = _scalar(spec, contract, profile, recipe, lang)
+        slots[spec["name"]] = value
+        reasons.extend(trouble)
+
+    for group, specs in groups.items():
+        items, trouble = _group(group, specs, contract, profile, recipe, lang)
+        slots[group] = items
+        reasons.extend(trouble)
+
+    return Filled(slots, _images(contract, profile), tuple(reasons))
+
+
+def apply_composer(section: dict, values: dict) -> None:
+    """Заполнить composer-слоты, когда состав страницы уже окончателен."""
+    for spec in section["contract"].get("slots") or []:
+        if spec.get("source") != "composer":
+            continue
+        value = values.get(spec["name"])
+        if value is None and not spec.get("optional"):
+            raise ValueError(f"{section['id']}: composer не дал слот {spec['name']!r}")
+        max_chars = spec.get("max_chars")
+        if value is not None and max_chars and len(value) > max_chars:
+            raise ValueError(f"{section['id']}: слот {spec['name']!r} длиннее "
+                             f"{max_chars} символов")
+        section["slots"][spec["name"]] = value
+
+
+def page_defaults(recipe: dict, lang: str) -> dict:
+    return ((recipe.get("free_defaults") or {}).get(lang) or {}).get(PAGE) or {}
+
+
+def tel_href(phone: str) -> str:
+    """tel: из телефона профиля — только плюс и цифры, ничего не выдумывая."""
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    plus = "+" if str(phone).lstrip().startswith("+") else ""
+    return f"tel:{plus}{digits}"
+
+
+# --- факты -----------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FactSource:
+    """field — какое поле профиля дозаполнить, если факта нет."""
+
+    field: str
+    build: Callable[[Profile, str], Any]
+
+
+def _phone_href(profile: Profile, lang: str):
+    return tel_href(profile.phone.value) if profile.phone.known else None
+
+
+def _plain(name: str):
+    def read(profile: Profile, lang: str):
+        feature = getattr(profile, name)
+        return feature.value if feature.known else None
+    return read
+
+
+def _services(profile: Profile, lang: str):
+    if not profile.services.known:
+        return None
+    return [{"key": str(i), "value": str(v)}
+            for i, v in enumerate(profile.services.value or [])]
+
+
+def _hours_rows(profile: Profile, lang: str):
+    if not profile.hours.known:
+        return None
+    return [{"key": str(i), "value": str(v)}
+            for i, v in enumerate(profile.hours.value or [])]
+
+
+def _hours_line(profile: Profile, lang: str):
+    rows = _hours_rows(profile, lang)
+    return " · ".join(item["value"] for item in rows) if rows else None
+
+
+def _stats(profile: Profile, lang: str):
+    stats = profile.proof_stats()
+    if not stats:
+        return None
+    return [{"key": s["key"], "value": _stat_text(s, lang)} for s in stats]
+
+
+def _stat_text(stat: dict, lang: str) -> str:
+    if stat["key"] == "rating":
+        text = f"{float(stat['value']):.1f}"
+        return text if lang == "en" else text.replace(".", ",")
+    return str(int(stat["value"]))
+
+
+FACT_SOURCES: dict[str, FactSource] = {
+    "business_name": FactSource("name", _plain("name")),
+    "phone": FactSource("phone", _plain("phone")),
+    "phone_href": FactSource("phone", _phone_href),
+    "email": FactSource("email", _plain("email")),
+    "address": FactSource("address", _plain("address")),
+    "service_name": FactSource("services", _services),
+    "stat_value": FactSource("proof_stats", _stats),
+}
+
+# Слоты, которые в одном контракте повторяются, а в другом идут строкой.
+FACT_SOURCES_REPEAT: dict[str, FactSource] = {
+    "hours": FactSource("hours", _hours_rows),
+}
+FACT_SOURCES_SCALAR: dict[str, FactSource] = {
+    "hours": FactSource("hours", _hours_line),
+}
+
+
+def _source(spec: dict) -> FactSource:
+    name = spec["name"]
+    table = FACT_SOURCES_REPEAT if spec.get("repeat") else FACT_SOURCES_SCALAR
+    source = table.get(name) or FACT_SOURCES.get(name)
+    if source is None:
+        raise ValueError(f"слот {name!r} объявлен фактом, но его нет в белом списке")
+    return source
+
+
+# --- сборка ----------------------------------------------------------------
+
+def _scalar(spec, contract, profile, recipe, lang):
+    name = spec["name"]
+    if spec.get("source") == "composer":
+        return None, ()          # заполнит apply_composer
+    if spec.get("repeat"):
+        return _repeat_plain(spec, profile, lang)
+
+    if spec["type"] == "fact":
+        source = _source(spec)
+        value = source.build(profile, lang)
+        if value is None:
+            return _absent(spec, Reason(source.field, FACT_MISSING,
+                                        f"нет данных для слота {name!r}"))
+    else:
+        value = _default(recipe, lang, contract["id"], name)
+        if value is _MISSING:
+            return _absent(spec, Reason(f"free:{name}", NO_DEFAULT,
+                                        f"в рецепте нет заготовки для слота {name!r}"))
+    return _measure(spec, value)
+
+
+def _absent(spec, reason: Reason):
+    """Слот нечем заполнить: optional уходит в None, обязательный валит вариант."""
+    return (None, ()) if spec.get("optional") else (None, (reason,))
+
+
+def _repeat_plain(spec, profile: Profile, lang: str):
+    """Повтор без группы: footer_nap.hours — просто список строк."""
+    name = spec["name"]
+    source = _source(spec)
+    items = source.build(profile, lang)
+    if not items:
+        return _absent(spec, Reason(source.field, FACT_MISSING,
+                                    f"нет данных для слота {name!r}"))
+    low, high = _repeat_range(spec["repeat"])
+    items = items[:high]
+    if len(items) < low:
+        return None, (Reason(source.field, TOO_FEW,
+                             f"{name}: {len(items)} значений, нужно от {low}"),)
+    values, reasons = [], []
+    for item in items:
+        value, trouble = _measure(spec, item["value"])
+        values.append(value)
+        reasons.extend(trouble)
+    return values, tuple(reasons)
+
+
+def _group(group, specs, contract, profile, recipe, lang):
+    fact_specs = [s for s in specs if s["type"] == "fact"]
+    if len(fact_specs) != 1:
+        raise ValueError(f"{contract['id']}: группа {group!r} обязана иметь "
+                         f"ровно один fact-слот")
+    driver = fact_specs[0]
+    source = _source(driver)
+    items = source.build(profile, lang)
+    if not items:
+        return None, (Reason(source.field, FACT_MISSING,
+                             f"нет данных для группы {group!r}"),)
+
+    low, high = _repeat_range(driver["repeat"])
+    items = items[:high]
+    if len(items) < low:
+        return None, (Reason(source.field, TOO_FEW,
+                             f"{group}: {len(items)} значений, нужно от {low}"),)
+
+    reasons: list[Reason] = []
+    rows = []
+    for index, item in enumerate(items):
+        row = {}
+        for spec in specs:
+            key = _item_key(group, spec["name"])
+            if spec is driver:
+                value, trouble = _measure(spec, item["value"])
+            else:
+                value, trouble = _free_item(spec, contract, recipe, lang,
+                                            item["key"], index)
+            row[key] = value
+            reasons.extend(trouble)
+        rows.append(row)
+    return rows, tuple(reasons)
+
+
+def _free_item(spec, contract, recipe, lang, item_key, index):
+    """Заготовка для повторяющегося free-слота.
+
+    Словарь — берётся по ключу элемента (показатели: rating/reviews), список —
+    крутится по кругу (услуги: у каждой своя строка), строка — одна на всех.
+    """
+    default = _default(recipe, lang, contract["id"], spec["name"])
+    if default is _MISSING:
+        return None, (Reason(f"free:{spec['name']}", NO_DEFAULT,
+                             f"в рецепте нет заготовки для слота {spec['name']!r}"),)
+    if isinstance(default, dict):
+        value = default.get(item_key, _MISSING)
+        if value is _MISSING:
+            return None, (Reason(f"free:{spec['name']}", NO_DEFAULT,
+                                 f"нет заготовки {spec['name']}[{item_key!r}]"),)
+    elif isinstance(default, list):
+        value = default[index % len(default)] if default else _MISSING
+        if value is _MISSING:
+            return None, (Reason(f"free:{spec['name']}", NO_DEFAULT,
+                                 f"пустой список заготовок {spec['name']!r}"),)
+    else:
+        value = default
+    return _measure(spec, value)
+
+
+def _measure(spec, value):
+    max_chars = spec.get("max_chars")
+    if value is not None and max_chars and len(str(value)) > max_chars:
+        return value, (Reason(f"slot:{spec['name']}", TOO_LONG,
+                              f"{spec['name']}: {len(str(value))} символов при "
+                              f"лимите {max_chars}"),)
+    return value, ()
+
+
+def _default(recipe, lang, variant, slot):
+    table = (recipe.get("free_defaults") or {}).get(lang) or {}
+    per_variant = table.get(variant) or {}
+    if slot in per_variant:
+        return per_variant[slot]
+    return (table.get(COMMON) or {}).get(slot, _MISSING)
+
+
+def _item_key(group: str, slot_name: str) -> str:
+    singular = group[:-1] if group.endswith("s") else group
+    prefix = f"{singular}_"
+    return slot_name[len(prefix):] if slot_name.startswith(prefix) else slot_name
+
+
+def _repeat_range(spec) -> tuple[int, int]:
+    text = str(spec)
+    low, _, high = text.partition("..")
+    return int(low or 1), int(high or 99)
+
+
+def _images(contract: dict, profile: Profile) -> dict:
+    names = contract.get("image_names") or []
+    available = (profile.images.value if profile.images.known else {}) or {}
+    return {name: available[name] for name in names if name in available}

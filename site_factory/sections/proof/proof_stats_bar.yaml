@@ -1,0 +1,16 @@
+# Значения stat_value приходят только из Google Maps через белый список профиля
+# (§3 ступень 2). Ни одна цифра здесь не может быть написана моделью — если
+# показателя нет в профиле, вариант отсеивается гейтом, а не заполняется.
+id: proof_stats_bar
+role: proof
+requires: {proof_stats_count: ">=2"}
+prefers: {review_count: ">=10", google_rating: ">=4.0"}
+image_slots: 0
+slots:
+  - {name: section_title, type: free, max_chars: 32, lang: from_lead}
+  # repeat-слоты с общим group движок кладёт одним списком: s.stats[].value / .label
+  - {name: stat_value, type: fact, source: whitelist, group: stats, repeat: 2..4, max_chars: 12}
+  - {name: stat_label, type: free, group: stats, repeat: same_as_group, max_chars: 28, lang: from_lead}
+  - {name: source_note, type: free, max_chars: 64, lang: from_lead}
+perf: {est_dom_nodes: 26, images: 0}
+a11y: {heading_level: 2}

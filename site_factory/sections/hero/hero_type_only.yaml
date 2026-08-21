@@ -1,0 +1,15 @@
+id: hero_type_only
+role: hero
+requires: {}
+prefers: {photo_count: "0..0", text_volume: ">=medium"}
+image_slots: 0
+slots:
+  - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}
+  - {name: headline, type: free, max_chars: 64, lang: from_lead}
+  - {name: lede, type: free, max_chars: 180, lang: from_lead}
+  - {name: call_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: secondary_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: secondary_target, type: fact, source: composer, max_chars: 32}
+perf: {est_dom_nodes: 12, images: 0}
+a11y: {heading_level: 1}

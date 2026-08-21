@@ -1,0 +1,27 @@
+{#-
+  Шапка документа. Правила §4:
+    - meta robots noindex дублирует X-Robots-Tag, который ставит Worker;
+    - шрифты только самохостные: @font-face живёт в bundle.css (его собирает
+      tools/build_css.py из build/fonts/fonts.css), ссылок на fonts.googleapis.com
+      здесь нет и быть не может — Landgericht München I, 3 O 17493/20;
+    - preload только двух начертаний 400, которыми набран первый экран.
+-#}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>{{ site.title }}</title>
+{%- if site.description %}
+<meta name="description" content="{{ site.description }}">
+{%- endif %}
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ site.title }}">
+{%- if site.description %}
+<meta property="og:description" content="{{ site.description }}">
+{%- endif %}
+<meta name="theme-color" content="{{ preset.palette.paper }}">
+<link rel="preload" as="font" type="font/woff2" crossorigin href="{{ site.assets_base }}/fonts/{{ preset.fonts.body.gwfh_id }}-400.woff2">
+{%- if preset.fonts.display.gwfh_id != preset.fonts.body.gwfh_id %}
+<link rel="preload" as="font" type="font/woff2" crossorigin href="{{ site.assets_base }}/fonts/{{ preset.fonts.display.gwfh_id }}-400.woff2">
+{%- endif %}
+<link rel="stylesheet" href="{{ site.assets_base }}/bundle.css">
+{% include 'base/schema_localbusiness.j2' -%}

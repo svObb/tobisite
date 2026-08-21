@@ -1,0 +1,19 @@
+id: hero_split_map
+role: hero
+requires: {has_address: true}
+prefers: {has_hours: true, photo_count: "0..2"}
+image_slots: 1
+image_names: [map]
+slots:
+  - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}
+  - {name: headline, type: free, max_chars: 56, lang: from_lead}
+  - {name: lede, type: free, max_chars: 160, lang: from_lead}
+  - {name: address_label, type: free, max_chars: 20, lang: from_lead}
+  - {name: address, type: fact, source: whitelist, max_chars: 120}
+  - {name: hours_label, type: free, max_chars: 20, lang: from_lead, optional: true}
+  - {name: hours, type: fact, source: whitelist, max_chars: 90, optional: true}
+  - {name: call_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: map_alt, type: free, max_chars: 110, lang: from_lead}
+perf: {est_dom_nodes: 24, images: 1}
+a11y: {heading_level: 1}

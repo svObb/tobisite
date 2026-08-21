@@ -1,0 +1,134 @@
+# Рецепт: юрист, трек light (фото меньше трёх или их количество неизвестно).
+# Лестница перевёрнута относительно lawyer_rich: наверху варианты, которым
+# фото не нужны. Правила файла — см. комментарий в lawyer_rich.yaml.
+
+id: lawyer_light
+version: 1
+niche: lawyer
+track: light
+schema_type: LegalService
+
+min_sections: 4
+roles_order: [hero, services, proof, cta, footer]
+optional_roles: [proof]
+role_substitutes:
+  services: [proof]
+
+downgrade_ladder:
+  hero: [hero_split_map, hero_type_only, hero_photo_left]
+  services: [svc_list_icons, svc_cards_3]
+  proof: [proof_stats_bar]
+  cta: [cta_form_short]
+  footer: [footer_nap]
+
+niche_affinity:
+  hero_split_map: 0.9
+  hero_type_only: 0.7
+  hero_photo_left: 0.4
+  svc_list_icons: 0.9
+  svc_cards_3: 0.7
+  proof_stats_bar: 0.7
+  cta_form_short: 1.0
+  footer_nap: 1.0
+
+enrichment_hints:
+  name: "Нужно название компании ровно так, как оно в карточке."
+  phone: "Нужен телефон — без него не собрать ни первый экран, ни форму заявки."
+  address: "Нужен адрес: улица, дом, город — он идёт в футер и в карточку."
+  services: "Нужен перечень услуг: минимум 2 направления работы словами клиента."
+  hours: "Нужны часы приёма — строкой, как их указывает клиент."
+  photo_count: "Нужно минимум 3 фото (команда, офис, работа) или ссылка на альбом."
+  images: "Нужно минимум 3 фото (команда, офис, работа) или ссылка на альбом."
+  proof_stats: "Нужны рейтинг и число отзывов из Google Maps."
+  lang: "Нужен язык лида — на нём собирается весь текст черновика."
+  _fallback: "Данных для черновика не хватает: пройдите карточку лида ещё раз."
+
+free_defaults:
+  uk:
+    _page:
+      skip_to_content: "Перейти до вмісту"
+      description: "Юридичні послуги: напрями роботи, контакти та форма звернення."
+    _common:
+      eyebrow: "Юридичні послуги"
+      headline: "Юридична допомога: зателефонуйте або напишіть"
+      lede: "Коротко опишіть ситуацію — підкажемо порядок дій і що знадобиться з документів."
+      call_label: "Зателефонувати"
+      reassurance: "Відповідаємо в робочі години"
+      portrait_alt: "Фотографія з профілю компанії"
+      map_alt: "Карта з розташуванням офісу"
+      address_label: "Адреса"
+      hours_label: "Години"
+      secondary_label: "Залишити звернення"
+      name_label: "Імʼя"
+      phone_label: "Телефон"
+      message_label: "Коротко про питання"
+      submit_label: "Надіслати"
+      honeypot_label: "Не заповнюйте це поле"
+      privacy_note: "Контакти з форми використовуємо лише для відповіді на звернення."
+      contacts_title: "Контакти"
+      hours_title: "Години прийому"
+      legal_line: "Чернетка сайту, підготовлена для ознайомлення."
+      service_blurb:
+        - "Розбираємо ситуацію та пояснюємо наступні кроки."
+        - "Готуємо документи та стежимо за строками."
+        - "Супроводжуємо на кожному етапі — до результату."
+        - "Обсяг робіт і вартість узгоджуємо заздалегідь."
+        - "Пояснюємо ризики до того, як вони стануть спором."
+        - "Тримаємо звʼязок і відповідаємо в робочі години."
+    svc_cards_3:
+      section_title: "Напрями роботи"
+    svc_list_icons:
+      section_title: "Напрями роботи"
+    proof_stats_bar:
+      section_title: "Показники профілю"
+      stat_label:
+        rating: "Оцінка в Google"
+        reviews: "Відгуків у Google"
+      source_note: "Дані з профілю Google Business."
+    cta_form_short:
+      section_title: "Залишити звернення"
+      lede: "Опишіть питання — зателефонуємо або напишемо у відповідь."
+  en:
+    _page:
+      skip_to_content: "Skip to content"
+      description: "Legal services: practice areas, contacts and an enquiry form."
+    _common:
+      eyebrow: "Legal services"
+      headline: "Legal help: call or write to the office"
+      lede: "Describe the situation in a few lines — we will explain the order of steps and the papers you need."
+      call_label: "Call the office"
+      reassurance: "We reply during office hours"
+      portrait_alt: "Photo from the company profile"
+      map_alt: "Map showing the office location"
+      address_label: "Address"
+      hours_label: "Hours"
+      secondary_label: "Send an enquiry"
+      name_label: "Name"
+      phone_label: "Phone"
+      message_label: "Briefly about the matter"
+      submit_label: "Send"
+      honeypot_label: "Leave this field empty"
+      privacy_note: "We use the details from this form only to reply to your enquiry."
+      contacts_title: "Contacts"
+      hours_title: "Office hours"
+      legal_line: "A draft site prepared for review."
+      service_blurb:
+        - "We look at the situation and explain the next steps."
+        - "We prepare the documents and keep track of deadlines."
+        - "We stay with the matter at every stage."
+        - "Scope and fees are agreed in advance."
+        - "We flag risks before they turn into a dispute."
+        - "We keep in touch and reply during office hours."
+    svc_cards_3:
+      section_title: "Practice areas"
+    svc_list_icons:
+      section_title: "Practice areas"
+    proof_stats_bar:
+      section_title: "Google profile"
+      stat_label:
+        rating: "Google rating"
+        reviews: "Google reviews"
+      source_note: "Figures from the Google Business profile."
+    cta_form_short:
+      section_title: "Send an enquiry"
+      lede: "Describe the matter — we will call or write back."

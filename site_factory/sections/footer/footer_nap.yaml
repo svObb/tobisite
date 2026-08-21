@@ -1,0 +1,17 @@
+id: footer_nap
+role: footer
+requires: {has_phone: true, has_address: true}
+prefers: {has_hours: true}
+image_slots: 0
+slots:
+  - {name: business_name, type: fact, source: whitelist, max_chars: 60}
+  - {name: address, type: fact, source: whitelist, max_chars: 120}
+  - {name: contacts_title, type: free, max_chars: 20, lang: from_lead}
+  - {name: phone, type: fact, source: whitelist, max_chars: 24}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: email, type: fact, source: whitelist, max_chars: 60, optional: true}
+  - {name: hours_title, type: free, max_chars: 20, lang: from_lead, optional: true}
+  - {name: hours, type: fact, source: whitelist, repeat: 1..7, max_chars: 40, optional: true}
+  - {name: legal_line, type: free, max_chars: 90, lang: from_lead}
+perf: {est_dom_nodes: 30, images: 0}
+a11y: {heading_level: 2}

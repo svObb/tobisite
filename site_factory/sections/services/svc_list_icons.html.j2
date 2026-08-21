@@ -1,0 +1,21 @@
+{#- Значок нарисован инлайном: у превью нет своего спрайта, а внешний файл —
+    лишний запрос на страницу, которая живёт один экран. -#}
+{%- set s = section.slots -%}
+<section id="{{ section.id }}" class="bg-paper py-section">
+  <div class="mx-auto w-full max-w-6xl px-5 sm:px-8">
+    <h2 class="font-title text-2xl tracking-tight text-balance break-words sm:text-4xl">{{ s.section_title }}</h2>
+    <ul class="mt-flow grid gap-flow border-t border-line lg:grid-cols-2">
+      {%- for item in s.services %}
+      <li class="flex gap-4 border-b border-line py-5">
+        <svg class="mt-1 h-5 w-5 shrink-0 text-accent-ink" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+          <path d="M4 10.5 8 14.5 16 5.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div class="min-w-0">
+          <h3 class="font-title text-lg leading-snug break-words">{{ item.name }}</h3>
+          <p class="mt-2 max-w-[var(--measure)] text-sm leading-relaxed text-muted sm:text-base">{{ item.blurb }}</p>
+        </div>
+      </li>
+      {%- endfor %}
+    </ul>
+  </div>
+</section>

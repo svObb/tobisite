@@ -1,0 +1,33 @@
+{#- Форма настоящая: POST /api/lead принимает Worker (§4), он же валидирует,
+    держит rate-limit и шлёт заявку в админ-чат. Honeypot — скрытое поле
+    company_website: человек его не видит и не таблется в него, бот заполняет. -#}
+{%- set s = section.slots -%}
+<section id="{{ section.id }}" class="bg-surface py-section">
+  <div class="mx-auto grid w-full max-w-6xl gap-flow px-5 sm:px-8 lg:grid-cols-2 lg:items-start">
+    <div>
+      <h2 class="font-title text-2xl tracking-tight text-balance break-words sm:text-4xl">{{ s.section_title }}</h2>
+      <p class="mt-4 max-w-[var(--measure)] leading-relaxed text-muted">{{ s.lede }}</p>
+      <a href="{{ s.phone_href }}" class="mt-6 inline-block text-lg font-medium text-accent-ink underline decoration-line underline-offset-4">{{ s.phone }}</a>
+    </div>
+    <form action="/api/lead" method="post" class="grid gap-4 rounded-preset-lg border border-line bg-paper p-6">
+      <div class="hidden" aria-hidden="true">
+        <label for="{{ section.id }}-company">{{ s.honeypot_label }}</label>
+        <input id="{{ section.id }}-company" name="company_website" type="text" tabindex="-1" autocomplete="off">
+      </div>
+      <label class="grid gap-2" for="{{ section.id }}-name">
+        <span class="text-sm font-medium">{{ s.name_label }}</span>
+        <input id="{{ section.id }}-name" name="name" type="text" required autocomplete="name" class="rounded-preset border border-line bg-paper px-4 py-3 text-base text-ink">
+      </label>
+      <label class="grid gap-2" for="{{ section.id }}-phone">
+        <span class="text-sm font-medium">{{ s.phone_label }}</span>
+        <input id="{{ section.id }}-phone" name="phone" type="tel" required autocomplete="tel" class="rounded-preset border border-line bg-paper px-4 py-3 text-base text-ink">
+      </label>
+      <label class="grid gap-2" for="{{ section.id }}-message">
+        <span class="text-sm font-medium">{{ s.message_label }}</span>
+        <textarea id="{{ section.id }}-message" name="message" rows="4" class="rounded-preset border border-line bg-paper px-4 py-3 text-base text-ink"></textarea>
+      </label>
+      <button type="submit" class="rounded-preset bg-accent-ink px-6 py-3 font-medium text-accent-on">{{ s.submit_label }}</button>
+      <p class="text-sm leading-relaxed text-muted">{{ s.privacy_note }}</p>
+    </form>
+  </div>
+</section>

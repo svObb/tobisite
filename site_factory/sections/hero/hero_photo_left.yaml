@@ -1,0 +1,16 @@
+id: hero_photo_left
+role: hero
+requires: {photo_count: ">=1"}
+prefers: {photo_count: "3..", niche: [lawyer, dental]}
+image_slots: 1
+image_names: [portrait]
+slots:
+  - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}
+  - {name: headline, type: free, max_chars: 56, lang: from_lead}
+  - {name: lede, type: free, max_chars: 160, lang: from_lead}
+  - {name: call_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: reassurance, type: free, max_chars: 44, lang: from_lead}
+  - {name: portrait_alt, type: free, max_chars: 110, lang: from_lead}
+perf: {est_dom_nodes: 14, images: 1}
+a11y: {heading_level: 1}

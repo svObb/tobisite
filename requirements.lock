@@ -22,6 +22,12 @@ asyncpg==0.31.0
     # via -r requirements.txt
 attrs==26.1.0
     # via aiohttp
+boto3==1.43.77
+    # via -r requirements.txt
+botocore==1.43.77
+    # via
+    #   boto3
+    #   s3transfer
 certifi==2026.7.22
     # via aiogram
 frozenlist==1.8.0
@@ -32,12 +38,20 @@ greenlet==3.5.5
     # via sqlalchemy
 idna==3.18
     # via yarl
+jinja2==3.1.6
+    # via -r requirements.txt
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 magic-filter==1.0.12
     # via aiogram
 mako==1.4.1
     # via alembic
 markupsafe==3.0.3
-    # via mako
+    # via
+    #   jinja2
+    #   mako
 multidict==6.7.1
     # via
     #   aiohttp
@@ -52,10 +66,16 @@ pydantic==2.13.4
     # via aiogram
 pydantic-core==2.46.4
     # via pydantic
+python-dateutil==2.9.0.post0
+    # via botocore
 python-dotenv==1.2.3
     # via -r requirements.txt
 pyyaml==6.0.3
     # via -r requirements.txt
+s3transfer==0.19.2
+    # via boto3
+six==1.17.0
+    # via python-dateutil
 sqlalchemy==2.0.52
     # via
     #   -r requirements.txt
@@ -74,5 +94,7 @@ typing-inspection==0.4.4
     # via pydantic
 tzdata==2026.3
     # via -r requirements.txt
+urllib3==2.7.0
+    # via botocore
 yarl==1.24.5
     # via aiohttp

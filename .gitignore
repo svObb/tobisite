@@ -44,6 +44,13 @@ dist/
 .coverage
 htmlcov/
 
+# --- site_factory -----------------------------------------------------------
+# Артефакты сборки библиотеки: bundle.css, самохостные шрифты, смоук-рендеры.
+# Пересобираются из репозитория: tools/fetch_fonts.py + tools/build_css.py
+site_factory/build/
+# Standalone-CLI Tailwind v4, ~107 МБ. Качается tools/build_css.py при первом запуске
+tools/tailwindcss.exe
+
 # --- Логи бота --------------------------------------------------------------
 # LOG_FILE из .env, по умолчанию bot.log — пишется в папку проекта
 *.log

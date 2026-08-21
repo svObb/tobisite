@@ -1,0 +1,45 @@
+{#-
+  Schema.org LocalBusiness. Только fact-поля контекста: всё, что сюда попадает,
+  пришло из белого списка профиля (карточка лида, Google Maps, старый сайт).
+  Ни одно поле не пишет модель, ни одно не выдумывается — неизвестное просто
+  не выводится (unknown != false, §3 шаг 1).
+
+  Обращение через facts.get(): необязательные поля отсутствуют штатно, и под
+  StrictUndefined это не должно валить рендер. Слоты секций, наоборот, читаются
+  атрибутами — там пропуск это ошибка сборки.
+-#}
+{%- set ns = namespace(fields=[]) -%}
+{%- for key, value in [
+  ('@context', 'https://schema.org'),
+  ('@type', facts.get('business_type') or 'LocalBusiness'),
+  ('name', facts.get('name')),
+  ('url', facts.get('url')),
+  ('telephone', facts.get('telephone')),
+  ('email', facts.get('email')),
+  ('image', facts.get('image')),
+  ('openingHours', facts.get('opening_hours')),
+] -%}
+{%- if value -%}{%- set ns.fields = ns.fields + [(key, value)] -%}{%- endif -%}
+{%- endfor -%}
+{%- set addr = facts.get('address') -%}
+{%- if addr -%}
+{%- set an = namespace(fields=[('@type', 'PostalAddress')]) -%}
+{%- for key, value in [
+  ('streetAddress', addr.get('street')),
+  ('addressLocality', addr.get('locality')),
+  ('addressRegion', addr.get('region')),
+  ('postalCode', addr.get('postal_code')),
+  ('addressCountry', addr.get('country')),
+] -%}
+{%- if value -%}{%- set an.fields = an.fields + [(key, value)] -%}{%- endif -%}
+{%- endfor -%}
+{%- set ns.fields = ns.fields + [('address', dict(an.fields))] -%}
+{%- endif -%}
+{%- if facts.get('rating') and facts.get('review_count') -%}
+{%- set ns.fields = ns.fields + [('aggregateRating', dict([
+  ('@type', 'AggregateRating'),
+  ('ratingValue', facts.get('rating')),
+  ('reviewCount', facts.get('review_count')),
+]))] -%}
+{%- endif -%}
+<script type="application/ld+json">{{ dict(ns.fields) | tojson }}</script>
