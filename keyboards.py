@@ -170,9 +170,10 @@ def admin_card_kb(lead_id, can_build=False):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Редактировать", callback_data=f"led:{lead_id}")
     b.button(text=BTN_REGAP, callback_data=f"rgp:{lead_id}")
-    # письмо собирается только по проверенному лиду: у остальных наблюдение
-    # либо не снято, либо ещё не подтверждено
+    # письмо и черновик собираются только по проверенному лиду: у остальных
+    # наблюдение либо не снято, либо ещё не подтверждено
     if can_build:
+        b.button(text="🧱 Собрать черновик", callback_data=f"bdr:{lead_id}")
         b.button(text="✉️ Собрать письмо", callback_data=f"bld:{lead_id}")
     b.button(text="🔄 Сменить статус", callback_data=f"sts:{lead_id}")
     b.button(text="🔗 Ссылка на черновик", callback_data=f"drf:{lead_id}")

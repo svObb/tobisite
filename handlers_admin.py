@@ -17,7 +17,9 @@ from sqlalchemy.exc import IntegrityError
 
 import config
 import costs
+import draft_service
 import keyboards as kb
+import phrases
 import queue_service
 import services
 from handlers_worker import (
@@ -753,11 +755,59 @@ async def draft_save(message: Message, state: FSMContext):
     await message.answer("Ссылка сохранена.")
 
 
+# --- сборка черновика сайта ---------------------------------------------------
+#
+# Сборка идёт обычным await: она занимает секунды (один вызов модели на все
+# слоты), а фоновая задача с отдельным сообщением об итоге стоила бы отдельного
+# состояния и живущего между деплоями таск-реестра.
+
+@router.callback_query(F.data.startswith("bdr:"))
+async def build_draft_run(cb: CallbackQuery):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
+    lead = await _buildable(cb, lead_id, "Черновик собирается только "
+                                         "по проверенному лиду")
+    if lead is None:
+        return
+    await cb.answer()
+    note = await cb.message.answer("Собираю черновик…")
+    result = await draft_service.build_draft(lead_id,
+                                             actor_tg_id=cb.from_user.id)
+    await safe_edit(note, draft_report(result))
+    if result.notify_tg_id:
+        await _ask_enrichment(cb, lead, result)
+
+
+def draft_report(result) -> str:
+    if result.ok:
+        return (f"🧱 Черновик собран: {esc(result.summary)}.\n"
+                "Публикация превью — руками, после деплоя Worker.")
+    if result.needs_enrichment:
+        missing = esc("\n".join(result.missing))
+        return f"📋 Черновик не собрать, не хватает данных:\n{missing}"
+    return f"Не собралось: {esc(result.reason)}"
+
+
+async def _ask_enrichment(cb: CallbackQuery, lead, result):
+    """Петля вверх по течению: дозаполняет карточку тот, кто её и завёл."""
+    missing = esc("\n".join(result.missing))
+    text = (f"📋 #{lead.id} {esc(lead.name)}: для черновика сайта не хватает "
+            f"данных.\n{missing}\n"
+            "Пришли их админу — отдельная форма появится позже.")
+    try:
+        await cb.bot.send_message(result.notify_tg_id, text)
+    except Exception as e:
+        log.warning("просьба дозаполнить не дошла до tg=%s: %s",
+                    result.notify_tg_id, e)
+
+
 # --- сборка письма в очередь --------------------------------------------------
 #
-# Описание черновика вводится руками: draft_summary из site_factory появится в
-# фазе D, а выдумать его за админа код не имеет права — именно из этой строки
-# модель берёт ту единственную конкретную вещь, которую называет в offer.
+# Описание черновика берётся из собранного черновика лида (draft_summary), и
+# только если черновика нет, админ вводит его руками: именно из этой строки
+# модель берёт ту единственную конкретную вещь, которую называет в offer, и
+# выдумать её за админа код не имеет права.
 
 SUMMARY_MIN, SUMMARY_MAX = 3, 14
 
@@ -767,14 +817,17 @@ async def build_letter_ask(cb: CallbackQuery, state: FSMContext):
     lead_id = await cb_id(cb)
     if lead_id is None:
         return
-    async with Session() as s:
-        lead = await s.get(Lead, lead_id)
-    if not lead or lead.deleted_at or lead.cancelled_at:
-        await cb.answer(STALE, show_alert=True)
+    lead = await _buildable(cb, lead_id, "Письмо собирается только "
+                                         "по проверенному лиду")
+    if lead is None:
         return
-    if lead.status != "verified":
-        await cb.answer("Письмо собирается только по проверенному лиду",
-                        show_alert=True)
+    summary = await draft_service.summary_for(lead, phrases.lang_of(lead))
+    if summary:
+        await cb.answer()
+        note = await cb.message.answer("Собираю письмо…")
+        await safe_edit(note, letter_report(await queue_service.enqueue(
+            lead_id, actor_tg_id=cb.from_user.id, draft_summary=summary,
+        )))
         return
     await state.set_state(Adm.letter)
     await state.update_data(lead_id=lead_id)
@@ -798,15 +851,30 @@ async def build_letter_run(message: Message, state: FSMContext):
     d = await state.get_data()
     await state.clear()
     await message.answer("Собираю письмо…")
-    result = await queue_service.enqueue(
+    await message.answer(letter_report(await queue_service.enqueue(
         d.get("lead_id", 0), actor_tg_id=message.from_user.id,
         draft_summary=summary,
-    )
+    )))
+
+
+def letter_report(result) -> str:
     if result.ok:
-        await message.answer("✉️ Письмо в очереди. Разобрать — /queue")
-        return
+        return "✉️ Письмо в очереди. Разобрать — /queue"
     tail = "\nПисьмо придётся написать руками." if result.manual else ""
-    await message.answer(f"Не собралось: {esc(result.reason)}{tail}")
+    return f"Не собралось: {esc(result.reason)}{tail}"
+
+
+async def _buildable(cb: CallbackQuery, lead_id: int, refusal: str):
+    """Лид, по которому можно собирать. None — уже ответили отказом."""
+    async with Session() as s:
+        lead = await s.get(Lead, lead_id)
+    if not lead or lead.deleted_at or lead.cancelled_at:
+        await cb.answer(STALE, show_alert=True)
+        return None
+    if lead.status != "verified":
+        await cb.answer(refusal, show_alert=True)
+        return None
+    return lead
 
 
 @router.callback_query(F.data.startswith("anz:"))

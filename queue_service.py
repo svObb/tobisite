@@ -21,8 +21,10 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 import config
+import draft_service
 import email_gen
 import email_lint
+import phrases
 from models import (
     Contact, Lead, MessageDraft, MessageVersion, Session, Worker, day_start,
     log_event,
@@ -142,13 +144,16 @@ def editable_slots(version: MessageVersion) -> list[tuple[str, str]]:
 
 # --- постановка в очередь -----------------------------------------------------
 
-async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str,
+async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
                   touch_number: int = 1) -> Queued:
     """Собрать письмо и положить карточку в очередь.
 
     Линтер и одна перегенерация при его fail живут внутри email_gen; сюда
     возвращается либо готовое письмо, либо честная причина, по которой его
     придётся писать руками (Д12 §5).
+
+    Описание черновика берётся из собранного черновика лида; ручной ввод
+    остаётся фолбэком на лидов, у которых черновика ещё нет.
     """
     async with Session() as s:
         lead = await s.get(Lead, lead_id)
@@ -167,7 +172,14 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str,
         if busy in ("queued", "claimed", "approved"):
             return Queued(False, reason="письмо этого касания уже есть")
 
-    result = await email_gen.build_email(lead, draft_summary)
+    summary = (draft_summary or "").strip() or await draft_service.summary_for(
+        lead, phrases.lang_of(lead)
+    )
+    if not summary:
+        return Queued(False, reason="нечего назвать в письме: соберите "
+                                    "черновик или опишите его руками")
+
+    result = await email_gen.build_email(lead, summary)
     try:
         return await _store(lead, result, touch_number, actor_tg_id)
     except IntegrityError:

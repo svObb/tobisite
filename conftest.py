@@ -15,6 +15,7 @@ FSM_BOT_ID. По этим меткам чистка сносит
 """
 import asyncio
 import itertools
+import json
 import os
 import pathlib
 import time
@@ -44,7 +45,7 @@ if not (os.getenv("TEST_DATABASE_URL") or (ROOT / ".env").exists()):
 from sqlalchemy import delete, select  # noqa: E402
 
 from models import (  # noqa: E402
-    ClientService, Contact, CostLedger, FsmState, Lead, LeadEvent,
+    ClientService, Contact, CostLedger, Draft, FsmState, Lead, LeadEvent,
     MessageDraft, MessageVersion, Session, Suppression, Worker,
 )
 
@@ -72,6 +73,7 @@ async def _cleanup():
                                     .where(MessageVersion.draft_id.in_(dids)))
                     await s.execute(delete(MessageDraft)
                                     .where(MessageDraft.id.in_(dids)))
+                await s.execute(delete(Draft).where(Draft.lead_id.in_(lids)))
                 await s.execute(delete(LeadEvent).where(LeadEvent.lead_id.in_(lids)))
                 await s.execute(delete(CostLedger).where(CostLedger.lead_id.in_(lids)))
                 await s.execute(delete(Contact).where(Contact.lead_id.in_(lids)))
@@ -173,6 +175,139 @@ def model(monkeypatch):
         fake = SimpleNamespace(messages=FakeMessages(replies))
         monkeypatch.setattr(email_gen, "_client", fake)
         return fake
+
+    return _install
+
+
+@pytest.fixture
+def slot_model(monkeypatch):
+    """slot_model(ответ, ...) — тот же приём для слот-генерации черновиков."""
+    import config
+    import slot_gen
+
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "pytest-key")
+
+    def _install(*replies):
+        fake = SimpleNamespace(messages=FakeMessages(replies))
+        monkeypatch.setattr(slot_gen, "_client", fake)
+        return fake
+
+    return _install
+
+
+# Обогащение карточки под черновик (Д13 §3 шаг 1). Компания выдумана целиком,
+# телефон несуществующий; цифры — входные данные теста, а не текст страницы.
+DRAFT_ENRICHMENT = {
+    "services": ["Лікування карієсу", "Професійна гігієна", "Імплантація",
+                 "Протезування"],
+    "hours": ["Пн–Пт: 09:00–18:00"],
+    "address": "вул. Тестова, 1, Тест-город",
+    "address_parts": {"street": "вул. Тестова, 1", "locality": "Тест-город",
+                      "country": "UA"},
+    "photo_count": 0,
+    "review_count": 24,
+    "google_rating": 4.7,
+    "has_prices": False,
+    "text_volume": "medium",
+    "old_site_state": "outdated",
+    "images": {},
+}
+
+
+@pytest.fixture
+def draft_lead(make_lead):
+    """Лид, из которого черновик собирается: контакты плюс обогащение."""
+    import config
+    from models import Session
+
+    async def _make(**kw):
+        phone = kw.pop("phone", "+380 00 000 00 05")
+        email = kw.pop("email", "office@example.com")
+        async with Session() as s, s.begin():
+            lead = await make_lead(
+                s,
+                domain_norm=kw.pop("domain_norm",
+                                   f"draft-{next(_seq)}.example"),
+                enrichment=kw.pop("enrichment", dict(DRAFT_ENRICHMENT)),
+                gap_type=kw.pop("gap_type", "slow"),
+                gap_value=kw.pop("gap_value", "8"),
+                gap_captured_at=kw.pop("gap_captured_at",
+                                       datetime.now(config.TZ)),
+                **kw,
+            )
+            for ctype, value in (("phone", phone), ("email", email)):
+                if value:
+                    s.add(Contact(lead_id=lead.id, ctype=ctype, value=value))
+        return lead
+
+    return _make
+
+
+# Строки, которыми фальшивая модель закрывает free-слоты: короче любого
+# max_chars библиотеки, без цифр и без стоп-слов — чтобы автопроверки ловили
+# ошибки движка, а не заготовку теста.
+SLOT_LINES = {
+    "eyebrow": "Стоматологія",
+    "headline": "Запис на прийом",
+    "lede": "Зателефонуйте нам.",
+    "call_label": "Зателефонувати",
+    "secondary_label": "Написати",
+    "reassurance": "Відповідаємо вдень",
+    "section_title": "Наші послуги",
+    "source_note": "Дані з Google.",
+    "address_label": "Адреса",
+    "hours_label": "Години",
+    "map_alt": "Карта розташування",
+    "portrait_alt": "Фото компанії",
+    "name_label": "Імʼя",
+    "phone_label": "Телефон",
+    "message_label": "Про завдання",
+    "submit_label": "Надіслати",
+    "honeypot_label": "Не заповнюйте",
+    "privacy_note": "Пишемо у відповідь.",
+    "contacts_title": "Контакти",
+    "hours_title": "Години",
+    "legal_line": "Чернетка сторінки.",
+}
+
+
+def _slot_reply(specs, overrides=None) -> str:
+    texts = {spec["slot"]: SLOT_LINES.get(spec["kind"], "Рядок") for spec in specs}
+    texts.update(overrides or {})
+    return json.dumps(texts, ensure_ascii=False)
+
+
+@pytest.fixture
+def slot_plan():
+    """slot_plan(лид) — профиль и композиция ровно те, что увидит сборка."""
+    import draft_service
+    import slot_gen
+    from models import Session
+
+    async def _plan(lead):
+        async with Session() as s:
+            profile = await draft_service.build_profile(s, lead)
+        composition = draft_service.compose_for(profile)
+        return SimpleNamespace(profile=profile, sections=composition.sections,
+                               specs=slot_gen.slot_specs(composition.sections))
+
+    return _plan
+
+
+@pytest.fixture
+def slot_answer(slot_model, slot_plan):
+    """slot_answer(лид, правка, ...) — модель, отвечающая на реальную композицию.
+
+    Ответ собирается по free-слотам композиции этого лида, поэтому тест не
+    зависит от того, какие варианты секций выиграли скоринг. Правка — свой
+    ответ на каждый вызов по порядку: slot_answer(lead, {слот: длинно}, {})
+    отдаёт сначала нарушение лимита, потом чистый ответ.
+    """
+    async def _install(lead, *overrides):
+        plan = await slot_plan(lead)
+        plan.fake = slot_model(*[_slot_reply(plan.specs, patch)
+                                 for patch in overrides or ({},)])
+        return plan
 
     return _install
 

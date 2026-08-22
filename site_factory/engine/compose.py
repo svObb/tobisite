@@ -101,6 +101,30 @@ def compose(profile: Profile, recipe: dict, library: dict, seed: int,
     return Composition(sections, trace, [])
 
 
+def apply_free_texts(composition: Composition, texts: dict) -> list[str]:
+    """Слоты, написанные моделью, поверх заготовок. Возвращает выбывшие роли.
+
+    Модель никогда не видит HTML: сюда приходит готовый JSON слотов, и дальше
+    работают те же правила, что и для фактов. Секция, у которой обязательный
+    слот остался пустым, выбывает — судьбу страницы решает enough().
+    """
+    survivors, dropped = [], []
+    for section in composition.sections:
+        if slots.apply_free_texts(section, texts):
+            survivors.append(section)
+        else:
+            dropped.append(section["role"])
+    composition.sections = survivors
+    return dropped
+
+
+def enough(composition: Composition, recipe: dict, dropped: list[str]) -> bool:
+    """Страница ещё собирается: обязательные роли на месте, секций хватает."""
+    optional = set(recipe.get("optional_roles") or [])
+    return (not set(dropped) - optional
+            and len(composition.sections) >= recipe["min_sections"])
+
+
 def _fill(role: str, profile: Profile, recipe: dict, library: dict,
           rng: random.Random, recent_variants):
     """Одна роль: гейты -> слоты -> скоринг. None, если годных вариантов нет."""

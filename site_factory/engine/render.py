@@ -38,7 +38,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from . import slots
-from .compose import compose
+from .compose import apply_free_texts, compose, enough
 from .profile import Profile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -53,7 +53,14 @@ class Draft(NamedTuple):
     recipe_json: dict
 
 
-def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT) -> Draft:
+def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
+           free_texts: dict | None = None) -> Draft:
+    """Черновик лида. free_texts — слоты, написанные моделью (JSON, не HTML).
+
+    Без free_texts free-слоты закрывают заготовки рецепта: так работает смоук
+    библиотеки. Бот отдаёт сюда JSON слот-генерации, собранный по композиции
+    этого же профиля — она детерминирована seed'ом и совпадает с здешней.
+    """
     tokens = load_tokens(root)
     library = load_library(root)
     recipe = load_recipe(recipe_id_for(profile, root), root)
@@ -82,6 +89,15 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT) -> D
     }
     if not composition.ok:
         return Draft(None, trace)
+
+    if free_texts is not None:
+        dropped = apply_free_texts(composition, free_texts)
+        trace["dropped_sections"] = dropped
+        trace["sections"] = [s["variant"] for s in composition.sections]
+        if not enough(composition, recipe, dropped):
+            # текста нет — секции нет; страницы из двух секций не бывает
+            trace["failed"] = f"секции без текста: {', '.join(dropped)}"
+            return Draft(None, trace)
 
     lang = str(profile.lang.value)
     html = environment(root).get_template("base/layout.html.j2").render(

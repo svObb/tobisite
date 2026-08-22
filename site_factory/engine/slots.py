@@ -80,6 +80,45 @@ def build(contract: dict, profile: Profile, recipe: dict) -> Filled:
     return Filled(slots, _images(contract, profile), tuple(reasons))
 
 
+def free_specs(contract: dict) -> list[dict]:
+    """Скалярные free-слоты варианта — ровно то, что пишет модель.
+
+    Повторяющиеся free-слоты (blurb услуги, подпись показателя) сюда не входят:
+    у них по значению на каждый элемент группы, а контракт слот-генерации —
+    одна строка на слот. Их по-прежнему закрывают заготовки рецепта.
+    """
+    return [spec for spec in contract.get("slots") or []
+            if spec["type"] == "free" and not spec.get("group")
+            and not spec.get("repeat") and spec.get("source") != "composer"]
+
+
+def apply_free_texts(section: dict, texts: dict) -> bool:
+    """Тексты модели поверх заготовок рецепта. False — секцию рендерить нечем.
+
+    Ключ текста — «вариант.слот»: одно и то же имя слота живёт в разных
+    секциях с разным смыслом и разным лимитом, и плоский ключ склеил бы
+    заголовок первого экрана с заголовком формы.
+
+    Слота нет в словаре — модель его не писала, остаётся заготовка. Пустая
+    строка или превышение max_chars — слот пуст: молча резать текст нельзя
+    (тот же запрет, что и в _measure), а пустой обязательный слот выводит
+    секцию из состава страницы целиком (§3 ступень 4).
+    """
+    ok = True
+    for spec in free_specs(section["contract"]):
+        key = f"{section['variant']}.{spec['name']}"
+        if key not in texts:
+            continue
+        value = str(texts[key] or "").strip()
+        max_chars = spec.get("max_chars")
+        if max_chars and len(value) > max_chars:
+            value = ""
+        if not value and not spec.get("optional"):
+            ok = False
+        section["slots"][spec["name"]] = value or None
+    return ok
+
+
 def apply_composer(section: dict, values: dict) -> None:
     """Заполнить composer-слоты, когда состав страницы уже окончателен."""
     for spec in section["contract"].get("slots") or []:

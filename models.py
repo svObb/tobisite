@@ -47,6 +47,13 @@ DRAFT_STATUSES = ["queued", "claimed", "approved", "rejected", "cancelled",
                   "needs_manual"]
 # Кто написал версию текста: модель или человек в очереди (Д12 §6.5).
 VERSION_AUTHORS = ["model", "human"]
+# Состояния черновика сайта (Д13 §5). published ставится только руками после
+# деплоя Worker: автоматической публикации превью в конвейере нет.
+# Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
+BUILD_STATUSES = ["generated", "published", "failed", "expired"]
+# Черновик живёт 30 дней — ровно столько письмо 3 обещает его держать
+# (email_gen.DRAFT_HOLD_DAYS). Разъедутся — письмо станет враньём.
+DRAFT_TTL_DAYS = 30
 # Наблюдение живёт 14 дней: сайт могли починить, и «8 секунд» превратится
 # в ложное утверждение в коммерческом письме конкретному юрлицу (Д12 §2).
 GAP_TTL_DAYS = 14
@@ -159,6 +166,18 @@ class Lead(Base, TimesMixin):
     gap_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     gap_seconds: Mapped[int | None] = mapped_column(Integer)
     gap_auto_verified: Mapped[bool | None] = mapped_column(Boolean)
+    # обогащение карточки под черновик (Д13 §3 шаг 1): всё, чего нет в самих
+    # полях лида — услуги, часы, адрес, число фото. Ключ есть в словаре —
+    # признак известен, ключа нет — неизвестен; unknown это не false
+    enrichment: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    # лестница деградации не собрала страницу: работнику ушёл список того,
+    # что надо дозаполнить (enrichment_request), черновика у лида нет
+    needs_enrichment: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    enrichment_request: Mapped[str | None] = mapped_column(Text)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_by: Mapped[int | None] = mapped_column(BigInteger)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -455,6 +474,62 @@ class MessageVersion(Base, TimesMixin):
                         name="ck_message_versions_author"),
         Index("ix_message_versions_draft_id", "draft_id"),
     )
+
+
+class Draft(Base, TimesMixin):
+    """Черновик сайта лида (Д13 §5): один активный на лид.
+
+    recipe_json — полный след решения движка, включая отвергнутые варианты и их
+    score. Без него признаковый анализ через полгода превращается в тыкву, и
+    восстановить, почему этому лиду достался именно такой первый экран, будет
+    нечем. checks_json — то, что нашли автопроверки; пустой словарь значит
+    «чисто».
+
+    r2_prefix и preview_host заполняются только при ручной публикации: пока
+    Worker не задеплоен, черновик живёт в базе и в письме, но не в интернете.
+    """
+    __tablename__ = "drafts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("leads.id"), nullable=False
+    )
+    library_version: Mapped[str | None] = mapped_column(Text)
+    seed: Mapped[int | None] = mapped_column(BigInteger)
+    recipe_id: Mapped[str | None] = mapped_column(Text)
+    token_preset: Mapped[str | None] = mapped_column(Text)
+    section_variants: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    image_ids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    recipe_json: Mapped[dict | None] = mapped_column(JSONB)
+    r2_prefix: Mapped[str | None] = mapped_column(Text)
+    preview_host: Mapped[str | None] = mapped_column(Text)
+    checks_json: Mapped[dict | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="generated", server_default="generated"
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(in_list("status", BUILD_STATUSES), name="ck_drafts_status"),
+        # один живой черновик на лид: второй «Собрать черновик» пересобирает
+        # тот же, а не плодит вторую страницу с другим дизайном
+        Index("uq_drafts_lead_active", "lead_id", unique=True,
+              postgresql_where="deleted_at IS NULL"),
+        Index("ix_drafts_status", "status"),
+    )
+
+
+def draft_fresh(draft) -> bool:
+    """Черновик, на который письмо ещё может ссылаться."""
+    if draft is None or draft.deleted_at or draft.status not in ("generated",
+                                                                 "published"):
+        return False
+    if draft.expires_at is None:
+        return True
+    return datetime.now(draft.expires_at.tzinfo) < draft.expires_at
 
 
 class LeadEvent(Base, TimesMixin):

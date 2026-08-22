@@ -80,7 +80,7 @@ jobs:
       # Ловит ровно тот класс поломок, из-за которого служба не поднимается:
       # опечатка в импорте, отсутствующее имя, битый декоратор роутера.
       - name: импорт всех модулей
-        run: python -c "import main, handlers_admin, handlers_review, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services, email_gen, queue_service"
+        run: python -c "import main, handlers_admin, handlers_review, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services, email_gen, queue_service, draft_service"
 
       # Тесты ходят в тот же одноразовый Postgres, но через TEST_DATABASE_URL:
       # config в тест-режиме требует именно её. DATABASE_URL при этом пустая,
@@ -126,7 +126,7 @@ jobs:
             -e COUNTRIES='Украина|UA,Словакия|SK' \
             -e LANGUAGES='Украинский,Словацкий' \
             "$IMAGE:$GITHUB_SHA" \
-            python -c "import main, handlers_admin, handlers_review, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services, email_gen, queue_service, admin.app"
+            python -c "import main, handlers_admin, handlers_review, handlers_worker, keyboards, models, dedup, costs, fsm_storage, scout.runner, services, email_gen, queue_service, draft_service, admin.app"
           docker push "$IMAGE:$GITHUB_SHA"
           echo "опубликован $IMAGE:$GITHUB_SHA"
 

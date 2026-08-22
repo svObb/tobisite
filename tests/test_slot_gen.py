@@ -1,0 +1,163 @@
+"""Слот-генерация черновика (Д13 §2): лимиты, перегенерация, язык, факты.
+
+Клиента модели подменяют фикстуры slot_model/slot_answer из conftest: сети в
+тестах нет, платных вызовов тоже.
+"""
+import json
+
+from sqlalchemy import select
+
+import config
+import costs
+import draft_service
+import slot_gen
+from models import CostLedger, Session
+
+
+async def test_too_long_slot_is_asked_again_alone(slot_plan, slot_answer,
+                                                  draft_lead):
+    lead = await draft_lead()
+    victim = _spec(await slot_plan(lead), "headline")
+    state = await slot_answer(lead, {victim["slot"]: "я" * (victim["max_chars"] + 1)},
+                              {})
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                                       lead_id=lead.id)
+
+    assert result.ok and result.empty == []
+    assert 0 < len(result.texts[victim["slot"]]) <= victim["max_chars"]
+    assert len(state.fake.messages.calls) == 2
+    # первый заход — вся страница, второй — ровно нарушивший слот
+    assert _asked(state.fake, 0) == [spec["slot"] for spec in state.specs]
+    assert _asked(state.fake, 1) == [victim["slot"]]
+
+
+async def test_second_violation_leaves_the_slot_empty(slot_plan, slot_answer,
+                                                      draft_lead):
+    lead = await draft_lead()
+    victim = _spec(await slot_plan(lead), "privacy_note")
+    # фальшивка повторяет последний ответ: модель нарушает лимит и во второй раз
+    state = await slot_answer(lead, {victim["slot"]: "я" * (victim["max_chars"] + 1)})
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                                       lead_id=lead.id)
+
+    assert result.ok and result.empty == [victim["slot"]]
+    assert result.texts[victim["slot"]] == ""
+    # ровно одна перегенерация: дальше судьбу секции решает лестница деградации
+    assert len(state.fake.messages.calls) == 2
+
+
+async def test_ukrainian_lead_gets_ukrainian_prompt(slot_answer, draft_lead):
+    lead = await draft_lead()
+    assert draft_service.lang_of(lead) == "uk"
+    state = await slot_answer(lead)
+
+    await slot_gen.fill_slots(state.profile, state.sections, "uk", lead_id=lead.id)
+
+    call = state.fake.messages.calls[0]
+    assert call["model"] == slot_gen.MODEL
+    assert call["thinking"] == {"type": "disabled"}
+    assert "temperature" not in call and "top_p" not in call
+    system = call["system"][0]
+    assert system["cache_control"] == {"type": "ephemeral"}
+    assert "Стоматологія «Лінія»" in system["text"]
+    assert "Corner Bakery" not in system["text"]
+    assert "<output_language>uk</output_language>" in call["messages"][0]["content"]
+
+
+async def test_foreign_country_gets_english_prompt(slot_answer, draft_lead):
+    lead = await draft_lead(country="Словакия", language="Словацкий")
+    assert draft_service.lang_of(lead) == "en"
+    state = await slot_answer(lead)
+
+    await slot_gen.fill_slots(state.profile, state.sections, "en", lead_id=lead.id)
+
+    call = state.fake.messages.calls[0]
+    assert "Em-dash count must be exactly 0." in call["system"][0]["text"]
+    assert "Corner Bakery" in call["system"][0]["text"]
+    assert "Стоматологія «Лінія»" not in call["system"][0]["text"]
+    assert "<output_language>en</output_language>" in call["messages"][0]["content"]
+
+
+async def test_facts_never_reach_the_model(slot_answer, draft_lead):
+    lead = await draft_lead(phone="+380 00 000 00 07")
+    state = await slot_answer(lead)
+
+    await slot_gen.fill_slots(state.profile, state.sections, "uk", lead_id=lead.id)
+
+    prompt = state.fake.messages.calls[0]["messages"][0]["content"]
+    for secret in ("+380 00 000 00 07", "office@example.com", "вул. Тестова",
+                   "Лікування карієсу", "4.7"):
+        assert secret not in prompt, secret
+    # fact-слоты не показываются даже именем: их закрывает белый список профиля
+    for name in ("phone_href", "business_name", "service_name", "stat_value"):
+        assert name not in prompt, name
+    assert lead.name in prompt and "Тест-город" in prompt
+
+
+async def test_cost_lands_in_the_ledger(slot_answer, draft_lead):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+
+    await slot_gen.fill_slots(state.profile, state.sections, "uk", lead_id=lead.id)
+
+    async with Session() as s:
+        row = (await s.scalars(
+            select(CostLedger).where(CostLedger.lead_id == lead.id)
+        )).one()
+    assert row.op == "draft" and row.model == slot_gen.MODEL
+    assert row.input_tokens == 120 and row.output_tokens == 60
+    assert row.cache_read_tokens == 1800 and row.cost_usd > 0
+
+
+async def test_no_key_refuses_without_a_call(slot_answer, draft_lead, monkeypatch):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                                       lead_id=lead.id)
+
+    assert not result.ok and "ANTHROPIC_API_KEY" in result.reason
+    assert state.fake.messages.calls == []
+
+
+async def test_cap_stops_before_the_call(slot_answer, draft_lead, monkeypatch):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    monkeypatch.setattr(costs, "cap_reached", _always(True))
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                                       lead_id=lead.id)
+
+    assert not result.ok and "кэп" in result.reason
+    assert state.fake.messages.calls == []
+
+
+async def test_unknown_language_refuses(slot_answer, draft_lead):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "sk",
+                                       lead_id=lead.id)
+
+    assert not result.ok and "sk" in result.reason
+    assert state.fake.messages.calls == []
+
+
+def _spec(plan, kind: str) -> dict:
+    return next(spec for spec in plan.specs if spec["kind"] == kind)
+
+
+def _asked(fake, index: int) -> list[str]:
+    """Какие слоты ушли в модель на этом вызове."""
+    content = fake.messages.calls[index]["messages"][0]["content"]
+    payload = content.split("<slots>")[1].split("</slots>")[0]
+    return [spec["slot"] for spec in json.loads(payload)]
+
+
+def _always(value):
+    async def _call(*a, **kw):
+        return value
+    return _call
