@@ -139,7 +139,10 @@ def lint(body: str, *, lang: str, slots: dict[str, str], anchors=(),
                          f"нужно от {STDEV_MIN}: одинаковые предложения — "
                          f"ритм модели")
 
-    if "!" in body:
+    # Приветствие — константа, и украинское «Доброго дня!» пишется со знаком по
+    # норме языка. Запрет Д12 §5 — про восклицания в прозе письма, поэтому знак
+    # ищется во всём письме, кроме этого слота.
+    if "!" in body.replace(slots.get("greeting") or "", "", 1):
         fails.append("восклицательный знак")
     if EMOJI_RE.search(body):
         fails.append("эмодзи")

@@ -133,10 +133,8 @@ LABELS = {
            "ask": "Write the bridge and the offer."},
 }
 
-GREETINGS = {
-    "uk": ("Доброго дня, {name}.", "Доброго дня."),
-    "en": ("Hi {name},", "Hi,"),
-}
+UK_GREETING = "Доброго дня!"
+EN_GREETINGS = ("Hi {name},", "Hi,")
 
 # CTA: 4 варианта, вариант выбирается по hash(lead_id) % 4. Без ссылок —
 # письмо 1 идёт без единой ссылки (9.1). Ровно один вопрос на письмо.
@@ -261,10 +259,26 @@ def signature(lang: str) -> str:
     return "\n".join(p for p in (who, config.POSTAL_ADDRESS, OPT_OUT[lang]) if p)
 
 
+def greeting(lang: str, name: str) -> str:
+    """Приветствие письма.
+
+    В украинском имени нет никогда: обращение по имени требует звательного
+    падежа («Олена» → «Олено»), а падежи мы не генерируем (решение 10 этапа).
+    Нейтральное приветствие дешевле, чем ошибка в имени человека.
+    """
+    if lang == "uk":
+        return UK_GREETING
+    with_name, without = EN_GREETINGS
+    return with_name.format(name=name) if name else without
+
+
 def anchors_of(lead) -> list[str]:
     """Якоря карточки для линтера: чем их меньше, тем безличнее письмо."""
     number = re.search(r"\d+", lead.gap_value or "")
-    return [_contact_name(lead), lead.city, lead.niche, lead.name,
+    # Ниша в карточке записана по-русски, а в письме стоит её форма из зачина:
+    # по ключу config.NICHES якорь не нашёлся бы ни в одном письме.
+    return [_contact_name(lead), lead.city,
+            phrases.niche_form(lead) or lead.niche, lead.name,
             number.group(0) if number else ""]
 
 
@@ -377,10 +391,8 @@ def _fewshot_input(data: dict, lang: str) -> str:
 
 
 def _assemble(lead, lang, first_line, slots) -> EmailResult:
-    name = _contact_name(lead)
-    with_name, without = GREETINGS[lang]
     slots = dict(slots)
-    slots["greeting"] = with_name.format(name=name) if name else without
+    slots["greeting"] = greeting(lang, _contact_name(lead))
     slots["first_line"] = first_line
     slots["cta"] = phrases.variant(lead.id, CTA[lang])
     slots["signature"] = signature(lang)
@@ -401,9 +413,7 @@ def _assemble(lead, lang, first_line, slots) -> EmailResult:
 
 
 def _constant_letter(lead, lang, subject, text) -> EmailResult:
-    name = _contact_name(lead)
-    with_name, without = GREETINGS[lang]
-    slots = {"greeting": with_name.format(name=name) if name else without,
+    slots = {"greeting": greeting(lang, _contact_name(lead)),
              "text": text, "signature": signature(lang)}
     body = "\n\n".join(p for p in slots.values() if p)
     return EmailResult(ok=True, lang=lang, subject=subject, body=body,

@@ -12,8 +12,9 @@ from test_email_gen import EN_DRAFT, EN_JSON, UK_DRAFT, UK_JSON
 # Проходное украинское письмо — основа для кейсов: каждый тест портит ровно
 # одну вещь и смотрит, что упало именно она.
 GOOD_SLOTS = {
-    "greeting": "Доброго дня, Олена.",
-    "first_line": "Відкрив з телефону — головна вантажилась 8 секунд.",
+    "greeting": "Доброго дня!",
+    "first_line": "Шукав стоматолога в Ужгороді, відкрив з телефону — "
+                  "головна вантажилась 8 секунд.",
     "bridge": "На такому екрані людині простіше повернутись у пошук, "
               "ніж дочекатись.",
     "offer": "Я зібрав чернетку вашої головної на ваших реальних даних, "
@@ -22,7 +23,13 @@ GOOD_SLOTS = {
     "signature": "Микола Тобі, tobisite\nвулиця Соборна 12, Київ\n"
                  "Не цікаво — просто відповідайте «ні», більше не напишу.",
 }
-ANCHORS = ["Олена", "Ужгород", "стоматологія", "Клініка Здоров'я", "8"]
+# Якоря — то же, что вернул бы email_gen.anchors_of: имя контакта, город,
+# ниша в форме зачина, название и цифра наблюдения. Тема письма участвует в
+# поиске наравне с телом — название компании чаще всего стоит именно там.
+ANCHORS = ["Олена", "Ужгород", "стоматолога", "Клініка Здоров'я", "8"]
+SUBJECT = "Клініка Здоров'я: що я побачив"
+EN_ANCHORS = ["Olena", "Uzhhorod", "a dentist", "Zdorovya Clinic", "8"]
+EN_SUBJECT = "Zdorovya Clinic: what I noticed"
 # Правила, которые смотрят внутрь сгенерированных слотов: только они проверяют
 # то, что действительно написала модель.
 SLOT_RULES = ("стоп-слово", "вежливость", "не просто", "«Как»", "ёлочки",
@@ -38,16 +45,16 @@ def body_of(slots: dict) -> str:
     ))
 
 
-def check(lang="uk", **changes):
+def check(lang="uk", subject=SUBJECT, **changes):
     slots = GOOD_SLOTS | changes
     return email_lint.lint(body_of(slots), lang=lang, slots=slots,
-                           anchors=ANCHORS)
+                           anchors=ANCHORS, subject=subject)
 
 
 def check_en(**changes):
     slots = _english_slots(**changes)
     return email_lint.lint(body_of(slots), lang="en", slots=slots,
-                           anchors=ANCHORS)
+                           anchors=EN_ANCHORS, subject=EN_SUBJECT)
 
 
 def test_reference_letters_pass():
@@ -92,6 +99,8 @@ def test_flat_rhythm_only_warns():
 
 def test_exclamation_fails():
     assert any("восклицательный" in f for f in check(cta="Скинути? Так!").fails)
+    # «Доброго дня!» — норма языка, а не восклицание в прозе письма
+    assert check().fails == []
 
 
 def test_emoji_fails():
@@ -170,8 +179,17 @@ def test_english_without_contractions_fails():
     assert any("сокращения" in f for f in result.fails)
 
 
+def test_reference_letters_have_enough_anchors():
+    # зачин вернул письму город и нишу — безличным оно больше не выглядит
+    assert not any("якорей" in w for w in check().warns)
+    assert not any("якорей" in w for w in check_en().warns)
+
+
 def test_few_anchors_only_warn():
-    result = check()
+    # письмо без зачина и без названия в теме: город и ниша в текст не попали
+    result = check(subject="Кілька слів про ваш сайт",
+                   first_line="Відкрив з телефону — головна вантажилась "
+                              "8 секунд.")
     assert result.ok
     assert any("якорей из карточки" in w for w in result.warns)
 
@@ -194,9 +212,12 @@ def test_fewshot_bank_passes_the_slot_rules():
 
 async def test_generated_uk_letter_passes(model, gap_lead):
     model(UK_JSON)
-    lead = await gap_lead()
+    lead = await gap_lead(city="Ужгород")
     result = await email_gen.build_email(lead, UK_DRAFT)
     assert result.ok and result.lint.fails == []
+    assert result.body.startswith("Доброго дня!")
+    assert "Шукав стоматолога в Ужгороді" in result.body \
+        or "Вибирав стоматолога в Ужгороді" in result.body
 
 
 async def test_generated_en_letter_passes(model, gap_lead):
@@ -205,13 +226,16 @@ async def test_generated_en_letter_passes(model, gap_lead):
     result = await email_gen.build_email(lead, EN_DRAFT)
     assert result.ok and result.lint.fails == []
     assert result.body.startswith("Hi Олена,")
+    assert "a dentist in" in result.body
+    # якорей в собранном письме хватает: имя, город, ниша, цифра
+    assert not any("якорей" in w for w in result.lint.warns)
 
 
 def _english_slots(**changes):
     slots = {
         "greeting": "Hi Olena,",
-        "first_line": "Opened it on my phone, the homepage took 8 seconds "
-                      "to load.",
+        "first_line": "I was looking for a dentist in Uzhhorod, opened it on "
+                      "my phone, the homepage took 8 seconds to load.",
         "bridge": "Most people go back to the search results before a page "
                   "like that loads.",
         "offer": "I've built a draft of your homepage on your real data, "

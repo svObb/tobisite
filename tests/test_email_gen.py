@@ -39,7 +39,7 @@ async def test_valid_answer_builds_the_letter(model, gap_lead):
     assert result.lang == "uk" and result.model == email_gen.MODEL
     assert result.lint.fails == []
     # все четыре слоя на месте и ровно по одному разу
-    assert result.body.startswith("Доброго дня, Олена.")
+    assert result.body.startswith("Доброго дня!")
     # какой из трёх вариантов первой строки выпал — дело hash(lead_id),
     # но факт из наблюдения в письме обязан быть
     assert "8 секунд" in result.body
@@ -99,6 +99,20 @@ async def test_assembly_is_deterministic(model, gap_lead):
     first = await email_gen.build_email(lead, UK_DRAFT)
     second = await email_gen.build_email(lead, UK_DRAFT)
     assert first.body == second.body and first.subject == second.subject
+
+
+async def test_ukrainian_greeting_never_carries_the_name(model, gap_lead):
+    model(UK_JSON)
+    lead = await gap_lead()
+    result = await email_gen.build_email(lead, UK_DRAFT)
+    # звательный падеж («Олено») мы не генерируем — имени в письме нет вообще
+    assert "Олена" not in result.body
+
+
+def test_english_greeting_falls_back_without_a_name():
+    assert email_gen.greeting("en", "Anna") == "Hi Anna,"
+    assert email_gen.greeting("en", "") == "Hi,"
+    assert email_gen.greeting("uk", "Олена") == "Доброго дня!"
 
 
 async def test_cta_has_four_variants_per_language():
@@ -221,7 +235,7 @@ async def test_letters_2_and_3_are_constants(model, gap_lead):
     assert second.ok and "klinika.tobisitepreview.com" in second.body
     assert third.ok and str(email_gen.DRAFT_HOLD_DAYS) in third.body
     assert "«ні»" in third.body
-    assert second.body.startswith("Доброго дня, Олена.")
+    assert second.body.startswith("Доброго дня!")
     assert email_gen.OPT_OUT["uk"] in second.body
     # модель для касаний 2 и 3 не зовётся вообще
     assert fake.messages.calls == []

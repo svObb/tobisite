@@ -4,6 +4,10 @@
 одинаковую строку, а два соседних лида — разные. Подставляется только то, что
 работник видел своими глазами: {v} из gap_value, {v1}/{v2} — его половины.
 Таблица не может соврать, и это её главное свойство.
+
+Первая строка собирается из двух частей: зачин с нишей и городом из карточки
+плюс хвост наблюдения. Падежи не выводятся правилами — только таблицами
+NICHE_FORMS и CITY_LOCATIVE, а что в них не попало, идёт без зачина.
 """
 # Первый вариант каждой строки — дословно из таблицы Д12 §3, второй и третий
 # написаны в том же регистре (Д12 даёт по одному, план требует три).
@@ -16,7 +20,7 @@ FIRST_LINES = {
         ],
         "en": [
             "opened it on my phone, the homepage took {v} seconds to load",
-            "I checked it from my phone, the homepage needed {v} seconds",
+            "checked it from my phone, the homepage needed {v} seconds",
             "on my phone your homepage took {v} seconds before anything showed",
         ],
     },
@@ -27,7 +31,7 @@ FIRST_LINES = {
             "на екрані телефону сторінка не вміщається, читати можна лише зі збільшенням",
         ],
         "en": [
-            "I had to pinch-zoom to read anything, the text doesn't fit the screen",
+            "had to pinch-zoom to read anything, the text doesn't fit the screen",
             "on a phone the text runs off the screen and I had to scroll sideways",
             "your page doesn't fit a phone screen, I had to zoom in to read it",
         ],
@@ -52,21 +56,21 @@ FIRST_LINES = {
             "заповнив форму, після «Надіслати» не сталось нічого",
         ],
         "en": [
-            "I filled in your contact form, hit send, and the page just reloaded",
-            "I sent your contact form and got no confirmation, just a reload",
-            "I filled in the form on your site and nothing happened after send",
+            "filled in your contact form, hit send, and the page just reloaded",
+            "sent your contact form and got no confirmation, just a reload",
+            "filled in the form on your site and nothing happened after send",
         ],
     },
     "no_prices": {
         "uk": [
-            "шукав ціни на {v} — на сайті їх немає",
             "не знайшов на сайті цін на {v}",
-            "шукав, скільки коштує {v} — на сайті цього немає",
+            "цін на {v} на сайті немає",
+            "дивився, скільки коштує {v} — на сайті цього немає",
         ],
         "en": [
-            "I looked for {v} pricing and couldn't find it anywhere",
-            "I couldn't find what {v} costs anywhere on the site",
-            "your site doesn't list prices for {v}",
+            "opened your site and couldn't find {v} pricing anywhere",
+            "couldn't find what {v} costs anywhere on your site",
+            "checked your site for {v} pricing and found nothing",
         ],
     },
     "stale": {
@@ -119,6 +123,88 @@ FIRST_LINES = {
     },
 }
 
+# «Сайта нет» — единственный тип, где зачин не приклеивается к хвосту, а
+# входит в строку целиком: смотреть на сайте нечего, и вся фраза строится
+# вокруг самого поиска. Хвосты выше остаются для ниш вне таблицы форм.
+NO_SITE_LINES = {
+    "uk": [
+        "Шукав {niche} {city} — вашого сайту в Google не знайшов, тільки {v}",
+        "Шукав {niche} {city}: сайту в Google і Google Maps немає, "
+        "знайшов тільки {v}",
+        "Шукав {niche} {city} — замість сайту знайшов тільки {v}",
+    ],
+    "en": [
+        "I was looking for {niche} in {city} and couldn't find a site of "
+        "yours, only {v}",
+        "I searched for {niche} in {city}, and the only thing that came up "
+        "for you was {v}",
+        "I was looking for {niche} in {city}, found {v} but no site of your own",
+    ],
+}
+
+# Ниша в той форме, в какой она стоит в зачине. В карточке она записана
+# по-русски (ключи — config.NICHES), а письму нужен винительный падеж или
+# английский артикль; ниша вне таблицы остаётся без зачина.
+NICHE_FORMS = {
+    "Стоматология": {"uk": "стоматолога", "en": "a dentist"},
+    "Автосервис": {"uk": "автосервіс", "en": "an auto repair shop"},
+    "Кафе/ресторан": {"uk": "де поїсти", "en": "a place to eat"},
+    "Юрист": {"uk": "юриста", "en": "a lawyer"},
+    "Салон красоты": {"uk": "салон краси", "en": "a beauty salon"},
+    "Гостиница": {"uk": "готель", "en": "a hotel"},
+    "Строительство": {"uk": "будівельників", "en": "a builder"},
+}
+
+# Зачин возвращает письму два якоря карточки — город и нишу, — которых у
+# голого хвоста нет. Вариант выбирается по hash(lead_id) % 2, независимо от
+# варианта хвоста (там % 3): пары не повторяются от лида к лиду.
+OPENERS = {
+    "uk": ["Шукав {niche} {city}", "Вибирав {niche} {city}"],
+    "en": ["I was looking for {niche} in {city}",
+           "While looking for {niche} in {city}, I"],
+}
+# Второй английский зачин кончается на «, I»: запятая в нём уже стоит, и хвост
+# приклеивается пробелом, иначе в строке оказались бы две запятые подряд.
+GLUED_OPENER_END = ", I"
+
+# Местный падеж города — таблицей, а не правилом: «Кривий Ріг» → «у Кривому
+# Розі» и «Ужгород» → «в Ужгороді» из именительного алгоритмом не выводятся.
+# Ключи — как город пишут в карточке, включая русские написания. Город вне
+# таблицы получает «у місті {как введено}»: неверный падеж в первой же строке
+# письма читается хуже нейтрального оборота.
+_LOCATIVES = (
+    ("у Києві", ("Київ", "Киев")),
+    ("у Харкові", ("Харків", "Харьков")),
+    ("в Одесі", ("Одеса", "Одесса")),
+    ("у Дніпрі", ("Дніпро", "Днепр")),
+    ("у Львові", ("Львів", "Львов")),
+    ("у Запоріжжі", ("Запоріжжя", "Запорожье")),
+    ("у Кривому Розі", ("Кривий Ріг", "Кривой Рог")),
+    ("у Миколаєві", ("Миколаїв", "Николаев")),
+    ("у Вінниці", ("Вінниця", "Винница")),
+    ("у Полтаві", ("Полтава",)),
+    ("у Чернігові", ("Чернігів", "Чернигов")),
+    ("у Черкасах", ("Черкаси", "Черкассы")),
+    ("у Житомирі", ("Житомир",)),
+    ("у Сумах", ("Суми", "Сумы")),
+    ("у Хмельницькому", ("Хмельницький", "Хмельницкий")),
+    ("в Ужгороді", ("Ужгород",)),
+    ("у Чернівцях", ("Чернівці", "Черновцы")),
+    ("у Рівному", ("Рівне", "Ровно")),
+    ("в Івано-Франківську", ("Івано-Франківськ", "Ивано-Франковск")),
+    ("у Тернополі", ("Тернопіль", "Тернополь")),
+    ("у Луцьку", ("Луцьк", "Луцк")),
+    ("у Кропивницькому", ("Кропивницький", "Кропивницкий")),
+    ("у Херсоні", ("Херсон",)),
+    ("у Мукачеві", ("Мукачево",)),
+    ("у Броварах", ("Бровари",)),
+    ("в Ірпені", ("Ірпінь", "Ирпень")),
+    ("у Білій Церкві", ("Біла Церква", "Белая Церковь")),
+    ("у Кам'янці-Подільському", ("Кам'янець-Подільський", "Каменец-Подольский")),
+)
+CITY_LOCATIVE = {name.lower(): form
+                 for form, names in _LOCATIVES for name in names}
+
 # Тема письма: 3–6 слов, без спам-слов и без обещаний. Она не должна выдавать
 # содержание — только повод открыть.
 SUBJECTS = {
@@ -155,13 +241,41 @@ def variant(lead_id: int, options: list) -> str:
     return options[hash(lead_id) % len(options)]
 
 
+def niche_form(lead, lang: str | None = None) -> str:
+    """Ниша в форме для зачина. Пусто — ниши нет в таблице, зачина не будет."""
+    lang = lang or lang_of(lead)
+    return NICHE_FORMS.get((lead.niche or "").strip(), {}).get(lang or "", "")
+
+
+def uk_locative(city: str) -> str:
+    """Город в местном падеже вместе с предлогом: «у Києві», «в Ужгороді»."""
+    city = (city or "").strip()
+    return CITY_LOCATIVE.get(city.lower(), f"у місті {city}")
+
+
 def first_line(lead) -> str:
-    """Первая строка письма из наблюдения. Пустая строка — фразы не нашлось."""
+    """Первая строка письма: зачин из карточки плюс хвост из наблюдения.
+
+    Пустая строка — фразы не нашлось.
+    """
     lang = lang_of(lead)
-    options = FIRST_LINES.get(lead.gap_type or "", {}).get(lang or "")
+    if lang is None:
+        return ""
+    niche = niche_form(lead, lang)
+    if niche and lead.gap_type == "no_site":
+        return _fill(_place(variant(lead.id, NO_SITE_LINES[lang]), lead, lang,
+                            niche), lead.gap_value)
+    options = FIRST_LINES.get(lead.gap_type or "", {}).get(lang)
     if not options:
         return ""
-    return _fill(variant(lead.id, options), lead.gap_value)
+    tail = _fill(variant(lead.id, options), lead.gap_value)
+    if not niche:
+        # Ниши нет в таблице форм — зачин собрать не из чего, и письмо
+        # начинается хвостом, как до появления зачинов.
+        return tail[0].upper() + tail[1:]
+    opener = _place(variant(lead.id, OPENERS[lang]), lead, lang, niche)
+    glue = " " if opener.endswith(GLUED_OPENER_END) else ", "
+    return opener + glue + tail
 
 
 def subject(lead) -> str:
@@ -169,6 +283,15 @@ def subject(lead) -> str:
     if lang not in SUBJECTS:
         return ""
     return variant(lead.id, SUBJECTS[lang]).format(name=(lead.name or "").strip())
+
+
+def _place(template: str, lead, lang: str, niche: str) -> str:
+    """Подстановка ниши и города. Через replace, чтобы не трогать {v}: он
+    подставляется отдельно и может прийти из карточки с любыми символами."""
+    city = (lead.city or "").strip()
+    if lang == "uk":
+        city = uk_locative(city)
+    return template.replace("{niche}", niche).replace("{city}", city)
 
 
 def _fill(template: str, value: str | None) -> str:
