@@ -17,6 +17,7 @@ BTN_A_CANCELLED = "🗑 Отменённые"
 BTN_A_WORKERS = "👥 Работники"
 BTN_A_BROADCAST = "📢 Написать всем"
 BTN_A_CSV = "📤 Выгрузить CSV"
+BTN_A_PAYOUTS = "💵 Начисления"
 
 
 def worker_menu():
@@ -39,7 +40,8 @@ def admin_menu():
             [KeyboardButton(text=BTN_MY), KeyboardButton(text=BTN_A_STATS)],
             [KeyboardButton(text=BTN_A_ALL), KeyboardButton(text=BTN_A_SEARCH)],
             [KeyboardButton(text=BTN_A_CANCELLED), KeyboardButton(text=BTN_A_WORKERS)],
-            [KeyboardButton(text=BTN_A_BROADCAST), KeyboardButton(text=BTN_A_CSV)],
+            [KeyboardButton(text=BTN_A_PAYOUTS), KeyboardButton(text=BTN_A_BROADCAST)],
+            [KeyboardButton(text=BTN_A_CSV)],
         ],
         resize_keyboard=True,
     )
@@ -291,6 +293,8 @@ def workers_kb(workers, offset, total):
 def worker_card_kb(worker):
     b = InlineKeyboardBuilder()
     b.button(text="⚙️ Изменить лимит", callback_data=f"wlm:{worker.id}")
+    b.button(text=f"💰 Комиссия {worker.commission_pct}%",
+             callback_data=f"wcm:{worker.id}")
     b.button(
         text="✅ Включить" if not worker.is_active else "🚫 Отключить",
         callback_data=f"wof:{worker.id}",
@@ -306,6 +310,43 @@ def worker_delete_kb(worker_id):
     b.button(text="🗑 Да, удалить", callback_data=f"wdy:{worker_id}")
     b.button(text="⬅️ Отмена", callback_data=f"wcd:{worker_id}")
     b.adjust(1)
+    return b.as_markup()
+
+
+# --- начисления (7.14) --------------------------------------------------------
+
+def payouts_kb(workers):
+    """workers — пары (id, имя): в сводке достаточно их, целые строки не нужны."""
+    b = InlineKeyboardBuilder()
+    for wid, name in workers:
+        b.button(text=name, callback_data=f"pwk:{wid}")
+    b.adjust(1)
+    tail = InlineKeyboardBuilder()
+    tail.button(text="📤 CSV начислений", callback_data="pcs:0")
+    tail.adjust(1)
+    b.attach(tail)
+    return b.as_markup()
+
+
+def sales_kb(sales):
+    """Одна кнопка на продажу — следующий её шаг, и только он.
+
+    «Выплачено» до «Деньги пришли» не рисуем вовсе: начисление действительно
+    только после оплаты клиентом, и кнопка, которой нельзя нажать, — обман.
+    """
+    b = InlineKeyboardBuilder()
+    for sale in sales:
+        if sale.received_at is None:
+            b.button(text=f"💰 #{sale.id} деньги пришли",
+                     callback_data=f"prc:{sale.id}")
+        elif sale.paid_at is None:
+            b.button(text=f"✅ #{sale.id} выплачено",
+                     callback_data=f"ppd:{sale.id}")
+    b.adjust(1)
+    tail = InlineKeyboardBuilder()
+    tail.button(text="⬅️ Ко всем начислениям", callback_data="pay:0")
+    tail.adjust(1)
+    b.attach(tail)
     return b.as_markup()
 
 

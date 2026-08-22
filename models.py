@@ -1,10 +1,11 @@
 import hashlib
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer,
-    Numeric, String, Text, UniqueConstraint, and_, func, or_, select, text,
+    Numeric, SmallInteger, String, Text, UniqueConstraint, and_, func, or_,
+    select, text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.exc import IntegrityError
@@ -51,6 +52,11 @@ VERSION_AUTHORS = ["model", "human"]
 # деплоя Worker: автоматической публикации превью в конвейере нет.
 # Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
 BUILD_STATUSES = ["generated", "published", "failed", "expired"]
+# Комиссия работника, % от суммы сделки (7.9). Границы — решение основателя
+# «15–30%»; они же стоят CHECK-констрейнтом и на workers, и на строке продажи.
+COMMISSION_MIN, COMMISSION_MAX = 15, 30
+DEFAULT_COMMISSION_PCT = 20
+PCT_RANGE = f"BETWEEN {COMMISSION_MIN} AND {COMMISSION_MAX}"
 # Черновик живёт 30 дней — ровно столько письмо 3 обещает его держать
 # (email_gen.DRAFT_HOLD_DAYS). Разъедутся — письмо станет враньём.
 DRAFT_TTL_DAYS = 30
@@ -84,8 +90,19 @@ class Worker(Base, TimesMixin):
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     daily_limit: Mapped[int | None] = mapped_column(Integer)
+    # процент работника на сегодня; в продаже он не участвует — там лежит копия
+    # на момент сделки (7.13), поэтому смена % задним числом ничего не переписывает
+    commission_pct: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=DEFAULT_COMMISSION_PCT,
+        server_default=str(DEFAULT_COMMISSION_PCT),
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(f"commission_pct {PCT_RANGE}",
+                        name="ck_workers_commission_pct"),
+    )
 
 
 async def _load_admin_worker() -> Worker | None:
@@ -317,6 +334,72 @@ class ClientService(Base, TimesMixin):
         Index("ix_client_services_lead_id", "lead_id"),
         Index("ix_client_services_status", "status"),
     )
+
+
+class Sale(Base, TimesMixin):
+    """Продажа сайта и начисление работнику (7.12–7.13).
+
+    Три момента времени, и они не совпадают: строка создана (лид переведён в
+    sold) → received_at (клиент заплатил) → paid_at (работник получил своё).
+    Агентский договор начисляет вознаграждение «за фактом надходження коштів»,
+    поэтому действительным начисление становится только со второго момента.
+
+    rate_pct — копия workers.commission_pct на момент сделки, а не ссылка:
+    смена процента работнику не должна переписывать историю уже закрытых сделок.
+    """
+    __tablename__ = "sales"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("leads.id"), nullable=False
+    )
+    worker_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("workers.id"), nullable=False
+    )
+    deal_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(
+        Text, nullable=False, default="USD", server_default="USD"
+    )
+    rate_pct: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    amount_due: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(f"rate_pct {PCT_RANGE}", name="ck_sales_rate_pct"),
+        CheckConstraint("deal_amount > 0", name="ck_sales_deal_amount"),
+        # одна продажа на лид: повторный перевод в sold не должен начислять
+        # работнику второй раз за ту же сделку
+        UniqueConstraint("lead_id", name="uq_sales_lead"),
+        Index("ix_sales_worker_id", "worker_id"),
+        Index("ix_sales_created_at", "created_at"),
+    )
+
+
+class CommissionChange(Base, TimesMixin):
+    """История смен процента работника (7.10): кто, когда, было → стало.
+
+    Отдельная таблица, а не lead_events: события лидов — про лидов, а процент —
+    про работника, и ни к какому лиду эта запись не привязывается.
+    """
+    __tablename__ = "commission_changes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    worker_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("workers.id"), nullable=False
+    )
+    old_pct: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    new_pct: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    changed_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (Index("ix_commission_changes_worker_id", "worker_id"),)
+
+
+def commission_due(deal_amount: Decimal, rate_pct: int) -> Decimal:
+    """Начисление работнику. Считается один раз — при записи продажи."""
+    return (deal_amount * rate_pct / 100).quantize(Decimal("0.01"),
+                                                   rounding=ROUND_HALF_UP)
 
 
 class Suppression(Base, TimesMixin):

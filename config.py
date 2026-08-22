@@ -139,11 +139,16 @@ CONTACT_TYPE_LABELS = dict(CONTACT_TYPES) | {"other": "Другое"}
 STATUSES = [
     ("raw", "Скаут: сырой"), ("candidate", "Скаут: кандидат"),
     ("new", "Новый"), ("verified", "Проверен"), ("draft_ready", "Черновик готов"),
-    ("sent", "Отправлено"), ("replied", "Ответил"), ("sold", "Продано"),
+    ("sent", "Отправлено"), ("replied", "Ответил"),
+    # отдельно от replied: ответ бывает и «спасибо, не надо». Пара счётчиков
+    # replied / replied_interested и есть та воронка, по которой видно, работает
+    # ли письмо, а не только доставка (7.19)
+    ("replied_interested", "Заинтересован"), ("sold", "Продано"),
     ("refused", "Отказ"), ("rejected", "Отклонён"),
 ]
 STATUS_LABELS = dict(STATUSES)
-ACCEPTED_STATUSES = ["verified", "draft_ready", "sent", "replied", "sold", "refused"]
+ACCEPTED_STATUSES = ["verified", "draft_ready", "sent", "replied",
+                     "replied_interested", "sold", "refused"]
 
 # Типы разрыва (Д12 §2): по одному на лид, каждый обязывает к своему артефакту —
 # числу, цитате, скриншоту или паре значений. Подписи кнопок — из Д12 §2.

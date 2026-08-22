@@ -474,9 +474,9 @@ async def test_approved_card_survives_the_hook(model, gap_lead):
 
 
 def test_stop_statuses_are_a_list_not_a_condition():
-    # replied_interested из раздела 7 дописывается сюда одной строкой
-    assert set(qs.STOP_LEAD_STATUSES) == {"replied", "sold", "refused",
-                                          "rejected"}
+    # replied_interested раздела 7 добавился сюда строкой, как и задумывалось
+    assert set(qs.STOP_LEAD_STATUSES) == {"replied", "replied_interested",
+                                          "sold", "refused", "rejected"}
     assert all(s in config.STATUS_LABELS for s in qs.STOP_LEAD_STATUSES)
 
 

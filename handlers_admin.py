@@ -12,7 +12,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
@@ -27,7 +27,8 @@ from handlers_worker import (
     local, pick, safe_edit, send_screenshot,
 )
 from models import (
-    ClientService, Contact, CostLedger, Lead, LeadEvent, Session, Worker,
+    COMMISSION_MAX, COMMISSION_MIN, ClientService, CommissionChange, Contact,
+    CostLedger, Lead, LeadEvent, Sale, Session, Worker, commission_due,
     day_start, log_event, month_start,
 )
 from scout.niches import NICHE_TAGS
@@ -43,6 +44,13 @@ ACTIVE = (Lead.cancelled_at.is_(None), Lead.deleted_at.is_(None))
 # В статистике по работникам и в фильтре «Работник» он при этом остаётся —
 # иначе свои компании не найти.
 NOT_ADMIN = Worker.tg_id != config.ADMIN_TG_ID
+# «у лида есть живой email» одним EXISTS — так же, как это считает 7.19 в SQL
+HAS_EMAIL = (
+    select(Contact.id).where(
+        Contact.lead_id == Lead.id, Contact.ctype == "email",
+        Contact.deleted_at.is_(None), Contact.lead_cancelled_at.is_(None),
+    ).exists()
+)
 
 
 async def guard_admin_row(cb: CallbackQuery, wid: int) -> bool:
@@ -67,6 +75,8 @@ class Adm(StatesGroup):
     note = State()
     draft = State()
     limit = State()
+    commission = State()
+    sale = State()
     broadcast = State()
     letter = State()
 
@@ -104,8 +114,31 @@ async def stats(message: Message, state: FSMContext):
             .group_by(Worker.id, Worker.name)
             .order_by(func.count(Lead.id).desc())
         )
+        verified = await s.scalar(
+            select(func.count()).select_from(Lead)
+            .where(*ACTIVE, Lead.status == "verified")
+        )
+        with_email = await s.scalar(
+            select(func.count()).select_from(Lead)
+            .where(*ACTIVE, Lead.status == "verified", HAS_EMAIL)
+        )
+        by_status = dict((await s.execute(
+            select(Lead.status, func.count(Lead.id)).where(*ACTIVE)
+            .where(Lead.status.in_(("replied", "replied_interested")))
+            .group_by(Lead.status)
+        )).all())
     lines = [f"Всего: {total}", f"За сегодня: {today}", f"За 7 дней: {week}", "", "По работникам:"]
     lines += [f"  {esc(name)}: {cnt}" for name, cnt in rows] or ["  —"]
+    # 7.19: без доли лидов с email не видно главной утечки воронки — письмо
+    # некуда отправить; пара replied/replied_interested показывает, работает ли
+    # само письмо, а не только доставка
+    share = f" ({round(100 * with_email / verified)}%)" if verified else ""
+    lines += [
+        "",
+        f"Проверенных: {verified}, с email-контактом: {with_email}{share}",
+        f"Ответили: {by_status.get('replied', 0)} · "
+        f"заинтересованы: {by_status.get('replied_interested', 0)}",
+    ]
     await message.answer("\n".join(lines))
 
 
@@ -655,7 +688,7 @@ async def status_menu(cb: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("stv:"))
-async def status_set(cb: CallbackQuery):
+async def status_set(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split(":")
     if len(parts) != 3 or parts[2] not in config.STATUS_LABELS:
         await cb.answer("Неизвестный статус", show_alert=True)
@@ -693,6 +726,114 @@ async def status_set(cb: CallbackQuery):
         f"#{lead_id}: {config.STATUS_LABELS.get(old, old)} → "
         f"{config.STATUS_LABELS.get(new, new)}"
     )
+    if new == "sold":
+        await _ask_sale(cb.message, state, lead_id)
+
+
+# --- продажа и начисление (7.12–7.15) ----------------------------------------
+#
+# Продажа записывается ровно один раз на лид: повторный перевод в sold не
+# начисляет работнику второй раз за ту же сделку (UNIQUE lead_id). Процент
+# копируется в строку продажи на этот момент — последующая смена комиссии
+# работнику старые начисления не переписывает (7.13).
+
+MAX_DEAL_AMOUNT = 10 ** 8  # столько не влезет в Numeric(10,2)
+
+
+def parse_deal(raw: str) -> tuple[Decimal, str] | None:
+    """«120» или «120 EUR» → (сумма, валюта). None — ввод не разобран."""
+    parts = raw.replace(",", ".").split()
+    if not 1 <= len(parts) <= 2:
+        return None
+    try:
+        amount = Decimal(parts[0])
+    except InvalidOperation:
+        return None
+    # is_finite отсекает «NaN» и «Infinity»: Decimal их принимает молча
+    if not amount.is_finite() or not 0 < amount < MAX_DEAL_AMOUNT:
+        return None
+    if -amount.as_tuple().exponent > 2:
+        return None
+    currency = parts[1].upper() if len(parts) == 2 else "USD"
+    if not (currency.isascii() and currency.isalpha() and len(currency) <= 8):
+        return None
+    return amount, currency
+
+
+async def _ask_sale(target: Message, state: FSMContext, lead_id: int):
+    async with Session() as s:
+        sale = await s.scalar(select(Sale).where(Sale.lead_id == lead_id))
+    if sale is not None:
+        await target.answer(
+            f"Продажа по #{lead_id} уже записана: "
+            f"{sale.deal_amount:.2f} {esc(sale.currency)}, начисление "
+            f"{sale.amount_due:.2f} {esc(sale.currency)}."
+        )
+        return
+    await state.set_state(Adm.sale)
+    await state.update_data(lead_id=lead_id)
+    await target.answer(
+        f"Сумма сделки по #{lead_id}: например «120» или «120 EUR» "
+        "(без валюты — USD).",
+        reply_markup=kb.cancel_kb(),
+    )
+
+
+@router.message(Adm.sale)
+async def sale_save(message: Message, state: FSMContext):
+    deal = parse_deal(message.text or "")
+    if deal is None:
+        await message.answer(
+            "Нужна сумма больше нуля, максимум два знака после запятой: "
+            "«120» или «120 EUR».",
+            reply_markup=kb.cancel_kb(),
+        )
+        return
+    amount, currency = deal
+    d = await state.get_data()
+    await state.clear()
+    lead_id = d.get("lead_id", 0)
+    async with Session() as s:
+        lead = await s.get(Lead, lead_id)
+        worker = await s.get(Worker, lead.worker_id) if lead else None
+    if lead is None or lead.deleted_at or worker is None:
+        await message.answer("Лид недоступен, продажа не записана.")
+        return
+    rate = worker.commission_pct
+    due = commission_due(amount, rate)
+    try:
+        async with Session() as s, s.begin():
+            s.add(Sale(lead_id=lead_id, worker_id=worker.id, deal_amount=amount,
+                       currency=currency, rate_pct=rate, amount_due=due))
+            log_event(s, lead_id, "sale_add", message.from_user.id,
+                      field="deal_amount", new=f"{amount} {currency}")
+    except IntegrityError:
+        # uq_sales_lead: второе «Продано» по тому же лиду успело записаться
+        await message.answer(f"Продажа по #{lead_id} уже записана.")
+        return
+    log.info("sale on lead %s: %s %s at %s%%", lead_id, amount, currency, rate)
+    await message.answer(
+        f"💰 Продажа по #{lead_id} записана: {amount:.2f} {esc(currency)}.\n"
+        f"Начисление {esc(worker.name)}: {rate}% — {due:.2f} {esc(currency)}.\n"
+        "Подтвердится отметкой «Деньги пришли» в разделе «Начисления»."
+    )
+    await _notify_sale(message, lead, worker, amount, currency, rate, due)
+
+
+async def _notify_sale(target: Message, lead, worker, amount, currency,
+                       rate, due):
+    """7.15: работник узнаёт о своей продаже сразу — и сразу же честно о том,
+    что деньги считаются начисленными только после оплаты клиентом."""
+    if worker.tg_id == config.ADMIN_TG_ID:
+        return  # свою же продажу админ только что увидел ответом на ввод
+    text = (f"💰 Продажа по #{lead.id} {esc(lead.name)}: "
+            f"{amount:.2f} {esc(currency)}.\n"
+            f"Твоя комиссия {rate}% — {due:.2f} {esc(currency)}.\n"
+            "Начисление подтвердится после того, как клиент оплатит счёт.")
+    try:
+        await target.bot.send_message(worker.tg_id, text)
+    except Exception as e:
+        log.warning("новость о продаже не дошла до tg=%s: %s", worker.tg_id, e)
 
 
 @router.callback_query(F.data.startswith("hst:"))
@@ -1106,16 +1247,27 @@ async def worker_card(cb: CallbackQuery):
             select(func.count()).select_from(Lead)
             .where(*ACTIVE, Lead.worker_id == wid, Lead.created_at >= day_start())
         )
+        changes = list(await s.scalars(
+            select(CommissionChange).where(CommissionChange.worker_id == wid)
+            .order_by(CommissionChange.id.desc()).limit(3)
+        ))
     limit = worker.daily_limit if worker.daily_limit is not None else config.DEFAULT_DAILY_LIMIT
-    await cb.answer()
-    await cb.message.answer(
-        f"<b>{esc(worker.name)}</b>\ntg id: {worker.tg_id}\n"
-        f"Добавлено: {total}, сегодня: {today}\n"
-        f"Лимит: {limit}{'' if worker.daily_limit is not None else ' (по умолчанию)'}\n"
-        f"Статус: {'активен' if worker.is_active else 'отключён'}\n"
+    lines = [
+        f"<b>{esc(worker.name)}</b>", f"tg id: {worker.tg_id}",
+        f"Добавлено: {total}, сегодня: {today}",
+        f"Лимит: {limit}"
+        f"{'' if worker.daily_limit is not None else ' (по умолчанию)'}",
+        f"Комиссия: {worker.commission_pct}%",
+        f"Статус: {'активен' if worker.is_active else 'отключён'}",
         f'<a href="tg://user?id={worker.tg_id}">Открыть в Telegram</a>',
-        reply_markup=kb.worker_card_kb(worker),
-    )
+    ]
+    if changes:
+        lines.append("\nСмены комиссии:")
+        lines += [f"  {local(c.created_at)}: {c.old_pct}% → {c.new_pct}% "
+                  f"— tg {c.changed_by}" for c in changes]
+    await cb.answer()
+    await cb.message.answer("\n".join(lines),
+                            reply_markup=kb.worker_card_kb(worker))
 
 
 @router.callback_query(F.data.startswith("wlm:"))
@@ -1158,6 +1310,52 @@ async def worker_limit_save(message: Message, state: FSMContext):
     await message.answer(
         f"Лимит: {value}" if value else "Лимит сброшен на значение по умолчанию."
     )
+
+
+@router.callback_query(F.data.startswith("wcm:"))
+async def worker_commission_ask(cb: CallbackQuery, state: FSMContext):
+    wid = await cb_id(cb)
+    if wid is None or not await guard_admin_row(cb, wid):
+        return
+    await state.set_state(Adm.commission)
+    await state.update_data(worker_id=wid)
+    await cb.answer()
+    await cb.message.answer(
+        f"Новая комиссия работника, {COMMISSION_MIN}–{COMMISSION_MAX}%. "
+        "Уже записанные продажи не изменятся — в них процент зафиксирован.",
+        reply_markup=kb.cancel_kb(),
+    )
+
+
+@router.message(Adm.commission)
+async def worker_commission_save(message: Message, state: FSMContext):
+    raw = (message.text or "").strip().rstrip("%").strip()
+    if not raw.isdecimal() or not COMMISSION_MIN <= int(raw) <= COMMISSION_MAX:
+        await message.answer(
+            f"Нужно число от {COMMISSION_MIN} до {COMMISSION_MAX}:",
+            reply_markup=kb.cancel_kb(),
+        )
+        return
+    value = int(raw)
+    d = await state.get_data()
+    async with Session() as s, s.begin():
+        worker = await s.get(Worker, d.get("worker_id", 0))
+        if worker is None:
+            await state.clear()
+            await message.answer("Работник не найден.")
+            return
+        old = worker.commission_pct
+        if old != value:
+            worker.commission_pct = value
+            s.add(CommissionChange(worker_id=worker.id, old_pct=old,
+                                   new_pct=value,
+                                   changed_by=message.from_user.id))
+    await state.clear()
+    if old == value:
+        await message.answer(f"Комиссия и так {value}%.")
+        return
+    log.info("worker %s commission %s%% -> %s%%", worker.id, old, value)
+    await message.answer(f"Комиссия: {old}% → {value}%.")
 
 
 @router.callback_query(F.data.startswith("wof:"))
@@ -1208,6 +1406,136 @@ async def worker_delete(cb: CallbackQuery):
     await cb.answer("Удалено")
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer(f"{esc(name)} удалён, доступ к боту закрыт.")
+
+
+# --- начисления (7.14) --------------------------------------------------------
+#
+# Три корзины, и порядок между ними — договор с работником: пока клиент не
+# заплатил, начисление только ожидается; выплатить можно лишь то, что уже
+# пришло. Суммы разводятся по валютам — складывать доллары с евро нельзя.
+
+WAITING = Sale.received_at.is_(None)
+DUE = and_(Sale.received_at.isnot(None), Sale.paid_at.is_(None))
+PAID = Sale.paid_at.isnot(None)
+
+
+def _bucket(cond):
+    return func.coalesce(func.sum(case((cond, Sale.amount_due), else_=0)), 0)
+
+
+@router.message(F.text == kb.BTN_A_PAYOUTS)
+async def payouts(message: Message, state: FSMContext):
+    await state.set_state(None)
+    await _payouts_summary(message)
+
+
+@router.callback_query(F.data.startswith("pay:"))
+async def payouts_back(cb: CallbackQuery):
+    await cb.answer()
+    await _payouts_summary(cb.message)
+
+
+async def _payouts_summary(target: Message):
+    async with Session() as s:
+        rows = (await s.execute(
+            select(Worker.id, Worker.name, Sale.currency,
+                   _bucket(WAITING), _bucket(DUE), _bucket(PAID))
+            .join(Sale, Sale.worker_id == Worker.id)
+            .group_by(Worker.id, Worker.name, Sale.currency)
+            .order_by(Worker.name, Sale.currency)
+        )).all()
+    if not rows:
+        await target.answer("Продаж пока нет.")
+        return
+    lines = ["<b>💵 Начисления</b>"]
+    workers = {}
+    for wid, name, currency, waiting, due, paid in rows:
+        workers.setdefault(wid, name)
+        lines += [
+            f"\n<b>{esc(name)}</b> — {esc(currency)}",
+            f"  ждёт оплаты клиентом: {waiting:.2f}",
+            f"  к выплате: {due:.2f}",
+            f"  выплачено: {paid:.2f}",
+        ]
+    await target.answer("\n".join(lines),
+                        reply_markup=kb.payouts_kb(workers.items()))
+
+
+@router.callback_query(F.data.startswith("pwk:"))
+async def payouts_worker(cb: CallbackQuery):
+    wid = await cb_id(cb)
+    if wid is None:
+        return
+    await cb.answer()
+    await _payouts_worker(cb.message, wid)
+
+
+async def _payouts_worker(target: Message, wid: int):
+    async with Session() as s:
+        worker = await s.get(Worker, wid)
+        rows = (await s.execute(
+            select(Sale, Lead.name).join(Lead, Lead.id == Sale.lead_id)
+            .where(Sale.worker_id == wid)
+            .order_by(Sale.id.desc()).limit(config.PAGE_SIZE)
+        )).all()
+    if worker is None:
+        await target.answer("Работник не найден.")
+        return
+    if not rows:
+        await target.answer(f"У {esc(worker.name)} продаж нет.")
+        return
+    lines = [f"<b>💵 {esc(worker.name)}</b>"]
+    for sale, lead_name in rows:
+        lines += [
+            f"\n#{sale.id} · лид #{sale.lead_id} {esc(lead_name)}",
+            f"  {sale.deal_amount:.2f} {esc(sale.currency)} × {sale.rate_pct}% "
+            f"= {sale.amount_due:.2f} {esc(sale.currency)}",
+            f"  деньги: {local(sale.received_at) if sale.received_at else '—'}"
+            f" · выплата: {local(sale.paid_at) if sale.paid_at else '—'}",
+        ]
+    await target.answer("\n".join(lines),
+                        reply_markup=kb.sales_kb([s for s, _ in rows]))
+
+
+@router.callback_query(F.data.startswith("prc:"))
+async def sale_received(cb: CallbackQuery):
+    await _mark_sale(cb, "received")
+
+
+@router.callback_query(F.data.startswith("ppd:"))
+async def sale_paid(cb: CallbackQuery):
+    await _mark_sale(cb, "paid")
+
+
+async def _mark_sale(cb: CallbackQuery, kind: str):
+    """Обе отметки идемпотентны: повторное нажатие не двигает дату и не пишет
+    второе событие. Кнопка живёт в чате вечно, а нажать её могут дважды."""
+    sale_id = await cb_id(cb)
+    if sale_id is None:
+        return
+    async with Session() as s, s.begin():
+        sale = await s.get(Sale, sale_id, with_for_update=True)
+        if sale is None:
+            await cb.answer(STALE, show_alert=True)
+            return
+        wid = sale.worker_id
+        if kind == "paid" and sale.received_at is None:
+            await cb.answer("Сначала отметьте, что деньги пришли",
+                            show_alert=True)
+            return
+        already = getattr(sale, f"{kind}_at") is not None
+        if not already:
+            now = datetime.now(config.TZ)
+            setattr(sale, f"{kind}_at", now)
+            log_event(s, sale.lead_id, f"sale_{kind}", cb.from_user.id,
+                      field=f"sale#{sale.id}", new=local(now))
+    if already:
+        await cb.answer("Уже отмечено")
+    else:
+        log.info("sale %s marked %s by tg_id=%s", sale_id, kind,
+                 cb.from_user.id)
+        await cb.answer("Отмечено")
+    await _payouts_worker(cb.message, wid)
 
 
 # --- рассылка ----------------------------------------------------------------
@@ -1322,6 +1650,66 @@ async def export_csv(message: Message, state: FSMContext):
             FSInputFile(path, filename="companies.csv"),
             caption=f"Записей: {rows_written}"
                     + (" (по текущим фильтрам)" if filtered else ""),
+        )
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+# CSV начислений (7.16) — заготовка данных акта агента: договор требует, чтобы
+# вознаграждение подтверждалось отчётом с количественными показателями.
+# Период — месяц продажи; он же колонка, по которой отчёт режется на акты.
+PAYOUTS_CSV_HEADER = [
+    "id", "период", "дата", "работник", "лид", "компания", "сумма_сделки",
+    "валюта", "процент", "начисление", "деньги_пришли", "выплачено", "заметка",
+]
+
+
+def month_key(dt: datetime) -> str:
+    return dt.astimezone(config.TZ).strftime("%Y-%m")
+
+
+@router.callback_query(F.data.startswith("pcs:"))
+async def export_payouts_csv(cb: CallbackQuery):
+    await cb.answer()
+    fd, path = tempfile.mkstemp(suffix=".csv", prefix="tobisite_payouts_")
+    os.close(fd)
+    rows_written = 0
+    try:
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(PAYOUTS_CSV_HEADER)
+            last_id = 0
+            while True:
+                async with Session() as s:
+                    rows = (await s.execute(
+                        select(Sale, Worker.name, Lead.name)
+                        .join(Worker, Worker.id == Sale.worker_id)
+                        .join(Lead, Lead.id == Sale.lead_id)
+                        .where(Sale.id > last_id).order_by(Sale.id).limit(500)
+                    )).all()
+                if not rows:
+                    break
+                for sale, worker_name, lead_name in rows:
+                    writer.writerow([csv_safe(v) for v in (
+                        sale.id, month_key(sale.created_at),
+                        local(sale.created_at), worker_name, sale.lead_id,
+                        lead_name, f"{sale.deal_amount:.2f}", sale.currency,
+                        sale.rate_pct, f"{sale.amount_due:.2f}",
+                        local(sale.received_at) if sale.received_at else "",
+                        local(sale.paid_at) if sale.paid_at else "",
+                        sale.note or "",
+                    )])
+                    rows_written += 1
+                last_id = rows[-1][0].id
+        if not rows_written:
+            await cb.message.answer("Продаж пока нет — выгружать нечего.")
+            return
+        await cb.message.answer_document(
+            FSInputFile(path, filename="payouts.csv"),
+            caption=f"Начислений: {rows_written}",
         )
     finally:
         try:

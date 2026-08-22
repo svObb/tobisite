@@ -9,7 +9,7 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
@@ -18,7 +18,7 @@ import keyboards as kb
 import queue_service
 from dedup import normalize_domain, normalize_phone
 from models import (
-    Contact, Lead, LeadEvent, Session, Worker, constraint_of, day_start,
+    Contact, Lead, LeadEvent, Sale, Session, Worker, constraint_of, day_start,
     dup_message, gap_age_days, gap_repeated, gap_stale, log_event,
 )
 
@@ -1259,11 +1259,30 @@ async def my_stats(message: Message, state: FSMContext, worker: Worker):
         # для остатка лимита — used_today, а не today: в квоте отменённые
         # считаются, в статистике «за сегодня» — нет
         used = await used_today(s, worker.id)
+        # начисления по валютам: складывать доллары с евро нельзя, а продажа
+        # в другой валюте однажды случится
+        payouts = (await s.execute(
+            select(Sale.currency,
+                   func.coalesce(func.sum(case(
+                       (Sale.paid_at.is_(None), Sale.amount_due), else_=0)), 0),
+                   func.coalesce(func.sum(case(
+                       (Sale.paid_at.isnot(None), Sale.amount_due), else_=0)), 0))
+            .where(Sale.worker_id == worker.id, Sale.received_at.isnot(None))
+            .group_by(Sale.currency).order_by(Sale.currency)
+        )).all()
     limit = worker.daily_limit if worker.daily_limit is not None else config.DEFAULT_DAILY_LIMIT
-    await message.answer(
-        f"Всего добавлено: {total}\nЗа сегодня: {today}\nЗа 7 дней: {week}\n"
-        f"Принято: {accepted}\nОсталось по лимиту сегодня: {max(0, limit - used)}"
-    )
+    lines = [
+        f"Всего добавлено: {total}", f"За сегодня: {today}",
+        f"За 7 дней: {week}", f"Принято: {accepted}",
+        f"Осталось по лимиту сегодня: {max(0, limit - used)}",
+        f"Комиссия: {worker.commission_pct}%",
+    ]
+    # только оплаченные клиентом: показывать «к выплате» до прихода денег —
+    # обещание, которого мы не давали (7.15)
+    for currency, due, paid in payouts:
+        lines.append(f"Начислено {esc(currency)}: к выплате {due:.2f}, "
+                     f"выплачено {paid:.2f}")
+    await message.answer("\n".join(lines))
 
 
 @router.message(F.text == kb.BTN_HELP)
