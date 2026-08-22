@@ -43,6 +43,16 @@ SCOUT_DAILY_RAW_LIMIT = int(os.getenv("SCOUT_DAILY_RAW_LIMIT", "50"))
 # Ключ не обязателен: без него квота ~1 запрос/сек с IP, нашим объёмам хватает.
 PSI_MAX_PER_RUN = int(os.getenv("PSI_MAX_PER_RUN", "5"))
 PAGESPEED_API_KEY = (os.getenv("PAGESPEED_API_KEY") or "").strip()
+# Ключ Anthropic для генерации писем и слотов черновиков. Необязательный:
+# без него генерация недоступна и лид уходит в ручную ветку — фолбэка на
+# выдумывание текста нет и не будет.
+ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+# Подпись и юридические строки письма (Д12 §1, слой 0). Настоящий почтовый
+# адрес появится после подключения M365 — до тех пор заглушка, и это ещё одна
+# причина, по которой письма наружу не уходят.
+SIGNATURE_NAME = (os.getenv("SIGNATURE_NAME") or "").strip()
+SIGNATURE_COMPANY = (os.getenv("SIGNATURE_COMPANY") or "").strip()
+POSTAL_ADDRESS = (os.getenv("POSTAL_ADDRESS") or "").strip()
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Kyiv"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")

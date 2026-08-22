@@ -18,6 +18,7 @@ import itertools
 import os
 import pathlib
 import time
+from datetime import datetime
 from types import SimpleNamespace
 
 # раньше ЛЮБОГО импорта проекта: config читает окружение на импорте
@@ -120,6 +121,71 @@ def make_lead(worker_id):
         )
         s.add(lead)
         await s.flush()
+        return lead
+
+    return _make
+
+
+# --- генерация писем ----------------------------------------------------------
+#
+# Сети в тестах писем нет: клиент модели подменяется фальшивкой, которая отдаёт
+# заранее заданные ответы и запоминает, с чем её позвали. Реальный API не
+# дёргается ни разу — ни ключа, ни денег, ни писем наружу.
+
+
+class FakeMessages:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    async def create(self, **kw):
+        self.calls.append(kw)
+        text = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=text)],
+            usage=SimpleNamespace(input_tokens=120, output_tokens=60,
+                                  cache_read_input_tokens=1800,
+                                  cache_creation_input_tokens=0),
+        )
+
+
+@pytest.fixture
+def model(monkeypatch):
+    """model(ответ, ...) — подменяет клиента и заполняет подпись как на бою."""
+    import config
+    import email_gen
+
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "pytest-key")
+    monkeypatch.setattr(config, "SIGNATURE_NAME", "Микола Тобі")
+    monkeypatch.setattr(config, "SIGNATURE_COMPANY", "tobisite")
+    monkeypatch.setattr(config, "POSTAL_ADDRESS", "вулиця Соборна 12, Київ")
+
+    def _install(*replies):
+        fake = SimpleNamespace(messages=FakeMessages(replies))
+        monkeypatch.setattr(email_gen, "_client", fake)
+        return fake
+
+    return _install
+
+
+@pytest.fixture
+def gap_lead(make_lead):
+    """Лид со свежим наблюдением: то, из чего письмо вообще можно собрать."""
+    import config
+    from models import Session
+
+    async def _make(**kw):
+        # имени контакта в схеме пока нет — оно придёт с обогащением карточки
+        contact_name = kw.pop("contact_name", "Олена")
+        async with Session() as s, s.begin():
+            lead = await make_lead(
+                s, gap_type=kw.pop("gap_type", "slow"),
+                gap_value=kw.pop("gap_value", "8"),
+                gap_captured_at=kw.pop("gap_captured_at",
+                                       datetime.now(config.TZ)),
+                **kw,
+            )
+        lead.contact_name = contact_name
         return lead
 
     return _make
