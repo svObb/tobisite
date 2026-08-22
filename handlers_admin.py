@@ -664,6 +664,16 @@ async def status_set(cb: CallbackQuery):
         if not lead or lead.deleted_at:
             await cb.answer("Запись недоступна", show_alert=True)
             return
+        # то же самое стоит CHECK-констрейнтом в базе, но человеку нужен не
+        # IntegrityError, а понятная причина и кнопка, которой это чинится
+        if new == "verified" and not lead.gap_type:
+            await cb.answer()
+            await cb.message.answer(
+                f"Сначала сними наблюдение по #{lead_id}: без него лид "
+                "непригоден для письма.",
+                reply_markup=kb.regap_kb(lead_id),
+            )
+            return
         old = lead.status
         lead.status = new
         log_event(s, lead_id, "status_change", cb.from_user.id, "status", old, new)

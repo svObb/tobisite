@@ -32,7 +32,8 @@ def tag() -> str:
 
 async def test_dashboard_matches_direct_queries(admin, make_lead):
     async with Session() as s, s.begin():
-        lead = await make_lead(s, status="verified")
+        # verified без наблюдения не пускает ck_leads_verified_needs_gap
+        lead = await make_lead(s, status="verified", gap_type="slow", gap_value="8")
         s.add(ClientService(lead_id=lead.id, service_id="gbp-optimization",
                             price_usd=Decimal("70.00")))
         s.add(CostLedger(op="draft", model="pytest-dash", cost_usd=Decimal("2.50"),

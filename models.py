@@ -1,9 +1,10 @@
+import hashlib
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer,
-    Numeric, Text, func, select, text,
+    Numeric, String, Text, UniqueConstraint, and_, func, or_, select, text,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -11,6 +12,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import NullPool
 
 import config
+import gap_validation
 
 _engine_kwargs = dict(
     connect_args=config.CONNECT_ARGS,  # см. config.POOLED_DB
@@ -34,6 +36,12 @@ COST_OPS = ["scout", "classify", "draft", "letter", "qa", "other"]
 # Статусы подписки клиента на доп-услугу (16.13). Новый статус = запись здесь
 # + миграция CHECK-констрейнта, как у статусов лида.
 CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]
+GAP_TYPE_KEYS = [k for k, _ in config.GAP_TYPES]
+# Что заносится в suppression (7.22): хеш почты, домен, компания «имя+город».
+SUPPRESSION_KINDS = ["email_hash", "domain", "company"]
+# Наблюдение живёт 14 дней: сайт могли починить, и «8 секунд» превратится
+# в ложное утверждение в коммерческом письме конкретному юрлицу (Д12 §2).
+GAP_TTL_DAYS = 14
 
 
 def in_list(col: str, values) -> str:
@@ -133,12 +141,28 @@ class Lead(Base, TimesMixin):
     )
     admin_note: Mapped[str | None] = mapped_column(Text)
     draft_url: Mapped[str | None] = mapped_column(Text)
+    # наблюдение (Д12 §2): один разрыв на лид, без него лид непригоден для
+    # персонализации касания 1. Имена полей зафиксированы — параллельных
+    # fact_line / human_observation не заводить
+    gap_type: Mapped[str | None] = mapped_column(String(32))
+    gap_value: Mapped[str | None] = mapped_column(String(160))
+    gap_note: Mapped[str | None] = mapped_column(String(120))
+    gap_screenshot: Mapped[str | None] = mapped_column(Text)
+    gap_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    gap_seconds: Mapped[int | None] = mapped_column(Integer)
+    gap_auto_verified: Mapped[bool | None] = mapped_column(Boolean)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_by: Mapped[int | None] = mapped_column(BigInteger)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(in_list("status", LEAD_STATUS_KEYS), name="ck_leads_status"),
+        CheckConstraint(in_list("gap_type", GAP_TYPE_KEYS), name="ck_leads_gap_type"),
+        # «без наблюдения лид не идёт в рассылку» на уровне БД, а не
+        # договорённости. В боевой миграции констрейнт NOT VALID: строки,
+        # собранные до наблюдения, проверять нечем
+        CheckConstraint("status <> 'verified' OR gap_type IS NOT NULL",
+                        name="ck_leads_verified_needs_gap"),
         Index(
             "uq_leads_domain_norm_active", "domain_norm",
             unique=True,
@@ -266,6 +290,91 @@ class ClientService(Base, TimesMixin):
         Index("ix_client_services_lead_id", "lead_id"),
         Index("ix_client_services_status", "status"),
     )
+
+
+class Suppression(Base, TimesMixin):
+    """Кому мы больше не пишем (7.22): отписки, жалобы, ручные запреты.
+
+    Три пространства значений сразу: почта — только хешем (сам адрес хранить
+    незачем), домен — как в domain_norm, компания — «имя|город». Проверяется
+    один раз перед сборкой письма, suppression_hit().
+    """
+    __tablename__ = "suppression"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    value_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(in_list("kind", SUPPRESSION_KINDS), name="ck_suppression_kind"),
+        UniqueConstraint("kind", "value_norm", name="uq_suppression_kind_value"),
+    )
+
+
+def email_key(value: str) -> str:
+    return hashlib.sha256(value.strip().lower().encode()).hexdigest()
+
+
+def company_key(name: str, city: str) -> str:
+    return f"{(name or '').strip().lower()}|{(city or '').strip().lower()}"
+
+
+async def suppression_hit(session, lead) -> bool:
+    """Лид в стоп-листе хотя бы по одному из трёх пространств значений."""
+    pairs = [("company", company_key(lead.name, lead.city))]
+    if lead.domain_norm:
+        pairs.append(("domain", lead.domain_norm))
+    emails = await session.scalars(
+        select(Contact.value).where(
+            Contact.lead_id == lead.id,
+            Contact.ctype == "email",
+            Contact.deleted_at.is_(None),
+        )
+    )
+    pairs += [("email_hash", email_key(v)) for v in emails]
+    return bool(await session.scalar(
+        select(Suppression.id).where(or_(*[
+            and_(Suppression.kind == k, Suppression.value_norm == v)
+            for k, v in pairs
+        ])).limit(1)
+    ))
+
+
+def gap_age_days(lead) -> int | None:
+    if not lead.gap_captured_at:
+        return None
+    now = datetime.now(lead.gap_captured_at.tzinfo)
+    return (now - lead.gap_captured_at).days
+
+
+def gap_stale(lead) -> bool:
+    """Наблюдению больше GAP_TTL_DAYS — писать по нему уже нельзя, надо переснять."""
+    age = gap_age_days(lead)
+    return age is not None and age > GAP_TTL_DAYS
+
+
+async def gap_repeated(session, worker_id: int, gap_type: str, value: str | None,
+                       note: str | None, exclude_lead_id: int | None = None) -> bool:
+    """Такое же наблюдение уже есть среди последних 30 лидов этого работника.
+
+    Правило 4 Д12 §2: копипаста одной и той же фразы по десятку карточек —
+    самый дешёвый способ халтуры и самый дорогой по последствиям (факт в письме
+    оказывается чужим). Сам переснимаемый лид из сравнения исключается: сайт
+    мог не измениться, и повторить прежнее значение — честный ответ.
+    """
+    target = gap_validation.copypaste_hash(gap_type, value, note)
+    if target is None:
+        return False
+    conditions = [Lead.worker_id == worker_id, Lead.gap_type.isnot(None)]
+    if exclude_lead_id is not None:
+        conditions.append(Lead.id != exclude_lead_id)
+    rows = await session.execute(
+        select(Lead.gap_type, Lead.gap_value, Lead.gap_note)
+        .where(*conditions).order_by(Lead.id.desc()).limit(30)
+    )
+    return any(gap_validation.copypaste_hash(t, v, n) == target for t, v, n in rows)
 
 
 class LeadEvent(Base, TimesMixin):

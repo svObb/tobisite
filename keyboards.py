@@ -144,10 +144,21 @@ def admin_saved_kb(lead_id):
     return b.as_markup()
 
 
+BTN_REGAP = "📸 Переснять наблюдение"
+
+
+def regap_kb(lead_id):
+    b = InlineKeyboardBuilder()
+    b.button(text=BTN_REGAP, callback_data=f"rgp:{lead_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def my_card_kb(lead_id, can_edit, can_cancel):
     b = InlineKeyboardBuilder()
     if can_edit:
         b.button(text="✏️ Редактировать", callback_data=f"led:{lead_id}")
+    b.button(text=BTN_REGAP, callback_data=f"rgp:{lead_id}")
     if can_cancel:
         b.button(text="🚫 Отменить отправку", callback_data=f"lcx:{lead_id}")
     b.button(text="⬅️ К списку", callback_data="mlp:0")
@@ -158,6 +169,7 @@ def my_card_kb(lead_id, can_edit, can_cancel):
 def admin_card_kb(lead_id):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Редактировать", callback_data=f"led:{lead_id}")
+    b.button(text=BTN_REGAP, callback_data=f"rgp:{lead_id}")
     b.button(text="🔄 Сменить статус", callback_data=f"sts:{lead_id}")
     b.button(text="🔗 Ссылка на черновик", callback_data=f"drf:{lead_id}")
     b.button(text="📝 Моя заметка", callback_data=f"anz:{lead_id}")

@@ -1,5 +1,6 @@
 import html
 import logging
+import time
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
@@ -12,11 +13,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
+import gap_validation as gv
 import keyboards as kb
 from dedup import normalize_domain, normalize_phone
 from models import (
     Contact, Lead, LeadEvent, Session, Worker, constraint_of, day_start,
-    dup_message, log_event,
+    dup_message, gap_age_days, gap_repeated, gap_stale, log_event,
 )
 
 log = logging.getLogger(__name__)
@@ -134,8 +136,11 @@ def fmt_lead(lead: Lead, contacts, *, author=None, edits=0, admin=False) -> str:
         f"Рейтинг: {esc(lead.google_rating)}",
         f"Где нашли: {esc(lead.found_via)}",
         f"Заметка: {esc(lead.note)}",
-        "Контакты:",
+        f"Наблюдение: {esc(gv.gap_line(lead.gap_type, lead.gap_value, lead.gap_note))}",
     ]
+    if gap_stale(lead):
+        lines.append(f"⚠️ наблюдению {gap_age_days(lead)} дней — переснимите")
+    lines.append("Контакты:")
     for c in contacts:
         lines.append(f"  • {esc(contact_label(c))}: {esc(c.value)}")
     if not contacts:
@@ -172,11 +177,18 @@ def fmt_summary(d: dict) -> str:
         f"Заметка: {esc(d.get('note'))}",
         f"Скриншот: {'есть' if d.get('screenshot_file_id') else 'нет'}",
         f"Где нашли: {esc(d['found_via'])}",
+        f"Наблюдение: {esc(gv.gap_line(d.get('gap_type'), d.get('gap_value'), d.get('gap_note')))}",
         "Контакты:",
     ]
     for c in d["contacts"]:
         name = c["ctype_other"] or config.CONTACT_TYPE_LABELS.get(c["ctype"], c["ctype"])
         lines.append(f"  • {esc(name)}: {esc(c['value'])}")
+    # связку «расхождение телефонов ↔ телефон в карточке» раньше проверить негде:
+    # контакты в форме идут после наблюдения. Поэтому мягко, предупреждением
+    if d.get("gap_type") == "contact_mismatch" and not any(
+        c["ctype"] == "phone" for c in d["contacts"]
+    ):
+        lines.append("⚠️ Наблюдение о расхождении телефонов, а телефона в контактах нет.")
     return "\n".join(lines)
 
 
@@ -314,6 +326,11 @@ async def reg_name(message: Message, state: FSMContext):
 class Add(StatesGroup):
     name = State()
     website = State()
+    # наблюдение стоит сразу за сайтом: в этот момент работник физически держит
+    # сайт открытым, и вспоминать ему ничего не надо (Д12 §2)
+    gap_type = State()
+    gap_value = State()
+    gap_note = State()
     source_url = State()
     country = State()
     country_other = State()
@@ -371,7 +388,7 @@ async def add_start(message: Message, state: FSMContext, worker: Worker | None,
     # set_data, а не update_data: иначе повторный вход в форму тащит за собой
     # поля прошлой попытки
     await state.set_data({"contacts": []})
-    await message.answer("1/12. Название компании:", reply_markup=kb.cancel_kb())
+    await message.answer("1/14. Название компании:", reply_markup=kb.cancel_kb())
 
 
 @add_router.message(Add.name)
@@ -382,21 +399,197 @@ async def add_name(message: Message, state: FSMContext):
         return
     await state.update_data(name=name)
     await state.set_state(Add.website)
-    await message.answer("2/12. Ссылка на сайт:", reply_markup=kb.website_kb())
+    await message.answer("2/14. Ссылка на сайт:", reply_markup=kb.website_kb())
 
 
 async def _after_website(target: Message, state: FSMContext):
     d = await state.get_data()
     if d.get("resume_confirm"):
         # сюда вернулись из _commit_and_reply после дубля сайта: остальная
-        # форма уже заполнена, гонять человека по шагам 3–12 заново незачем
+        # форма уже заполнена, гонять человека по шагам 3–14 заново незачем
         await _show_summary(target, state)
         return
+    await _ask_gap_type(target, state, Add, "3/14. ")
+
+
+async def _ask_source(target: Message, state: FSMContext):
     await state.set_state(Add.source_url)
     await target.answer(
-        "3/12. Ссылка на источник (Google Maps, соцсеть, каталог):",
+        "5/14. Ссылка на источник (Google Maps, соцсеть, каталог):",
         reply_markup=kb.cancel_kb(),
     )
+
+
+# --- наблюдение (Д12 §2) -----------------------------------------------------
+#
+# Один и тот же диалог живёт в двух местах: в форме Add сразу после сайта (в
+# этот момент работник физически держит сайт открытым) и в «Переснять
+# наблюдение» на карточке. Отсюда параметр states — группа состояний
+# вызывающего сценария — и prefix с номером шага, которого у переснятия нет.
+
+GAP_LABELS = [label for _, label in config.GAP_TYPES]
+
+
+def gap_type_kb():
+    # «Другое» здесь нет намеренно: свободное поле «опиши проблему» и есть тот
+    # источник мусора, ради которого весь шаг затеян (Д12 §2)
+    return kb.choices_kb(GAP_LABELS, "gp", other=False, per_row=3)
+
+
+def gap_value_prompt(gap_type: str):
+    options = gv.CHOICE_OPTIONS.get(gap_type)
+    markup = (kb.choices_kb(options, "gv", other=False, per_row=3) if options
+              else kb.cancel_kb())
+    return gv.ask_value(gap_type), markup
+
+
+async def _ask_gap_type(target: Message, state: FSMContext, states, prefix=""):
+    # от этой отметки считаются и тайминг-чек (правило 6), и gap_seconds
+    await state.update_data(gap_at=time.time())
+    await state.set_state(states.gap_type)
+    await target.answer(prefix + gv.ASK_TYPE, reply_markup=gap_type_kb())
+
+
+async def _ask_gap_value(target: Message, state: FSMContext, states, gap_type,
+                         prefix="", error=""):
+    text, markup = gap_value_prompt(gap_type)
+    await state.set_state(states.gap_value)
+    head = f"{error}\n\n" if error else prefix
+    await target.answer(head + text, reply_markup=markup)
+
+
+async def _ask_gap_note(target: Message, state: FSMContext, states):
+    await state.set_state(states.gap_note)
+    await target.answer("Хочеш додати деталь? (необов'язково)",
+                        reply_markup=kb.skip_kb("gn"))
+
+
+async def _gap_type_chosen(target: Message, state: FSMContext, states, key,
+                           prefix=""):
+    pair = pick(config.GAP_TYPES, key)
+    if pair is None:
+        await target.answer(STALE)
+        return
+    gap_type = pair[0]
+    d = await state.get_data()
+    err = gv.type_error(gap_type, d.get("website_url"))
+    if err:
+        await target.answer(err, reply_markup=gap_type_kb())
+        return
+    started = d.get("gap_at")
+    await state.update_data(
+        gap_type=gap_type, gap_value=None, gap_note=None, gap_screenshot=None,
+        gap_too_fast=bool(started) and gv.too_fast(time.time() - started),
+    )
+    await _ask_gap_value(target, state, states, gap_type, prefix)
+
+
+async def _gap_value_given(target: Message, state: FSMContext, states, raw):
+    d = await state.get_data()
+    gap_type = d.get("gap_type")
+    if gap_type is None:
+        await target.answer(STALE)
+        return
+    if gap_type == gv.PHOTO_TYPE:
+        await _ask_gap_value(target, state, states, gap_type,
+                             error="Тут потрібен скриншот сторінки з телефону.")
+        return
+    value, err = gv.check_value(gap_type, raw)
+    if err:
+        await _ask_gap_value(target, state, states, gap_type, error=err)
+        return
+    await state.update_data(gap_value=value)
+    await _after_gap_value(target, state, states, gap_type, value)
+
+
+async def _after_gap_value(target: Message, state: FSMContext, states, gap_type,
+                           value):
+    await target.answer(f"✅ Записав: {esc(gv.gap_line(gap_type, value, None))}")
+    await _ask_gap_note(target, state, states)
+
+
+async def _finish_gap(target: Message, state: FSMContext, states, worker, is_admin):
+    """Общий хвост: правило 4, gap_seconds — и дальше по своему сценарию."""
+    d = await state.get_data()
+    if not d.get("gap_type"):
+        await target.answer(STALE)
+        return
+    async with Session() as s:
+        repeated = await gap_repeated(
+            s, worker.id, d.get("gap_type"), d.get("gap_value"), d.get("gap_note"),
+            exclude_lead_id=d.get("lead_id"),
+        )
+    if repeated:
+        await state.update_data(gap_note=None)
+        await _ask_gap_value(target, state, states, d["gap_type"],
+                             error=gv.COPYPASTE_ANSWER)
+        return
+    started = d.get("gap_at")
+    if started:
+        await state.update_data(gap_seconds=int(time.time() - started))
+    if states is Add:
+        await _ask_source(target, state)
+        return
+    await _save_regap(target, state, worker, is_admin)
+
+
+@add_router.callback_query(Add.gap_type, F.data.startswith("gp:"))
+async def add_gap_type(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    await _gap_type_chosen(cb.message, state, Add, cb.data.split(":")[1], "4/14. ")
+
+
+@add_router.callback_query(Add.gap_value, F.data.startswith("gv:"))
+async def add_gap_choice(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    d = await state.get_data()
+    value = pick(gv.CHOICE_OPTIONS.get(d.get("gap_type"), []), cb.data.split(":")[1])
+    if value is None:
+        await cb.message.answer(STALE)
+        return
+    await _gap_value_given(cb.message, state, Add, value)
+
+
+@add_router.message(Add.gap_value, F.photo)
+async def add_gap_photo(message: Message, state: FSMContext):
+    await _gap_photo(message, state, Add)
+
+
+@add_router.message(Add.gap_value)
+async def add_gap_value(message: Message, state: FSMContext):
+    await _gap_value_given(message, state, Add, message.text or "")
+
+
+async def _gap_photo(message: Message, state: FSMContext, states):
+    d = await state.get_data()
+    gap_type = d.get("gap_type")
+    if gap_type is None:
+        await message.answer(STALE)
+        return
+    if gap_type != gv.PHOTO_TYPE:
+        await _ask_gap_value(message, state, states, gap_type,
+                             error="Для цього типу потрібен не скриншот, а відповідь.")
+        return
+    await state.update_data(gap_screenshot=message.photo[-1].file_id)
+    await _after_gap_value(message, state, states, gap_type, None)
+
+
+@add_router.callback_query(Add.gap_note, F.data == "gn:skip")
+async def add_gap_note_skip(cb: CallbackQuery, state: FSMContext, worker: Worker,
+                            is_admin: bool):
+    await cb.answer()
+    await _finish_gap(cb.message, state, Add, worker, is_admin)
+
+
+@add_router.message(Add.gap_note)
+async def add_gap_note(message: Message, state: FSMContext, worker: Worker,
+                       is_admin: bool):
+    note, err = gv.check_note(message.text or "")
+    if err:
+        await message.answer(err, reply_markup=kb.skip_kb("gn"))
+        return
+    await state.update_data(gap_note=note)
+    await _finish_gap(message, state, Add, worker, is_admin)
 
 
 @add_router.callback_query(Add.website, F.data == "ws:none")
@@ -451,13 +644,13 @@ async def add_source(message: Message, state: FSMContext):
     await state.update_data(source_url=raw)
     await state.set_state(Add.country)
     await message.answer(
-        "4/12. Страна:", reply_markup=kb.choices_kb(COUNTRY_NAMES, "co")
+        "6/14. Страна:", reply_markup=kb.choices_kb(COUNTRY_NAMES, "co")
     )
 
 
 async def _ask_city(target: Message, state: FSMContext):
     await state.set_state(Add.city)
-    await target.answer("5/12. Город:", reply_markup=kb.cancel_kb())
+    await target.answer("7/14. Город:", reply_markup=kb.cancel_kb())
 
 
 @add_router.callback_query(Add.country, F.data.startswith("co:"))
@@ -495,13 +688,13 @@ async def add_city(message: Message, state: FSMContext):
     await state.update_data(city=val)
     await state.set_state(Add.language)
     await message.answer(
-        "6/12. Язык компании:", reply_markup=kb.choices_kb(config.LANGUAGES, "la")
+        "8/14. Язык компании:", reply_markup=kb.choices_kb(config.LANGUAGES, "la")
     )
 
 
 async def _ask_niche(target: Message, state: FSMContext):
     await state.set_state(Add.niche)
-    await target.answer("7/12. Ниша:", reply_markup=kb.choices_kb(config.NICHES, "ni"))
+    await target.answer("9/14. Ниша:", reply_markup=kb.choices_kb(config.NICHES, "ni"))
 
 
 @add_router.callback_query(Add.language, F.data.startswith("la:"))
@@ -533,7 +726,7 @@ async def add_language_other(message: Message, state: FSMContext):
 async def _ask_contact_type(target: Message, state: FSMContext):
     await state.set_state(Add.c_type)
     labels = [label for _, label in config.CONTACT_TYPES]
-    await target.answer("8/12. Тип контакта:", reply_markup=kb.choices_kb(labels, "ct"))
+    await target.answer("10/14. Тип контакта:", reply_markup=kb.choices_kb(labels, "ct"))
 
 
 @add_router.callback_query(Add.niche, F.data.startswith("ni:"))
@@ -683,7 +876,7 @@ async def _ask_rating(target: Message, state: FSMContext):
         return
     await state.set_state(Add.rating)
     await target.answer(
-        "9/12. Рейтинг Google и число отзывов:", reply_markup=kb.skip_kb("rt")
+        "11/14. Рейтинг Google и число отзывов:", reply_markup=kb.skip_kb("rt")
     )
 
 
@@ -701,7 +894,7 @@ async def add_more_next(cb: CallbackQuery, state: FSMContext):
 
 async def _ask_note(target: Message, state: FSMContext):
     await state.set_state(Add.note)
-    await target.answer("10/12. Заметка:", reply_markup=kb.skip_kb("nt"))
+    await target.answer("12/14. Заметка:", reply_markup=kb.skip_kb("nt"))
 
 
 @add_router.callback_query(Add.rating, F.data == "rt:skip")
@@ -718,7 +911,7 @@ async def add_rating(message: Message, state: FSMContext):
 
 async def _ask_screenshot(target: Message, state: FSMContext):
     await state.set_state(Add.screenshot)
-    await target.answer("11/12. Скриншот сайта (фото):", reply_markup=kb.skip_kb("sc"))
+    await target.answer("13/14. Скриншот сайта (фото):", reply_markup=kb.skip_kb("sc"))
 
 
 @add_router.callback_query(Add.note, F.data == "nt:skip")
@@ -736,7 +929,7 @@ async def add_note(message: Message, state: FSMContext):
 async def _ask_found_via(target: Message, state: FSMContext):
     await state.set_state(Add.found_via)
     await target.answer(
-        "12/12. Где нашли:", reply_markup=kb.choices_kb(config.FOUND_VIA, "fv")
+        "14/14. Где нашли:", reply_markup=kb.choices_kb(config.FOUND_VIA, "fv")
     )
 
 
@@ -795,7 +988,7 @@ async def add_redo(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await state.set_state(Add.name)
     await state.set_data({"contacts": []})
-    await cb.message.answer("1/12. Название компании:", reply_markup=kb.cancel_kb())
+    await cb.message.answer("1/14. Название компании:", reply_markup=kb.cancel_kb())
 
 
 class LimitReached(Exception):
@@ -820,9 +1013,17 @@ async def save_lead(d: dict, worker: Worker, possible_dup: bool, is_admin: bool)
             niche=d["niche"], google_rating=d.get("google_rating"), note=d.get("note"),
             screenshot_file_id=d.get("screenshot_file_id"), found_via=d["found_via"],
             possible_duplicate=possible_dup,
+            gap_type=d.get("gap_type"), gap_value=d.get("gap_value"),
+            gap_note=d.get("gap_note"), gap_screenshot=d.get("gap_screenshot"),
+            gap_captured_at=datetime.now(config.TZ) if d.get("gap_type") else None,
+            gap_seconds=d.get("gap_seconds"),
         )
         s.add(lead)
         await s.flush()
+        if d.get("gap_too_fast"):
+            # правило 6: не блокируем, но след остаётся — по нему видно, кто
+            # «смотрел сайт 20 секунд», не открывая его
+            log_event(s, lead.id, "observation_too_fast", worker.tg_id)
         for c in d["contacts"]:
             s.add(Contact(
                 lead_id=lead.id, ctype=c["ctype"], ctype_other=c["ctype_other"],
@@ -1134,6 +1335,121 @@ async def load_editable(session, lead_id, worker, is_admin):
     if lead.cancelled_at or lead.status != "new":
         return None
     return lead
+
+
+# --- переснять наблюдение ----------------------------------------------------
+#
+# Отдельная кнопка, а не поле в EDITABLE_FIELDS: наблюдение переснимается
+# целиком (тип, артефакт, время съёмки), а не правится по кусочкам. Нужно это
+# при TTL в 14 дней и после брака «наблюдение банальное» в очереди одобрения.
+
+class Regap(StatesGroup):
+    gap_type = State()
+    gap_value = State()
+    gap_note = State()
+
+
+async def load_regap(session, lead_id, worker, is_admin):
+    """Кому можно переснимать: админу — любой лид, работнику — свой неотменённый.
+
+    Ограничения load_editable по статусу здесь не годятся: переснимают как раз
+    старые лиды, которые давно вышли из «нового».
+    """
+    lead = await session.get(Lead, lead_id)
+    if not lead or lead.deleted_at:
+        return None
+    if is_admin:
+        return lead
+    if not worker or lead.worker_id != worker.id or lead.cancelled_at:
+        return None
+    return lead
+
+
+async def _save_regap(target: Message, state: FSMContext, worker, is_admin):
+    d = await state.get_data()
+    lead_id = d.get("lead_id")
+    async with Session() as s, s.begin():
+        lead = await load_regap(s, lead_id, worker, is_admin)
+        if lead is None:
+            await state.clear()
+            await target.answer("Запись недоступна.", reply_markup=kb.menu(is_admin))
+            return
+        old = gv.gap_line(lead.gap_type, lead.gap_value, lead.gap_note)
+        lead.gap_type = d["gap_type"]
+        lead.gap_value = d.get("gap_value")
+        lead.gap_note = d.get("gap_note")
+        lead.gap_screenshot = d.get("gap_screenshot")
+        lead.gap_captured_at = datetime.now(config.TZ)
+        lead.gap_seconds = d.get("gap_seconds")
+        # автопроверка (правило 7) считается по конкретному замеру, а замер новый
+        lead.gap_auto_verified = None
+        new = gv.gap_line(lead.gap_type, lead.gap_value, lead.gap_note)
+        log_event(s, lead_id, "gap_recapture", worker.tg_id, "gap_type", old, new)
+        if d.get("gap_too_fast"):
+            log_event(s, lead_id, "observation_too_fast", worker.tg_id)
+    await state.clear()
+    await target.answer(f"✅ Наблюдение по #{lead_id} обновлено: {esc(new)}",
+                        reply_markup=kb.menu(is_admin))
+
+
+@edit_router.callback_query(F.data.startswith("rgp:"))
+async def regap_start(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
+    async with Session() as s:
+        lead = await load_regap(s, lead_id, worker, is_admin)
+    if not lead:
+        await cb.answer("Запись недоступна", show_alert=True)
+        return
+    await state.clear()
+    await state.set_data({"lead_id": lead_id, "website_url": lead.website_url})
+    await cb.answer()
+    await cb.message.answer(f"Переснимаем наблюдение по #{lead_id}.")
+    await _ask_gap_type(cb.message, state, Regap)
+
+
+@edit_router.callback_query(Regap.gap_type, F.data.startswith("gp:"))
+async def regap_type(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    await _gap_type_chosen(cb.message, state, Regap, cb.data.split(":")[1])
+
+
+@edit_router.callback_query(Regap.gap_value, F.data.startswith("gv:"))
+async def regap_choice(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    d = await state.get_data()
+    value = pick(gv.CHOICE_OPTIONS.get(d.get("gap_type"), []), cb.data.split(":")[1])
+    if value is None:
+        await cb.message.answer(STALE)
+        return
+    await _gap_value_given(cb.message, state, Regap, value)
+
+
+@edit_router.message(Regap.gap_value, F.photo)
+async def regap_photo(message: Message, state: FSMContext):
+    await _gap_photo(message, state, Regap)
+
+
+@edit_router.message(Regap.gap_value)
+async def regap_value(message: Message, state: FSMContext):
+    await _gap_value_given(message, state, Regap, message.text or "")
+
+
+@edit_router.callback_query(Regap.gap_note, F.data == "gn:skip")
+async def regap_note_skip(cb: CallbackQuery, state: FSMContext, worker, is_admin: bool):
+    await cb.answer()
+    await _finish_gap(cb.message, state, Regap, worker, is_admin)
+
+
+@edit_router.message(Regap.gap_note)
+async def regap_note(message: Message, state: FSMContext, worker, is_admin: bool):
+    note, err = gv.check_note(message.text or "")
+    if err:
+        await message.answer(err, reply_markup=kb.skip_kb("gn"))
+        return
+    await state.update_data(gap_note=note)
+    await _finish_gap(message, state, Regap, worker, is_admin)
 
 
 @edit_router.callback_query(F.data.startswith("led:"))

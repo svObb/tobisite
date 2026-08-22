@@ -5,7 +5,8 @@
 config, а гейт в config.py не даст тестовой строке совпасть с боевой.
 
 Все объекты тестов помечены: работники — tg_id от TEST_TG_BASE, cost-записи —
-batch_id «pytest…», FSM-ключи — бот FSM_BOT_ID. По этим меткам чистка сносит
+batch_id «pytest…», строки suppression — source «pytest», FSM-ключи — бот
+FSM_BOT_ID. По этим меткам чистка сносит
 только своё — ручные данные в тестовой базе переживают прогон.
 
 Фикстуры, трогающие базу, — синхронные с asyncio.run: у каждого async-теста
@@ -43,7 +44,7 @@ from sqlalchemy import delete, select  # noqa: E402
 
 from models import (  # noqa: E402
     ClientService, Contact, CostLedger, FsmState, Lead, LeadEvent, Session,
-    Worker,
+    Suppression, Worker,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -69,6 +70,7 @@ async def _cleanup():
                 await s.execute(delete(Lead).where(Lead.id.in_(lids)))
             await s.execute(delete(Worker).where(Worker.id.in_(wids)))
         await s.execute(delete(CostLedger).where(CostLedger.batch_id.like("pytest%")))
+        await s.execute(delete(Suppression).where(Suppression.source.like("pytest%")))
         await s.execute(delete(FsmState).where(FsmState.key.like(f"{FSM_BOT_ID}:%")))
 
 
