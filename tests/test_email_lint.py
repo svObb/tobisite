@@ -7,6 +7,7 @@
 import email_fewshot
 import email_gen
 import email_lint
+import phrases
 from test_email_gen import EN_DRAFT, EN_JSON, UK_DRAFT, UK_JSON
 
 # Проходное украинское письмо — основа для кейсов: каждый тест портит ровно
@@ -183,6 +184,15 @@ def test_reference_letters_have_enough_anchors():
     # зачин вернул письму город и нишу — безличным оно больше не выглядит
     assert not any("якорей" in w for w in check().warns)
     assert not any("якорей" in w for w in check_en().warns)
+
+
+def test_every_uk_subject_keeps_the_anchors():
+    # тема — единственное место, где в украинском письме стоит название
+    # компании: любой из трёх вариантов обязан добирать письму четвёртый якорь
+    for template in phrases.SUBJECTS["uk"]:
+        subject = template.format(name="Клініка Здоров'я")
+        warns = check(subject=subject).warns
+        assert not any("якорей" in w for w in warns), subject
 
 
 def test_few_anchors_only_warn():

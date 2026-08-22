@@ -166,10 +166,14 @@ def my_card_kb(lead_id, can_edit, can_cancel):
     return b.as_markup()
 
 
-def admin_card_kb(lead_id):
+def admin_card_kb(lead_id, can_build=False):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Редактировать", callback_data=f"led:{lead_id}")
     b.button(text=BTN_REGAP, callback_data=f"rgp:{lead_id}")
+    # письмо собирается только по проверенному лиду: у остальных наблюдение
+    # либо не снято, либо ещё не подтверждено
+    if can_build:
+        b.button(text="✉️ Собрать письмо", callback_data=f"bld:{lead_id}")
     b.button(text="🔄 Сменить статус", callback_data=f"sts:{lead_id}")
     b.button(text="🔗 Ссылка на черновик", callback_data=f"drf:{lead_id}")
     b.button(text="📝 Моя заметка", callback_data=f"anz:{lead_id}")
@@ -185,6 +189,60 @@ def cancelled_card_kb(lead_id):
     b.button(text="♻️ Восстановить", callback_data=f"rst:{lead_id}")
     b.button(text="⬅️ К списку", callback_data="cxp:0")
     b.adjust(1)
+    return b.as_markup()
+
+
+# --- очередь одобрения (Д12 §6.2) --------------------------------------------
+
+def review_card_kb(draft_id, version_id):
+    """Кнопки карточки. Каждая несёт version_id: после правки старая кнопка
+    со старой версией не срабатывает (Д12 §6.5).
+
+    «Одобрить» — отдельным верхним рядом: нижний ряд это зона большого пальца
+    и случайных нажатий, и самая необратимая кнопка не должна быть самой
+    удобной. Подпись не «Отправить»: отправки в конвейере v1 нет вовсе.
+    """
+    ref = f"{draft_id}:{version_id}"
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Одобрить", callback_data=f"qok:{ref}")
+    b.adjust(1)
+    middle = InlineKeyboardBuilder()
+    middle.button(text="✏️ Правка", callback_data=f"qed:{ref}")
+    middle.button(text="🚫 Брак", callback_data=f"qrj:{ref}")
+    middle.adjust(2)
+    b.attach(middle)
+    bottom = InlineKeyboardBuilder()
+    bottom.button(text="⏭ Отложить", callback_data=f"qpp:{ref}")
+    bottom.button(text="🔎 Лид", callback_data=f"qld:{ref}")
+    bottom.button(text="⏸ Стоп", callback_data=f"qst:{ref}")
+    bottom.adjust(3)
+    b.attach(bottom)
+    return b.as_markup()
+
+
+def review_slots_kb(draft_id, version_id, slots):
+    ref = f"{draft_id}:{version_id}"
+    b = InlineKeyboardBuilder()
+    for key, label in slots:
+        b.button(text=label, callback_data=f"qsl:{ref}:{key}")
+    b.adjust(2)
+    tail = InlineKeyboardBuilder()
+    tail.button(text="⬅️ Назад", callback_data=f"qbk:{ref}")
+    tail.adjust(1)
+    b.attach(tail)
+    return b.as_markup()
+
+
+def review_reasons_kb(draft_id, version_id, reasons):
+    ref = f"{draft_id}:{version_id}"
+    b = InlineKeyboardBuilder()
+    for key, label in reasons:
+        b.button(text=label, callback_data=f"qrs:{ref}:{key}")
+    b.adjust(2)
+    tail = InlineKeyboardBuilder()
+    tail.button(text="⬅️ Назад", callback_data=f"qbk:{ref}")
+    tail.adjust(1)
+    b.attach(tail)
     return b.as_markup()
 
 

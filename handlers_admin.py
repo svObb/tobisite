@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 import config
 import costs
 import keyboards as kb
+import queue_service
 import services
 from handlers_worker import (
     STALE, cb_id, edits_count, esc, fmt_lead, get_contacts, is_url, list_text,
@@ -65,6 +66,7 @@ class Adm(StatesGroup):
     draft = State()
     limit = State()
     broadcast = State()
+    letter = State()
 
 
 @router.message(CommandStart())
@@ -587,7 +589,8 @@ async def show_card(target: Message, lead_id: int):
         edits = await edits_count(s, lead_id)
     shown = await send_screenshot(target, lead.screenshot_file_id)
     markup = (
-        kb.cancelled_card_kb(lead_id) if lead.cancelled_at else kb.admin_card_kb(lead_id)
+        kb.cancelled_card_kb(lead_id) if lead.cancelled_at
+        else kb.admin_card_kb(lead_id, can_build=lead.status == "verified")
     )
     text = fmt_lead(lead, contacts, author=author, edits=edits, admin=True)
     if not shown:
@@ -677,6 +680,11 @@ async def status_set(cb: CallbackQuery):
         old = lead.status
         lead.status = new
         log_event(s, lead_id, "status_change", cb.from_user.id, "status", old, new)
+        # автостоп цепочки (решение 5 этапа): ответ, продажа, отказ и
+        # отклонение снимают с очереди всё, что по этому лиду ещё не решено
+        if new in queue_service.STOP_LEAD_STATUSES:
+            await queue_service.cancel_drafts(s, lead_id, cb.from_user.id,
+                                              f"статус {new}")
     log.info("lead %s status %s -> %s", lead_id, old, new)
     await cb.answer("Статус изменён")
     await cb.message.answer(
@@ -745,6 +753,62 @@ async def draft_save(message: Message, state: FSMContext):
     await message.answer("Ссылка сохранена.")
 
 
+# --- сборка письма в очередь --------------------------------------------------
+#
+# Описание черновика вводится руками: draft_summary из site_factory появится в
+# фазе D, а выдумать его за админа код не имеет права — именно из этой строки
+# модель берёт ту единственную конкретную вещь, которую называет в offer.
+
+SUMMARY_MIN, SUMMARY_MAX = 3, 14
+
+
+@router.callback_query(F.data.startswith("bld:"))
+async def build_letter_ask(cb: CallbackQuery, state: FSMContext):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
+    async with Session() as s:
+        lead = await s.get(Lead, lead_id)
+    if not lead or lead.deleted_at or lead.cancelled_at:
+        await cb.answer(STALE, show_alert=True)
+        return
+    if lead.status != "verified":
+        await cb.answer("Письмо собирается только по проверенному лиду",
+                        show_alert=True)
+        return
+    await state.set_state(Adm.letter)
+    await state.update_data(lead_id=lead_id)
+    await cb.answer()
+    await cb.message.answer(
+        f"Что в черновике главной? {SUMMARY_MIN}–{SUMMARY_MAX} слов, "
+        "только то, что там действительно есть.\n"
+        "Например: одна страница, таблица цен, форма записи.",
+        reply_markup=kb.cancel_kb(),
+    )
+
+
+@router.message(Adm.letter)
+async def build_letter_run(message: Message, state: FSMContext):
+    summary = (message.text or "").strip()
+    if not SUMMARY_MIN <= len(summary.split()) <= SUMMARY_MAX:
+        await message.answer(f"Нужно {SUMMARY_MIN}–{SUMMARY_MAX} слов "
+                             "про то, что в черновике.",
+                             reply_markup=kb.cancel_kb())
+        return
+    d = await state.get_data()
+    await state.clear()
+    await message.answer("Собираю письмо…")
+    result = await queue_service.enqueue(
+        d.get("lead_id", 0), actor_tg_id=message.from_user.id,
+        draft_summary=summary,
+    )
+    if result.ok:
+        await message.answer("✉️ Письмо в очереди. Разобрать — /queue")
+        return
+    tail = "\nПисьмо придётся написать руками." if result.manual else ""
+    await message.answer(f"Не собралось: {esc(result.reason)}{tail}")
+
+
 @router.callback_query(F.data.startswith("anz:"))
 async def note_ask(cb: CallbackQuery, state: FSMContext):
     lead_id = await cb_id(cb)
@@ -787,6 +851,8 @@ async def delete_lead(cb: CallbackQuery):
         await s.execute(
             update(Contact).where(Contact.lead_id == lead_id).values(deleted_at=now)
         )
+        await queue_service.cancel_drafts(s, lead_id, cb.from_user.id,
+                                          "лид удалён")
         log_event(s, lead_id, "delete", cb.from_user.id)
     log.info("lead %s soft-deleted", lead_id)
     await cb.answer("Удалено")

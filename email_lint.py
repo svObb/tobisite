@@ -178,6 +178,15 @@ def lint(body: str, *, lang: str, slots: dict[str, str], anchors=(),
     return LintResult(ok=not fails, fails=fails, warns=warns)
 
 
+def word_count(text: str) -> int:
+    """Слов в тексте по тем же правилам, что считает линтер.
+
+    Наружу — потому что порог «прочитал слишком быстро» в очереди считается
+    от того же числа, что и метрики письма (Д12 §6.2).
+    """
+    return len(_words(text))
+
+
 def _ai_markers(generated: str, lang: str) -> list[str]:
     """Маркеры ИИ ищутся только в том, что написала модель (Д12 §5)."""
     if not generated:

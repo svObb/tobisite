@@ -94,6 +94,35 @@ def test_both_openers_glue_with_every_gap_type():
     assert len(seen) == 4
 
 
+def test_glued_opener_only_meets_verb_tails():
+    """«While looking …, I» продолжается глаголом; остальным — первый зачин."""
+    glued = "While looking for a dentist in Ужгород, I "
+    for gap_type, options in phrases.FIRST_LINES.items():
+        if gap_type == "no_site":
+            continue
+        verbal = phrases.EN_VERB_TAILS.get(gap_type, ())
+        for lead_id in range(6):
+            line = phrases.first_line(lead(
+                id=lead_id, gap_type=gap_type, language="Английский",
+                gap_value=GAP_VALUES.get(gap_type, "8"),
+            ))
+            if not line.startswith(glued):
+                continue
+            tail = line[len(glued):]
+            index = next(i for i, t in enumerate(options["en"])
+                         if tail.startswith(t.split("{")[0]))
+            assert index in verbal, (gap_type, tail)
+
+
+def test_verb_tails_start_with_a_verb():
+    verbs = ("opened", "checked", "had", "filled", "sent", "couldn't")
+    for gap_type, indexes in phrases.EN_VERB_TAILS.items():
+        for i in indexes:
+            tail = phrases.FIRST_LINES[gap_type]["en"][i]
+            assert tail.startswith(verbs), (gap_type, i, tail)
+    assert sum(len(v) for v in phrases.EN_VERB_TAILS.values()) == 9
+
+
 def test_no_site_lines_carry_their_own_opener():
     for lead_id in range(3):
         uk = phrases.first_line(lead(id=lead_id, gap_type="no_site",
@@ -146,6 +175,13 @@ def test_subject_templates_are_short_and_clean():
             assert 3 <= len(template.split()) <= 6, template
             low = template.lower()
             assert not any(word in low for word in SPAM_WORDS), template
+
+
+def test_every_uk_subject_carries_the_company_name():
+    # в украинском приветствии имени нет: без названия в теме письму не
+    # набрать четырёх якорей карточки
+    for template in phrases.SUBJECTS["uk"]:
+        assert "{name}" in template, template
 
 
 def test_subject_is_filled_and_deterministic():

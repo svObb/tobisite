@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 import config
 import gap_validation as gv
 import keyboards as kb
+import queue_service
 from dedup import normalize_domain, normalize_phone
 from models import (
     Contact, Lead, LeadEvent, Session, Worker, constraint_of, day_start,
@@ -1300,6 +1301,9 @@ async def cancel_lead(cb: CallbackQuery, worker: Worker):
             update(Contact).where(Contact.lead_id == lead_id)
             .values(lead_cancelled_at=now)
         )
+        # автостоп цепочки (решение 5 этапа): отменённому лиду письма не шлём
+        await queue_service.cancel_drafts(s, lead_id, cb.from_user.id,
+                                          "отмена отправки")
         log_event(s, lead_id, "cancel", cb.from_user.id)
     log.info("lead %s cancelled by tg_id=%s", lead_id, cb.from_user.id)
     await cb.answer()

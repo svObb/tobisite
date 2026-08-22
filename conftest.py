@@ -44,8 +44,8 @@ if not (os.getenv("TEST_DATABASE_URL") or (ROOT / ".env").exists()):
 from sqlalchemy import delete, select  # noqa: E402
 
 from models import (  # noqa: E402
-    ClientService, Contact, CostLedger, FsmState, Lead, LeadEvent, Session,
-    Suppression, Worker,
+    ClientService, Contact, CostLedger, FsmState, Lead, LeadEvent,
+    MessageDraft, MessageVersion, Session, Suppression, Worker,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -63,6 +63,15 @@ async def _cleanup():
                 select(Lead.id).where(Lead.worker_id.in_(wids))
             ))
             if lids:
+                # версии → карточки → лид: FK держит порядок удаления
+                dids = list(await s.scalars(
+                    select(MessageDraft.id).where(MessageDraft.lead_id.in_(lids))
+                ))
+                if dids:
+                    await s.execute(delete(MessageVersion)
+                                    .where(MessageVersion.draft_id.in_(dids)))
+                    await s.execute(delete(MessageDraft)
+                                    .where(MessageDraft.id.in_(dids)))
                 await s.execute(delete(LeadEvent).where(LeadEvent.lead_id.in_(lids)))
                 await s.execute(delete(CostLedger).where(CostLedger.lead_id.in_(lids)))
                 await s.execute(delete(Contact).where(Contact.lead_id.in_(lids)))

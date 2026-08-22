@@ -6,6 +6,7 @@ from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer,
     Numeric, String, Text, UniqueConstraint, and_, func, or_, select, text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -39,6 +40,13 @@ CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]
 GAP_TYPE_KEYS = [k for k, _ in config.GAP_TYPES]
 # Что заносится в suppression (7.22): хеш почты, домен, компания «имя+город».
 SUPPRESSION_KINDS = ["email_hash", "domain", "company"]
+# Состояния карточки в очереди одобрения (Д12 §6.5). Отправки в списке нет и
+# не будет до интеграции Instantly: конвейер v1 кончается на approved.
+# Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
+DRAFT_STATUSES = ["queued", "claimed", "approved", "rejected", "cancelled",
+                  "needs_manual"]
+# Кто написал версию текста: модель или человек в очереди (Д12 §6.5).
+VERSION_AUTHORS = ["model", "human"]
 # Наблюдение живёт 14 дней: сайт могли починить, и «8 секунд» превратится
 # в ложное утверждение в коммерческом письме конкретному юрлицу (Д12 §2).
 GAP_TTL_DAYS = 14
@@ -375,6 +383,78 @@ async def gap_repeated(session, worker_id: int, gap_type: str, value: str | None
         .where(*conditions).order_by(Lead.id.desc()).limit(30)
     )
     return any(gap_validation.copypaste_hash(t, v, n) == target for t, v, n in rows)
+
+
+class MessageDraft(Base, TimesMixin):
+    """Карточка очереди одобрения: одно касание одного лида (Д12 §6.5).
+
+    Лиз живёт прямо в строке (claimed_by/claimed_at/expires_at), отдельного
+    индекса клейма нет: карточку выдаёт один атомарный UPDATE с условием
+    «queued либо лиз истёк» — двое одну и ту же взять не могут.
+    """
+    __tablename__ = "message_drafts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("leads.id"), nullable=False
+    )
+    touch_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    channel: Mapped[str] = mapped_column(
+        Text, nullable=False, default="email", server_default="email"
+    )
+    lang: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="queued", server_default="queued"
+    )
+    claimed_by: Mapped[int | None] = mapped_column(BigInteger)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    shown_version_id: Mapped[int | None] = mapped_column(BigInteger)
+    # сколько лизов подряд истекло, ни разу не кончившись решением: на третьем
+    # карточку эскалируем админу (Д12 §6.5). Обнуляется любым решением
+    expired_leases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    __table_args__ = (
+        CheckConstraint(in_list("status", DRAFT_STATUSES),
+                        name="ck_message_drafts_status"),
+        # двойное нажатие не создаст второе письмо того же касания (Д12 §6.5)
+        UniqueConstraint("lead_id", "touch_number",
+                         name="uq_message_drafts_lead_touch"),
+        Index("ix_message_drafts_status", "status"),
+    )
+
+
+class MessageVersion(Base, TimesMixin):
+    """История текста карточки: что сгенерировано и что человек поправил.
+
+    Это обучающий сигнал раздела 7 Д12, а не журнал: по парам «модель →
+    человек» с diff_ratio от 0,3 собирается банк примеров, а prompt_version
+    позволяет считать метрики по версиям промпта.
+    """
+    __tablename__ = "message_versions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("message_drafts.id"), nullable=False
+    )
+    author: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str | None] = mapped_column(Text)
+    slots_json: Mapped[dict | None] = mapped_column(JSONB)
+    edited_slots: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # доля изменённого текста, 0 — не тронули, 1 — переписали заново
+    diff_ratio: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    prompt_version: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(in_list("author", VERSION_AUTHORS),
+                        name="ck_message_versions_author"),
+        Index("ix_message_versions_draft_id", "draft_id"),
+    )
 
 
 class LeadEvent(Base, TimesMixin):

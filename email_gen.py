@@ -272,6 +272,19 @@ def greeting(lang: str, name: str) -> str:
     return with_name.format(name=name) if name else without
 
 
+def compose_body(slots: dict) -> str:
+    """Тело письма из слотов. Порядок слоёв — Д12 §1, пустые слоты выпадают.
+
+    Отдельной функцией, потому что после правки слота в очереди письмо
+    пересобирается ровно этими же правилами (queue_service).
+    """
+    prose = " ".join(p for p in (slots.get("first_line"), slots.get("bridge"),
+                                 slots.get("offer")) if p)
+    return "\n\n".join(p for p in (slots.get("greeting"), prose,
+                                   slots.get("cta"), slots.get("signature"))
+                       if p)
+
+
 def anchors_of(lead) -> list[str]:
     """Якоря карточки для линтера: чем их меньше, тем безличнее письмо."""
     number = re.search(r"\d+", lead.gap_value or "")
@@ -397,12 +410,7 @@ def _assemble(lead, lang, first_line, slots) -> EmailResult:
     slots["cta"] = phrases.variant(lead.id, CTA[lang])
     slots["signature"] = signature(lang)
 
-    body = "\n\n".join(p for p in (
-        slots["greeting"],
-        " ".join((slots["first_line"], slots["bridge"], slots["offer"])),
-        slots["cta"],
-        slots["signature"],
-    ) if p)
+    body = compose_body(slots)
     subject = phrases.subject(lead)
     anchors = anchors_of(lead)
     result = email_lint.lint(body, lang=lang, slots=slots, anchors=anchors,

@@ -167,6 +167,17 @@ OPENERS = {
 # приклеивается пробелом, иначе в строке оказались бы две запятые подряд.
 GLUED_OPENER_END = ", I"
 
+# «…, I» продолжается глаголом и только им: с хвостом «on a phone the text runs
+# off the screen» вышло бы «While looking …, I on a phone the text runs…».
+# Хвосты не переписываем — вместо этого неглагольные всегда идут с первым
+# зачином. Индексы — номера вариантов в FIRST_LINES[тип]["en"].
+EN_VERB_TAILS = {
+    "slow": (0, 1),
+    "no_mobile": (0,),
+    "form_broken": (0, 1, 2),
+    "no_prices": (0, 1, 2),
+}
+
 # Местный падеж города — таблицей, а не правилом: «Кривий Ріг» → «у Кривому
 # Розі» и «Ужгород» → «в Ужгороді» из именительного алгоритмом не выводятся.
 # Ключи — как город пишут в карточке, включая русские написания. Город вне
@@ -210,7 +221,9 @@ CITY_LOCATIVE = {name.lower(): form
 SUBJECTS = {
     "uk": [
         "Коротко про сайт {name}",
-        "Кілька слів про ваш сайт",
+        # название компании несёт каждая uk-тема: имени в украинском
+        # приветствии нет, и без названия письму не хватает якорей
+        "Кілька слів про сайт {name}",
         "{name}: що я побачив",
     ],
     "en": [
@@ -237,8 +250,12 @@ def lang_of(lead) -> str | None:
     return _LANG_ALIASES.get((lead.language or "").strip().lower())
 
 
+def variant_index(lead_id: int, count: int) -> int:
+    return hash(lead_id) % count
+
+
 def variant(lead_id: int, options: list) -> str:
-    return options[hash(lead_id) % len(options)]
+    return options[variant_index(lead_id, len(options))]
 
 
 def niche_form(lead, lang: str | None = None) -> str:
@@ -268,12 +285,13 @@ def first_line(lead) -> str:
     options = FIRST_LINES.get(lead.gap_type or "", {}).get(lang)
     if not options:
         return ""
-    tail = _fill(variant(lead.id, options), lead.gap_value)
+    tail_index = variant_index(lead.id, len(options))
+    tail = _fill(options[tail_index], lead.gap_value)
     if not niche:
         # Ниши нет в таблице форм — зачин собрать не из чего, и письмо
         # начинается хвостом, как до появления зачинов.
         return tail[0].upper() + tail[1:]
-    opener = _place(variant(lead.id, OPENERS[lang]), lead, lang, niche)
+    opener = _place(_opener(lead, lang, tail_index), lead, lang, niche)
     glue = " " if opener.endswith(GLUED_OPENER_END) else ", "
     return opener + glue + tail
 
@@ -283,6 +301,16 @@ def subject(lead) -> str:
     if lang not in SUBJECTS:
         return ""
     return variant(lead.id, SUBJECTS[lang]).format(name=(lead.name or "").strip())
+
+
+def _opener(lead, lang: str, tail_index: int) -> str:
+    """Зачин под конкретный хвост: склеиваемый выдаётся только глагольному."""
+    options = OPENERS[lang]
+    opener = variant(lead.id, options)
+    if opener.endswith(GLUED_OPENER_END) and \
+            tail_index not in EN_VERB_TAILS.get(lead.gap_type or "", ()):
+        return options[0]
+    return opener
 
 
 def _place(template: str, lead, lang: str, niche: str) -> str:

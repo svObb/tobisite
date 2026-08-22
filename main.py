@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 import config
 import handlers_admin
+import handlers_review
 import handlers_worker
 import keyboards as kb
 from fsm_storage import PgStorage, purge_stale_fsm
@@ -109,6 +110,9 @@ async def main():
     handlers_worker.router.callback_query.filter(~is_admin)
 
     dp.include_router(common)
+    # очередь одобрения — обеим ролям, без ролевого фильтра: доступ
+    # проверяется внутри, как у общих edit_router / add_router
+    dp.include_router(handlers_review.router)
     dp.include_router(handlers_admin.router)
     dp.include_router(handlers_worker.edit_router)
     dp.include_router(handlers_worker.router)
@@ -142,12 +146,14 @@ async def main():
     try:
         await bot.set_my_commands([
             BotCommand(command="start", description="Начать заново"),
+            BotCommand(command="queue", description="Очередь писем"),
         ])
         # /costs видит только админ: работникам команда всё равно не ответит
         # (роутер отфильтрован), нечего ей делать и в их меню
         await bot.set_my_commands(
             [
                 BotCommand(command="start", description="Начать заново"),
+                BotCommand(command="queue", description="Очередь писем"),
                 BotCommand(command="costs", description="Расходы на ИИ за месяц"),
                 BotCommand(command="subs", description="Подписки на доп-услуги"),
                 BotCommand(command="scout", description="Скаут: страна ниша город"),
