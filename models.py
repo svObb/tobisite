@@ -39,6 +39,9 @@ COST_OPS = ["scout", "classify", "draft", "letter", "qa", "other"]
 # + миграция CHECK-констрейнта, как у статусов лида.
 CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]
 GAP_TYPE_KEYS = [k for k, _ in config.GAP_TYPES]
+# Причины отклонения лида (6.17). Новая причина = запись в config
+# + миграция CHECK-констрейнта, как у статусов лида.
+LEAD_REJECT_KEYS = [k for k, _ in config.LEAD_REJECT_REASONS]
 # Что заносится в suppression (7.22): хеш почты, домен, компания «имя+город».
 SUPPRESSION_KINDS = ["email_hash", "domain", "company"]
 # Состояния карточки в очереди одобрения (Д12 §6.5). Отправки в списке нет и
@@ -105,12 +108,10 @@ class Worker(Base, TimesMixin):
     )
 
 
-async def _load_admin_worker() -> Worker | None:
+async def _load_admin_worker(tg_id: int) -> Worker | None:
     """Строка админа, если она уже есть. Заодно оживляет отключённую и удалённую."""
     async with Session() as s, s.begin():
-        worker = await s.scalar(
-            select(Worker).where(Worker.tg_id == config.ADMIN_TG_ID)
-        )
+        worker = await s.scalar(select(Worker).where(Worker.tg_id == tg_id))
         # без оживления случайное «🗑 Удалить» на своей же карточке — или строка,
         # оставшаяся с тех пор, когда админ регистрировался работником, —
         # навсегда закрыли бы админу добавление компаний
@@ -120,22 +121,25 @@ async def _load_admin_worker() -> Worker | None:
     return worker
 
 
-async def ensure_admin_worker() -> Worker:
+async def ensure_admin_worker(tg_id: int | None = None) -> Worker:
     """Строка админа в workers: у лида worker_id обязателен, а регистрацию админ не проходит.
 
     Заводится лениво, а не миграцией: так она одинаково появляется и в боевой
-    базе, и в тестовой ветке Neon, и в одноразовом Postgres в CI.
+    базе, и в тестовой ветке Neon, и в одноразовом Postgres в CI. У второго
+    админа (6.16) строка своя — иначе его компании числились бы за первым.
     """
-    worker = await _load_admin_worker()
+    tg_id = config.ADMIN_TG_ID if tg_id is None else tg_id
+    worker = await _load_admin_worker(tg_id)
     if worker is not None:
         return worker
     try:
         async with Session() as s, s.begin():
-            worker = Worker(tg_id=config.ADMIN_TG_ID, name=config.ADMIN_NAME)
+            worker = Worker(tg_id=tg_id,
+                            name=config.ADMIN_NAMES.get(tg_id, config.ADMIN_NAME))
             s.add(worker)
     except IntegrityError:
         # tg_id уникален: параллельный апдейт успел вставить строку первым
-        worker = await _load_admin_worker()
+        worker = await _load_admin_worker(tg_id)
     if worker is None:
         raise RuntimeError("не удалось создать строку админа в workers")
     return worker
@@ -173,6 +177,9 @@ class Lead(Base, TimesMixin):
     )
     admin_note: Mapped[str | None] = mapped_column(Text)
     draft_url: Mapped[str | None] = mapped_column(Text)
+    # почему лид отклонён (6.17): ключ из config.LEAD_REJECT_REASONS. Живёт
+    # ровно столько, сколько сам отказ — со сменой статуса очищается
+    reject_reason: Mapped[str | None] = mapped_column(String(32))
     # наблюдение (Д12 §2): один разрыв на лид, без него лид непригоден для
     # персонализации касания 1. Имена полей зафиксированы — параллельных
     # fact_line / human_observation не заводить
@@ -202,6 +209,8 @@ class Lead(Base, TimesMixin):
     __table_args__ = (
         CheckConstraint(in_list("status", LEAD_STATUS_KEYS), name="ck_leads_status"),
         CheckConstraint(in_list("gap_type", GAP_TYPE_KEYS), name="ck_leads_gap_type"),
+        CheckConstraint(in_list("reject_reason", LEAD_REJECT_KEYS),
+                        name="ck_leads_reject_reason"),
         # «без наблюдения лид не идёт в рассылку» на уровне БД, а не
         # договорённости. В боевой миграции констрейнт NOT VALID: строки,
         # собранные до наблюдения, проверять нечем
@@ -210,7 +219,8 @@ class Lead(Base, TimesMixin):
         Index(
             "uq_leads_domain_norm_active", "domain_norm",
             unique=True,
-            postgresql_where="domain_norm IS NOT NULL AND cancelled_at IS NULL AND deleted_at IS NULL",
+            postgresql_where="domain_norm IS NOT NULL AND cancelled_at IS NULL "
+                             "AND deleted_at IS NULL",
         ),
         Index(
             "ix_leads_name_city_lower",

@@ -40,13 +40,13 @@ class Auth(BaseMiddleware):
         if user is None:
             return await handler(event, data)
 
-        is_admin = user.id == config.ADMIN_TG_ID
+        is_admin = config.is_admin(user.id)
         worker = None
         if is_admin:
             # админ тоже заносит компании, а у лида worker_id обязателен. Один
             # запрос по уникальному tg_id на апдейт — ровно столько же платит
             # каждый работник строкой ниже
-            worker = await ensure_admin_worker()
+            worker = await ensure_admin_worker(user.id)
         else:
             async with Session() as s:
                 worker = await s.scalar(
@@ -103,7 +103,7 @@ async def main():
     dp.message.outer_middleware(Auth())
     dp.callback_query.outer_middleware(Auth())
 
-    is_admin = F.from_user.id == config.ADMIN_TG_ID
+    is_admin = F.from_user.id.in_(config.ADMIN_IDS)
     handlers_admin.router.message.filter(is_admin)
     handlers_admin.router.callback_query.filter(is_admin)
     handlers_worker.router.message.filter(~is_admin)
@@ -150,18 +150,19 @@ async def main():
         ])
         # /costs видит только админ: работникам команда всё равно не ответит
         # (роутер отфильтрован), нечего ей делать и в их меню
-        await bot.set_my_commands(
-            [
-                BotCommand(command="start", description="Начать заново"),
-                BotCommand(command="queue", description="Очередь писем"),
-                BotCommand(command="costs", description="Расходы на ИИ за месяц"),
-                BotCommand(command="subs", description="Подписки на доп-услуги"),
-                BotCommand(command="scout", description="Скаут: страна ниша город"),
-                BotCommand(command="scout_paste",
-                           description="Скаут: домены из Ads Transparency"),
-            ],
-            scope=BotCommandScopeChat(chat_id=config.ADMIN_TG_ID),
-        )
+        for admin_id in config.ADMIN_IDS:
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="start", description="Начать заново"),
+                    BotCommand(command="queue", description="Очередь писем"),
+                    BotCommand(command="costs", description="Расходы на ИИ за месяц"),
+                    BotCommand(command="subs", description="Подписки на доп-услуги"),
+                    BotCommand(command="scout", description="Скаут: страна ниша город"),
+                    BotCommand(command="scout_paste",
+                               description="Скаут: домены из Ads Transparency"),
+                ],
+                scope=BotCommandScopeChat(chat_id=admin_id),
+            )
     except Exception as e:
         log.warning("set_my_commands failed: %s", e)
     try:

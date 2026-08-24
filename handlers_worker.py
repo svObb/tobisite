@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 import config
 import gap_validation as gv
 import keyboards as kb
+import notify
 import queue_service
 from dedup import normalize_domain, normalize_phone
 from models import (
@@ -160,6 +161,10 @@ def fmt_lead(lead: Lead, contacts, *, author=None, edits=0, admin=False) -> str:
             lines.append(f"Черновик: {esc(lead.draft_url)}")
         if lead.admin_note:
             lines.append(f"Моя заметка: {esc(lead.admin_note)}")
+    if lead.reject_reason:
+        label = config.LEAD_REJECT_LABELS.get(lead.reject_reason,
+                                              lead.reject_reason)
+        lines.append(f"🚫 Причина отклонения: {esc(label)}")
     if lead.cancelled_at:
         lines.append(f"🚫 Отменено: {local(lead.cancelled_at)}")
     return "\n".join(lines)
@@ -313,13 +318,8 @@ async def reg_name(message: Message, state: FSMContext):
     log.info("worker registered tg_id=%s", tg_id)
     await message.answer(f"Готово, {esc(name)}!", reply_markup=kb.worker_menu())
     # админ должен знать о каждом, кто получил доступ по общему коду
-    try:
-        await message.bot.send_message(
-            config.ADMIN_TG_ID,
-            f"👤 Новый работник: {esc(name)} (tg id {tg_id})",
-        )
-    except Exception as e:
-        log.warning("admin notify failed: %s", e)
+    await notify.to_admins(message.bot,
+                           f"👤 Новый работник: {esc(name)} (tg id {tg_id})")
 
 
 # --- добавление компании -----------------------------------------------------
@@ -1108,6 +1108,8 @@ async def _commit_and_reply(cb: CallbackQuery, state: FSMContext, worker: Worker
         f"✅ Компания #{lead_id} принята",
         reply_markup=kb.admin_saved_kb(lead_id) if is_admin else kb.saved_kb(lead_id),
     )
+    # 6.13: админ узнаёт о компании сразу, а не при следующем открытии списка
+    await notify.new_lead(cb.bot, lead_id, skip_tg_id=cb.from_user.id)
 
 
 @add_router.callback_query(Add.confirm, F.data == "cf:send")
@@ -1158,6 +1160,28 @@ async def my_page(session, worker_id, offset):
         ).order_by(Lead.id.desc()).offset(offset).limit(config.PAGE_SIZE)
     )
     return list(rows), total
+
+
+async def status_counts(session, conds) -> dict[str, int]:
+    """Сколько лидов в каждом статусе — одним запросом на весь экран."""
+    rows = await session.execute(
+        select(Lead.status, func.count(Lead.id)).where(*conds)
+        .group_by(Lead.status)
+    )
+    return dict(rows.all())
+
+
+def outcome_line(counts: dict[str, int]) -> str:
+    """6.15: «принято» — прошёл проверку админом, «продано» — состоялась сделка.
+
+    Раньше и то и другое, вместе с отказом клиента, лежало в одном счётчике
+    «Принято»: работник видел завышенную приёмку, а продажи не видел вовсе.
+    Продано и отказ входят и в «принято» — приёмку они не отменяют.
+    """
+    accepted = sum(counts.get(k, 0) for k in config.ACCEPTED_STATUSES)
+    return (f"Принято: {accepted} · продано: {counts.get('sold', 0)} · "
+            f"отказ клиента: {counts.get('refused', 0)} · "
+            f"отклонено: {counts.get('rejected', 0)}")
 
 
 def list_text(leads, total, offset):
@@ -1252,10 +1276,7 @@ async def my_stats(message: Message, state: FSMContext, worker: Worker):
             select(func.count()).select_from(Lead)
             .where(*base, Lead.created_at >= day_start(6))
         )
-        accepted = await s.scalar(
-            select(func.count()).select_from(Lead)
-            .where(*base, Lead.status.in_(config.ACCEPTED_STATUSES))
-        )
+        counts = await status_counts(s, base)
         # для остатка лимита — used_today, а не today: в квоте отменённые
         # считаются, в статистике «за сегодня» — нет
         used = await used_today(s, worker.id)
@@ -1273,7 +1294,7 @@ async def my_stats(message: Message, state: FSMContext, worker: Worker):
     limit = worker.daily_limit if worker.daily_limit is not None else config.DEFAULT_DAILY_LIMIT
     lines = [
         f"Всего добавлено: {total}", f"За сегодня: {today}",
-        f"За 7 дней: {week}", f"Принято: {accepted}",
+        f"За 7 дней: {week}", outcome_line(counts),
         f"Осталось по лимиту сегодня: {max(0, limit - used)}",
         f"Комиссия: {worker.commission_pct}%",
     ]

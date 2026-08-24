@@ -379,6 +379,24 @@ def statuses_kb(lead_id):
     return b.as_markup()
 
 
+def reject_reasons_kb(lead_id):
+    """6.17: причина отклонения выбирается из списка, а не пишется словами."""
+    b = InlineKeyboardBuilder()
+    for key, label in config.LEAD_REJECT_REASONS:
+        b.button(text=label, callback_data=f"rjr:{lead_id}:{key}")
+    b.adjust(2)
+    _cancel(b)
+    return b.as_markup()
+
+
+def open_card_kb(lead_id):
+    """Одна кнопка к уведомлению: карточка открывается, не листая список."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🗂 Открыть карточку", callback_data=f"acd:{lead_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def edit_fields_kb(lead_id):
     b = InlineKeyboardBuilder()
     for key, label in config.EDITABLE_FIELDS:

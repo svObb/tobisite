@@ -16,6 +16,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 import config
+import notify
 from models import CostLedger, Session, month_start
 
 log = logging.getLogger(__name__)
@@ -76,11 +77,8 @@ async def log_cost(*, op: str, cost_usd, model: str | None = None,
         for share, alert in _THRESHOLDS:
             edge = cap * share
             if before < edge <= after:
-                try:
-                    await bot.send_message(
-                        config.ADMIN_TG_ID,
-                        f"{alert}: ${after:.2f} из ${cap:.2f}. Подробности: /costs",
-                    )
-                except Exception as e:
-                    log.warning("cost alert failed: %s", e)
+                await notify.to_admins(
+                    bot,
+                    f"{alert}: ${after:.2f} из ${cap:.2f}. Подробности: /costs",
+                )
     return after

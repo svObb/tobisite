@@ -30,6 +30,35 @@ ACCESS_CODE = _req("ACCESS_CODE")
 # обязателен. Под этим именем админ виден в статистике по работникам и в CSV.
 # Необязательная: с _req выкат кода потребовал бы сначала править .env на сервере.
 ADMIN_NAME = (os.getenv("ADMIN_NAME") or "").strip() or "Администратор"
+
+# Второй админ (6.16): EXTRA_ADMINS=«tg_id|Имя, tg_id|Имя», формат тот же, что
+# у COUNTRIES. Пусто — админ один, как было. Права одинаковые: отдельной роли
+# модератора канон не описывает, а придумывать её на пустом месте нечего.
+EXTRA_ADMINS = []
+for _part in os.getenv("EXTRA_ADMINS", "").split(","):
+    _part = _part.strip()
+    if not _part:
+        continue
+    _tg, _, _name = _part.partition("|")
+    _tg = _tg.strip()
+    if not (_tg.isascii() and _tg.isdecimal()):
+        raise SystemExit(
+            f"EXTRA_ADMINS: «{_part}» — нужен tg_id или «tg_id|Имя»"
+        )
+    EXTRA_ADMINS.append(
+        (int(_tg), _name.strip() or f"Администратор {len(EXTRA_ADMINS) + 2}")
+    )
+
+# Основной админ всегда первый: его строка в workers уже есть на бою, и вторую
+# под тем же человеком заводить нельзя.
+ADMIN_IDS = [ADMIN_TG_ID] + [tg for tg, _ in EXTRA_ADMINS if tg != ADMIN_TG_ID]
+ADMIN_NAMES = dict(EXTRA_ADMINS) | {ADMIN_TG_ID: ADMIN_NAME}
+
+
+def is_admin(tg_id: int) -> bool:
+    return tg_id in ADMIN_IDS
+
+
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT", "15"))
 CANCEL_WINDOW_MIN = int(os.getenv("CANCEL_WINDOW_MIN", "60"))
 # Месячный потолок расходов на ИИ и платные API, $ (раздел 20 плана).
@@ -149,6 +178,32 @@ STATUSES = [
 STATUS_LABELS = dict(STATUSES)
 ACCEPTED_STATUSES = ["verified", "draft_ready", "sent", "replied",
                      "replied_interested", "sold", "refused"]
+
+# О чём работнику сообщает бот (6.14): решения по его лиду и исход сделки.
+# Внутренних шагов конвейера (draft_ready, sent) здесь нет намеренно — сделать
+# с ними работнику нечего, а поток служебных сообщений он читать перестанет.
+WORKER_NOTIFY_STATUSES = ["verified", "rejected", "refused", "replied",
+                          "replied_interested", "sold"]
+
+# Причины отклонения лида админом (6.17): работнику уходит не голое «отклонён»,
+# а то, что он починит в следующей карточке. Ключи лежат в базе под
+# CHECK-констрейнтом — новая причина требует миграции, как и новый статус.
+LEAD_REJECT_REASONS = [
+    ("no_contact", "Нет рабочего контакта"),
+    ("not_our_niche", "Не наша ниша"),
+    ("site_is_fine", "Сайт в порядке"),
+    ("closed", "Компания закрыта"),
+    ("duplicate", "Дубль существующего"),
+    ("gap_weak", "Наблюдение не подтвердилось"),
+    ("bad_data", "Данные карточки неверны"),
+    ("other", "Другое"),
+]
+LEAD_REJECT_LABELS = dict(LEAD_REJECT_REASONS)
+
+# 6.13: админ узнаёт о каждой новой компании. Выключается на время массового
+# заноса, когда поток сообщений перестаёт что-либо значить.
+NOTIFY_NEW_LEAD = (os.getenv("NOTIFY_NEW_LEAD", "1").strip().lower()
+                   not in ("0", "false", "no"))
 
 # Типы разрыва (Д12 §2): по одному на лид, каждый обязывает к своему артефакту —
 # числу, цитате, скриншоту или паре значений. Подписи кнопок — из Д12 §2.

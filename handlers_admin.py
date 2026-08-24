@@ -19,12 +19,13 @@ import config
 import costs
 import draft_service
 import keyboards as kb
+import notify
 import phrases
 import queue_service
 import services
 from handlers_worker import (
     STALE, cb_id, edits_count, esc, fmt_lead, get_contacts, is_url, list_text,
-    local, pick, safe_edit, send_screenshot,
+    local, outcome_line, pick, safe_edit, send_screenshot, status_counts,
 )
 from models import (
     COMMISSION_MAX, COMMISSION_MIN, ClientService, CommissionChange, Contact,
@@ -42,8 +43,9 @@ ACTIVE = (Lead.cancelled_at.is_(None), Lead.deleted_at.is_(None))
 # Строка админа в workers нужна его же лидам как автор, но управлять админом как
 # работником нельзя: отключить, удалить или разослать самому себе — бессмыслица.
 # В статистике по работникам и в фильтре «Работник» он при этом остаётся —
-# иначе свои компании не найти.
-NOT_ADMIN = Worker.tg_id != config.ADMIN_TG_ID
+# иначе свои компании не найти. Админов может быть двое (6.16), и второй так же
+# не работник.
+NOT_ADMIN = Worker.tg_id.not_in(config.ADMIN_IDS)
 # «у лида есть живой email» одним EXISTS — так же, как это считает 7.19 в SQL
 HAS_EMAIL = (
     select(Contact.id).where(
@@ -64,7 +66,7 @@ async def guard_admin_row(cb: CallbackQuery, wid: int) -> bool:
     if worker is None:
         await cb.answer("Работник не найден", show_alert=True)
         return False
-    if worker.tg_id == config.ADMIN_TG_ID:
+    if config.is_admin(worker.tg_id):
         await cb.answer("Это строка админа, а не работник", show_alert=True)
         return False
     return True
@@ -122,11 +124,7 @@ async def stats(message: Message, state: FSMContext):
             select(func.count()).select_from(Lead)
             .where(*ACTIVE, Lead.status == "verified", HAS_EMAIL)
         )
-        by_status = dict((await s.execute(
-            select(Lead.status, func.count(Lead.id)).where(*ACTIVE)
-            .where(Lead.status.in_(("replied", "replied_interested")))
-            .group_by(Lead.status)
-        )).all())
+        by_status = await status_counts(s, ACTIVE)
     lines = [f"Всего: {total}", f"За сегодня: {today}", f"За 7 дней: {week}", "", "По работникам:"]
     lines += [f"  {esc(name)}: {cnt}" for name, cnt in rows] or ["  —"]
     # 7.19: без доли лидов с email не видно главной утечки воронки — письмо
@@ -138,6 +136,7 @@ async def stats(message: Message, state: FSMContext):
         f"Проверенных: {verified}, с email-контактом: {with_email}{share}",
         f"Ответили: {by_status.get('replied', 0)} · "
         f"заинтересованы: {by_status.get('replied_interested', 0)}",
+        outcome_line(by_status),
     ]
     await message.answer("\n".join(lines))
 
@@ -693,10 +692,33 @@ async def status_set(cb: CallbackQuery, state: FSMContext):
     if len(parts) != 3 or parts[2] not in config.STATUS_LABELS:
         await cb.answer("Неизвестный статус", show_alert=True)
         return
-    new = parts[2]
     lead_id = await cb_id(cb)
     if lead_id is None:
         return
+    # 6.17: «Отклонён» без причины работнику ничего не объясняет, поэтому
+    # причина спрашивается до записи статуса, а не после
+    if parts[2] == "rejected":
+        await cb.answer()
+        await cb.message.answer("Почему отклоняем?",
+                                reply_markup=kb.reject_reasons_kb(lead_id))
+        return
+    await _apply_status(cb, state, lead_id, parts[2])
+
+
+@router.callback_query(F.data.startswith("rjr:"))
+async def reject_reason(cb: CallbackQuery, state: FSMContext):
+    parts = (cb.data or "").split(":")
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
+    if len(parts) != 3 or parts[2] not in config.LEAD_REJECT_LABELS:
+        await cb.answer("Неизвестная причина", show_alert=True)
+        return
+    await _apply_status(cb, state, lead_id, "rejected", parts[2])
+
+
+async def _apply_status(cb: CallbackQuery, state: FSMContext, lead_id: int,
+                        new: str, reason: str | None = None):
     async with Session() as s, s.begin():
         lead = await s.get(Lead, lead_id)
         if not lead or lead.deleted_at:
@@ -714,7 +736,12 @@ async def status_set(cb: CallbackQuery, state: FSMContext):
             return
         old = lead.status
         lead.status = new
+        lead.reject_reason = reason
+        worker = await s.get(Worker, lead.worker_id)
         log_event(s, lead_id, "status_change", cb.from_user.id, "status", old, new)
+        if reason:
+            log_event(s, lead_id, "reject_reason", cb.from_user.id,
+                      "reject_reason", None, reason)
         # автостоп цепочки (решение 5 этапа): ответ, продажа, отказ и
         # отклонение снимают с очереди всё, что по этому лиду ещё не решено
         if new in queue_service.STOP_LEAD_STATUSES:
@@ -722,10 +749,15 @@ async def status_set(cb: CallbackQuery, state: FSMContext):
                                               f"статус {new}")
     log.info("lead %s status %s -> %s", lead_id, old, new)
     await cb.answer("Статус изменён")
-    await cb.message.answer(
-        f"#{lead_id}: {config.STATUS_LABELS.get(old, old)} → "
-        f"{config.STATUS_LABELS.get(new, new)}"
-    )
+    text = (f"#{lead_id}: {config.STATUS_LABELS.get(old, old)} → "
+            f"{config.STATUS_LABELS.get(new, new)}")
+    if reason:
+        text += f"\nПричина: {config.LEAD_REJECT_LABELS[reason]}"
+    await cb.message.answer(text)
+    # 6.14: решение по чужому лиду видит только админ — работнику о нём
+    # сообщает бот, иначе о своей же продаже он узнаёт последним
+    await notify.lead_status(cb.bot, lead, worker, old, new, reason=reason,
+                             actor_tg_id=cb.from_user.id)
     if new == "sold":
         await _ask_sale(cb.message, state, lead_id)
 
@@ -817,15 +849,16 @@ async def sale_save(message: Message, state: FSMContext):
         f"Начисление {esc(worker.name)}: {rate}% — {due:.2f} {esc(currency)}.\n"
         "Подтвердится отметкой «Деньги пришли» в разделе «Начисления»."
     )
-    await _notify_sale(message, lead, worker, amount, currency, rate, due)
+    await _notify_sale(message, lead, worker, amount, currency, rate, due,
+                       message.from_user.id)
 
 
 async def _notify_sale(target: Message, lead, worker, amount, currency,
-                       rate, due):
+                       rate, due, actor_tg_id: int):
     """7.15: работник узнаёт о своей продаже сразу — и сразу же честно о том,
     что деньги считаются начисленными только после оплаты клиентом."""
-    if worker.tg_id == config.ADMIN_TG_ID:
-        return  # свою же продажу админ только что увидел ответом на ввод
+    if worker.tg_id == actor_tg_id:
+        return  # свою же продажу автор только что увидел ответом на ввод
     text = (f"💰 Продажа по #{lead.id} {esc(lead.name)}: "
             f"{amount:.2f} {esc(currency)}.\n"
             f"Твоя комиссия {rate}% — {due:.2f} {esc(currency)}.\n"

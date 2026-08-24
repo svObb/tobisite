@@ -12,7 +12,7 @@ class FakeBot:
     def __init__(self):
         self.sent = []
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, **kw):
         self.sent.append((chat_id, text))
 
 

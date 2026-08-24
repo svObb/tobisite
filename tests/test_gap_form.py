@@ -26,7 +26,7 @@ def card(**kw):
         found_via="Google Maps", note=None, gap_type="slow", gap_value="8",
         gap_note=None, gap_captured_at=None, created_at=datetime.now(config.TZ),
         possible_duplicate=False, has_ads=False, cancelled_at=None,
-        draft_url=None, admin_note=None,
+        draft_url=None, admin_note=None, reject_reason=None,
     )
     return SimpleNamespace(**(base | kw))
 

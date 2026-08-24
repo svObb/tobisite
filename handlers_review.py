@@ -19,10 +19,10 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ForceReply, Message
 
-import config
 import email_lint
 import gap_validation as gv
 import keyboards as kb
+import notify
 import queue_service as qs
 from handlers_worker import esc, fmt_lead, get_contacts, local, safe_edit
 from models import Session
@@ -364,10 +364,7 @@ async def _escalate(target: Message, card: qs.Card):
     text = (f"⚠️ Карточка #{card.lead.id} {esc(card.lead.name)} "
             f"{qs.MAX_EXPIRED_LEASES} раза подряд осталась без решения — "
             f"посмотрите, что с ней не так.")
-    try:
-        await target.bot.send_message(config.ADMIN_TG_ID, text)
-    except Exception as e:
-        log.warning("эскалация не дошла: %s", e)
+    await notify.to_admins(target.bot, text)
 
 
 def _ids(cb: CallbackQuery) -> tuple[int, int] | None:
