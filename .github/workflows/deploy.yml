@@ -65,6 +65,11 @@ jobs:
       - name: pyflakes
         run: pyflakes *.py admin/*.py scout/*.py tools/*.py tests/*.py alembic/env.py alembic/versions/*.py
 
+      # Ruff берёт весь репозиторий разом, включая site_factory и worker,
+      # куда список выше не заглядывает. Правила — в pyproject.toml.
+      - name: ruff
+        run: ruff check .
+
       - name: дедуп
         run: python test_dedup.py
 
