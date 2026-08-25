@@ -5,6 +5,7 @@
 на то, что люди действительно пишут в ответ. Обвязка ходит в настоящую базу:
 её смысл — в том, что закрытая компания больше никуда не проходит.
 """
+import asyncio
 import itertools
 
 import pytest
@@ -13,6 +14,7 @@ from sqlalchemy import select
 import email_gen
 import queue_service as qs
 import replies
+from conftest import wipe_cards
 from models import (
     Contact, LeadEvent, MessageDraft, Session, Suppression, SuppressionEvent,
     suppression_hit, suppression_keys,
@@ -25,6 +27,15 @@ from test_email_gen import UK_DRAFT, UK_JSON
 # домен и адрес у каждого лида свои: закрытый в одном тесте ключ иначе
 # закрыл бы компанию следующего
 _seq = itertools.count(1)
+REVIEWER = 700_201
+
+
+@pytest.fixture(autouse=True)
+def clean_queue():
+    """Очередь общая на всю базу: claim_next выдал бы соседскую карточку."""
+    asyncio.run(wipe_cards())
+    yield
+    asyncio.run(wipe_cards())
 
 EN = [
     ("Thanks, but we're not interested.", NOT_INTERESTED),
@@ -42,6 +53,8 @@ EN = [
 ]
 
 UA = [
+    ("Лист не доставлено: адреса не існує.", BOUNCE),
+    ("Не вдалося доставити повідомлення отримувачу.", BOUNCE),
     ("Дякую, ні.", NOT_INTERESTED),
     ("Нам це не цікаво.", NOT_INTERESTED),
     ("У нас вже є сайт.", NOT_INTERESTED),
@@ -93,11 +106,43 @@ def test_a_refusal_beats_a_question_mark():
         == NOT_INTERESTED
 
 
+def test_stop_sending_is_a_request_to_stop():
+    assert replies.classify("Please stop sending emails.").category == STOP
+
+
+def test_a_yes_beside_a_no_is_left_to_a_human():
+    """Ложный негатив закрывает компанию навсегда — спорное решает человек."""
+    verdict = replies.classify(
+        "Yes, interested, but stop sending emails to my colleague.")
+
+    assert verdict.category == OTHER and not verdict.negative
+
+
+# --- тема письма --------------------------------------------------------------
+
 def test_subject_alone_is_enough():
     assert replies.classify("", subject="Out of office").category == AUTO_REPLY
 
 
-# --- цитата прошлого письма ---------------------------------------------------
+def test_an_empty_body_is_read_by_its_subject():
+    assert replies.classify(
+        "", subject="Automatic reply: I am currently away").category == AUTO_REPLY
+
+
+@pytest.mark.parametrize("text,subject,category", [
+    ("Stop.", "Re: your website", STOP),
+    ("Ні.", "Re: ваш сайт", NOT_INTERESTED),
+])
+def test_a_one_word_answer_is_read_without_the_subject(text, subject, category):
+    assert replies.classify(text, subject=subject).category == category
+
+
+def test_our_own_words_in_the_subject_do_not_decide():
+    # «Re: …» тянет в разбор нашу же тему; решает то, что написал человек
+    assert replies.classify("Дякую!", subject="Re: не пишіть").category == OTHER
+
+
+# --- цитата прошлого письма и подпись -----------------------------------------
 
 def test_the_quoted_letter_does_not_decide():
     text = ("Please call me tomorrow.\n\n"
@@ -109,6 +154,19 @@ def test_the_quoted_letter_does_not_decide():
 def test_a_header_block_cuts_the_quote():
     text = "Дякую, ні.\n\nВід: Stan\nТема: чернетка\nЦікаво, скільки коштує?"
     assert replies.classify(text).category == NOT_INTERESTED
+
+
+def test_a_corporate_signature_does_not_answer_for_the_person():
+    text = ("Sure, sounds good — let's talk on Thursday.\n"
+            "--\n"
+            "Ivan Petrenko, ACME\n"
+            "Unsubscribe here: https://acme.example/u/42\n")
+    assert replies.classify(text).category == INTERESTED
+
+
+def test_a_footer_line_is_cut_as_well():
+    text = "Tell me more, please.\nSent from my iPhone. Unsubscribe: link"
+    assert replies.classify(text).category == INTERESTED
 
 
 # --- мелочи разбора -----------------------------------------------------------
@@ -228,6 +286,21 @@ async def test_a_negative_answer_takes_the_card_off_the_queue(model, gap_lead):
     assert done.cancelled == 1 and card.status == "cancelled"
 
 
+async def test_even_an_approved_letter_is_taken_back(model, gap_lead):
+    """Одобренное письмо — то самое, которое однажды уедет: снимать и его."""
+    model(UK_JSON)
+    lead = await _lead(gap_lead)
+    queued = await qs.enqueue(lead.id, actor_tg_id=1, draft_summary=UK_DRAFT)
+    card = await qs.claim_next(REVIEWER)
+    assert (await qs.approve(queued.draft_id, card.version.id, REVIEWER)).ok
+
+    done = await replies.apply(lead.id, "Не пишіть більше.", source="pytest")
+
+    async with Session() as s:
+        after = await s.get(MessageDraft, queued.draft_id)
+    assert done.cancelled == 1 and after.status == "cancelled"
+
+
 # --- закрытая компания не проходит в очередь (11.6) ---------------------------
 
 @pytest.mark.parametrize("touch", [1, 2, 3])
@@ -261,6 +334,48 @@ async def test_any_one_of_the_three_keys_is_enough(model, gap_lead, kind):
     result = await qs.enqueue(lead.id, actor_tg_id=1, draft_summary=UK_DRAFT)
 
     assert not result.ok and "стоп-лист" in result.reason
+
+
+async def test_a_refusal_during_generation_is_still_in_time(model, gap_lead,
+                                                            monkeypatch):
+    """Ответ «ні» пришёл, пока модель писала письмо: карточки быть не должно."""
+    model(UK_JSON)
+    lead = await _lead(gap_lead)
+    build = email_gen.build_email
+
+    async def _slow_build(*args, **kw):
+        result = await build(*args, **kw)
+        await replies.apply(lead.id, "Дякую, ні.", source="pytest")
+        return result
+
+    monkeypatch.setattr(email_gen, "build_email", _slow_build)
+
+    result = await qs.enqueue(lead.id, actor_tg_id=1, draft_summary=UK_DRAFT)
+
+    assert not result.ok and "стоп-лист" in result.reason
+    async with Session() as s:
+        cards = list(await s.scalars(
+            select(MessageDraft).where(MessageDraft.lead_id == lead.id)))
+    assert cards == []
+
+
+async def test_a_closed_company_cannot_get_an_approved_letter(model, gap_lead):
+    """Стоп-лист пришёл, пока карточка лежала у дежурного на экране."""
+    model(UK_JSON)
+    lead = await _lead(gap_lead)
+    queued = await qs.enqueue(lead.id, actor_tg_id=1, draft_summary=UK_DRAFT)
+    card = await qs.claim_next(REVIEWER)
+    async with Session() as s, s.begin():
+        pairs = dict(await suppression_keys(s, lead))
+        s.add(Suppression(kind="domain", value_norm=pairs["domain"],
+                          reason="pytest", source="pytest"))
+
+    decision = await qs.approve(queued.draft_id, card.version.id, REVIEWER)
+
+    assert not decision.ok and "стоп-лист" in decision.reason
+    async with Session() as s:
+        after = await s.get(MessageDraft, queued.draft_id)
+    assert after.status == "claimed"
 
 
 async def test_the_letter_builder_refuses_as_well(model, gap_lead):

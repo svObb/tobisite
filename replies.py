@@ -18,6 +18,10 @@
 Отбивку почтового сервера нельзя принять за ответ человека. Просьбу не писать
 нельзя утопить в вежливом «дякую, ні» — она сильнее любого отказа. Автоответ
 «я у відпустці» не значит ни отказа, ни интереса, и решать по нему нечего.
+
+Приоритет обрывается на одном случае: если в ответе рядом стоят и негатив, и
+интерес, категория — «непонятно». Словарь тут не судья, а ложный негатив стоит
+дороже разбора руками: компания закрывается навсегда.
 """
 import logging
 import re
@@ -56,6 +60,12 @@ LABELS = {
 QUOTE_PREFIXES = ("from:", "sent:", "to:", "subject:", "від:", "від кого:",
                   "от:", "кому:", "тема:", "-----")
 QUOTE_SUFFIXES = ("wrote:", "написав:", "написала:", "написал:", "пише:")
+# Подпись — тоже не слова автора: в корпоративном футере живут и «Unsubscribe»,
+# и ссылка на рассылку, и по ним согласившийся клиент уезжал бы в стоп-лист.
+# '-- ' на своей строке — стандартный делимитер подписи (RFC 3676 §4.3).
+SIGNATURE_MARKS = ("--", "—", "___")
+SIGNATURE_PHRASES = ("sent from my", "this mailing list", "this email was sent",
+                     "надіслано з", "цей лист надіслано")
 
 # Отправители, которым отвечает не человек, а почтовый сервер.
 BOUNCE_SENDERS = ("mailer daemon", "postmaster")
@@ -71,7 +81,8 @@ BOUNCE_PHRASES = (
 STOP_PHRASES = (
     "unsubscribe", "remove me", "take me off", "opt out", "do not contact",
     "don't contact", "do not email", "don't email", "stop contacting",
-    "stop writing", "stop messaging", "leave me alone", "never contact",
+    "stop writing", "stop messaging", "stop sending", "stop emailing",
+    "leave me alone", "never contact",
     "не пишіть", "більше не пишіть", "припиніть писати", "не турбуйте",
     "видаліть мене", "приберіть мене", "відпишіть", "відписатися",
     "відписка", "не надсилайте більше",
@@ -98,6 +109,7 @@ INTERESTED_PHRASES = (
     "i'm interested", "we're interested", "i am interested", "interested in",
     "sounds good", "let's talk", "let's do it", "call me", "give me a call",
     "schedule a call", "when can we", "yes please", "go ahead", "we'd like",
+    "interested",
     "цікаво", "цікавить", "скільки коштує", "яка ціна", "скільки це",
     "розкажіть більше", "зателефонуйте", "передзвоніть", "давайте",
     "готові обговорити", "хочемо", "надішліть", "коли можемо",
@@ -132,39 +144,61 @@ def normalize(text: str) -> str:
 
 
 def strip_quote(text: str) -> str:
-    """Ответ без процитированного письма: цитата идёт последней, режем по ней."""
+    """Слова автора: без цитаты и без подписи — обе идут после них."""
     kept = []
     for raw in (text or "").splitlines():
         line = raw.strip()
         low = line.lower()
         if line.startswith(">") or low.startswith(QUOTE_PREFIXES) \
-                or low.endswith(QUOTE_SUFFIXES):
+                or low.endswith(QUOTE_SUFFIXES) \
+                or low in SIGNATURE_MARKS \
+                or any(mark in low for mark in SIGNATURE_PHRASES):
             break
         kept.append(raw)
     return "\n".join(kept)
 
 
 def classify(text: str, *, subject: str = "", from_addr: str = "") -> Verdict:
-    """Категория ответа. Порядок проверок = приоритет, см. докстринг модуля."""
+    """Категория ответа. Порядок проверок = приоритет, см. докстринг модуля.
+
+    Разбирается тело ответа. Тема подмешивается только к пустому телу: «Re: ваш
+    сайт» тянет в разбор наши же слова, и односложное «Stop.» в такой теме
+    тонет. Пустое тело при этом бывает у настоящих ответов — автоответчик умеет
+    сказать всё темой.
+    """
     body = strip_quote(text)
-    haystack = f" {normalize(f'{subject} {body}')} "
+    said = normalize(body)
+    # тема — последнее, что осталось: разбирать нечего, но ответ пришёл
+    haystack = f" {said or normalize(subject)} "
     sender = f" {normalize(from_addr)} "
 
     hit = _first(sender, BOUNCE_SENDERS) or _first(haystack, BOUNCE_PHRASES)
     if hit:
         return Verdict(BOUNCE, hit)
-    solo = haystack.strip()
-    if solo in SOLO_STOP:
-        return Verdict(STOP, solo)
-    for phrases, category in ((STOP_PHRASES, STOP),
-                              (AUTO_PHRASES, AUTO_REPLY),
-                              (NOT_INTERESTED_PHRASES, NOT_INTERESTED),
-                              (INTERESTED_PHRASES, INTERESTED)):
-        hit = _first(haystack, phrases)
-        if hit:
-            return Verdict(category, hit)
-    if solo in SOLO_NO:
-        return Verdict(NOT_INTERESTED, solo)
+    if said in SOLO_STOP:
+        return Verdict(STOP, said)
+    hits = {category: _first(haystack, phrases)
+            for phrases, category in ((STOP_PHRASES, STOP),
+                                      (AUTO_PHRASES, AUTO_REPLY),
+                                      (NOT_INTERESTED_PHRASES, NOT_INTERESTED),
+                                      (INTERESTED_PHRASES, INTERESTED))}
+    negative = hits[STOP] or hits[NOT_INTERESTED]
+    if negative:
+        # «так, цікаво, але припиніть писати на пошту колеги» — это не отказ и
+        # не согласие, а разговор. Ложный негатив закрывает компанию навсегда,
+        # поэтому спорное отдаём человеку, а не решаем словарём.
+        # Согласие ищется по остатку без негативных фраз: иначе «не цікаво»
+        # само себе противоречило бы, содержа внутри «цікаво»
+        rest = _without(_without(haystack, STOP_PHRASES),
+                        NOT_INTERESTED_PHRASES)
+        positive = _first(rest, INTERESTED_PHRASES)
+        if positive:
+            return Verdict(OTHER, f"{negative} + {positive}")
+    for category in (STOP, AUTO_REPLY, NOT_INTERESTED, INTERESTED):
+        if hits[category]:
+            return Verdict(category, hits[category])
+    if said in SOLO_NO:
+        return Verdict(NOT_INTERESTED, said)
     if "?" in body:
         return Verdict(QUESTION, "?")
     return Verdict(OTHER)
@@ -176,6 +210,13 @@ def _first(haystack: str, phrases) -> str:
         if f" {phrase} " in haystack:
             return phrase
     return ""
+
+
+def _without(haystack: str, phrases) -> str:
+    """Хайстек без этих фраз — то, что осталось сказано отдельно от них."""
+    for phrase in phrases:
+        haystack = haystack.replace(f" {phrase} ", " ")
+    return haystack
 
 
 # --- негативный ответ закрывает компанию (11.24) ------------------------------
