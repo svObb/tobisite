@@ -4,25 +4,44 @@
 ключей R2 фикстура не ставится, и тогда проверяется обратное — сборка работает
 как раньше, а публикации просто нет.
 """
+from datetime import datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 
+import config
 import draft_service
-from models import Draft, Lead, LeadEvent, Session
+from models import PREVIEW_TTL_DAYS, Draft, Lead, LeadEvent, Session
 
 
 class FakeR2:
-    """Бакет в памяти. fail — исключение, которым отвечает следующий PUT."""
+    """Бакет в памяти. fail — исключение, которым отвечает следующий вызов."""
 
     def __init__(self):
+        self.objects = {}
         self.puts = []
         self.fail = None
 
     def put_object(self, **kw):
+        self._check()
+        self.puts.append(kw)
+        self.objects[kw["Key"]] = kw["Body"]
+        return {}
+
+    def list_objects_v2(self, **kw):
+        self._check()
+        keys = sorted(k for k in self.objects if k.startswith(kw["Prefix"]))
+        return {"Contents": [{"Key": k} for k in keys]}
+
+    def delete_objects(self, **kw):
+        self._check()
+        for obj in kw["Delete"]["Objects"]:
+            self.objects.pop(obj["Key"], None)
+        return {}
+
+    def _check(self):
         if self.fail:
             raise self.fail
-        self.puts.append(kw)
-        return {}
 
 
 @pytest.fixture
@@ -135,6 +154,104 @@ async def test_draft_without_saved_slots_is_not_published(slot_answer,
 
     assert not result.ok and "без слотов" in result.reason
     assert len(r2.puts) == 1                   # второй выкладки не было
+
+
+# --- уборка превью (10.14, 10.15) ---------------------------------------------
+
+async def _published(slot_answer, draft_lead, **kw) -> Lead:
+    lead = await draft_lead(**kw)
+    await slot_answer(lead)
+    built = await draft_service.build_draft(lead.id)
+    assert built.ok and built.preview_url, built.publish_reason
+    return lead
+
+
+async def _age(lead_id: int, days: int):
+    async with Session() as s, s.begin():
+        draft = await s.scalar(select(Draft).where(Draft.lead_id == lead_id))
+        draft.published_at = datetime.now(config.TZ) - timedelta(days=days)
+
+
+async def _set_status(lead_id: int, status: str):
+    async with Session() as s, s.begin():
+        (await s.get(Lead, lead_id)).status = status
+
+
+async def test_preview_past_its_term_is_taken_down(slot_answer, draft_lead, r2):
+    lead = await _published(slot_answer, draft_lead)
+    slug = (await _draft(lead.id)).r2_prefix
+    await _age(lead.id, PREVIEW_TTL_DAYS + 1)
+
+    result = await draft_service.expire_previews()
+
+    assert (lead.id, slug, f"срок {PREVIEW_TTL_DAYS} дней") in result.deleted
+    assert f"{slug}/index.html" not in r2.objects
+    row = await _draft(lead.id)
+    assert row.status == "expired" and row.r2_prefix == slug
+    # ссылка вела бы в 404 — с лида она снята, а событие осталось
+    assert (await _lead(lead.id)).draft_url is None
+    assert len(await _events(lead.id, "preview_expired")) == 1
+
+
+async def test_sold_lead_keeps_its_preview(slot_answer, draft_lead, r2):
+    lead = await _published(slot_answer, draft_lead)
+    slug = (await _draft(lead.id)).r2_prefix
+    await _age(lead.id, PREVIEW_TTL_DAYS * 3)
+    await _set_status(lead.id, "sold")
+
+    result = await draft_service.expire_previews()
+
+    assert result.kept_sold and lead.id not in [x[0] for x in result.deleted]
+    assert f"{slug}/index.html" in r2.objects
+    assert (await _draft(lead.id)).status == "published"
+
+
+async def test_closed_lead_loses_its_preview_at_once(slot_answer, draft_lead,
+                                                     r2):
+    lead = await _published(slot_answer, draft_lead)
+    slug = (await _draft(lead.id)).r2_prefix
+    await _set_status(lead.id, "refused")
+
+    result = await draft_service.expire_previews()
+
+    assert (lead.id, slug, "лид закрыт") in result.deleted
+    assert f"{slug}/index.html" not in r2.objects
+
+
+async def test_live_preview_is_not_touched(slot_answer, draft_lead, r2):
+    lead = await _published(slot_answer, draft_lead)
+    slug = (await _draft(lead.id)).r2_prefix
+
+    result = await draft_service.expire_previews()
+
+    assert lead.id not in [x[0] for x in result.deleted]
+    assert f"{slug}/index.html" in r2.objects
+    assert (await _draft(lead.id)).status == "published"
+
+
+async def test_failed_deletion_keeps_the_row_as_it_was(slot_answer, draft_lead,
+                                                       r2):
+    lead = await _published(slot_answer, draft_lead)
+    url = (await _lead(lead.id)).draft_url
+    await _age(lead.id, PREVIEW_TTL_DAYS + 1)
+    r2.fail = RuntimeError("R2 не отвечает")
+
+    result = await draft_service.expire_previews()
+
+    assert any(f"#{lead.id}" in line for line in result.failed)
+    assert (await _draft(lead.id)).status == "published"
+    assert (await _lead(lead.id)).draft_url == url
+
+
+async def test_slug_of_a_removed_preview_is_not_given_away(slot_answer,
+                                                           draft_lead, r2):
+    first = await _published(slot_answer, draft_lead, name="Мовна Школа")
+    await _age(first.id, PREVIEW_TTL_DAYS + 1)
+    assert (await draft_service.expire_previews()).deleted
+    second = await _published(slot_answer, draft_lead, name="Мовна Школа")
+
+    # сохранённая клиентом ссылка не должна однажды открыть чужой сайт
+    assert (await _draft(second.id)).r2_prefix == "movna-shkola-2"
 
 
 async def test_without_r2_keys_the_pipeline_works_as_before(slot_answer,

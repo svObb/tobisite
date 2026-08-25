@@ -11,6 +11,7 @@ from aiogram.types import (
 from sqlalchemy import select
 
 import config
+import draft_service
 import handlers_admin
 import handlers_review
 import handlers_worker
@@ -177,6 +178,15 @@ async def main():
             log.info("purged %s stale fsm rows", purged)
     except Exception as e:
         log.warning("fsm purge failed: %s", e)
+    # уборка превью на старте, а не по расписанию: планировщика в боте нет,
+    # а деплой случается чаще, чем истекают 60 дней. Руками — /previews_gc
+    try:
+        gone = await draft_service.expire_previews()
+        if gone.deleted or gone.failed:
+            log.info("превью снято: %s, сбоев: %s", len(gone.deleted),
+                     len(gone.failed))
+    except Exception as e:
+        log.warning("уборка превью не прошла: %s", e)
     log.info(
         "bot started: @%s, режим %s",
         me.username, "ТЕСТОВЫЙ" if config.TEST_MODE else "боевой",

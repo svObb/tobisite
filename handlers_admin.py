@@ -1143,6 +1143,26 @@ async def publish_cmd(message: Message, state: FSMContext,
                     else f"Не выложено: {esc(result.reason)}")
 
 
+@router.message(Command("previews_gc"))
+async def previews_gc_cmd(message: Message, state: FSMContext):
+    """Уборка превью руками; та же уборка идёт на старте бота (10.14)."""
+    await state.set_state(None)
+    note = await message.answer("Убираю превью…")
+    result = await draft_service.expire_previews(actor_tg_id=message.from_user.id)
+    await safe_edit(note, previews_report(result))
+
+
+def previews_report(result) -> str:
+    lines = [f"🧹 Снято превью: {len(result.deleted)}"]
+    lines += [f"#{lead_id} {esc(slug)} — {why}"
+              for lead_id, slug, why in result.deleted[:20]]
+    if result.kept_sold:
+        lines.append(f"Превью проданных не тронуты: {result.kept_sold}")
+    if result.failed:
+        lines.append("⚠️ Не вышло: " + esc("; ".join(result.failed[:5])))
+    return "\n".join(lines)
+
+
 async def _ask_enrichment(cb: CallbackQuery, lead, result):
     """Петля вверх по течению: дозаполняет карточку тот, кто её и завёл."""
     missing = esc("\n".join(result.missing))

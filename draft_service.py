@@ -38,8 +38,8 @@ from sqlalchemy import select
 import config
 import slot_gen
 from models import (
-    DRAFT_TTL_DAYS, Contact, Draft, Lead, Session, Worker, draft_fresh,
-    log_event,
+    DRAFT_TTL_DAYS, PREVIEW_TTL_DAYS, Contact, Draft, Lead, Session, Worker,
+    draft_fresh, log_event,
 )
 from site_factory.engine import render
 from site_factory.engine.checks import run_all
@@ -88,6 +88,9 @@ PREVIEW_HOST_SUFFIX = ".tobisitepreview.com"
 # и тогда публикации просто нет.
 R2_ENV = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
 DEFAULT_BUCKET = "tobisite-previews"
+# Лид закрыт — превью больше некому показывать (10.14). sold сюда не входит
+# намеренно: его страница становится основой боевого сайта (10.15).
+CLOSED_STATUSES = ("refused", "rejected")
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,14 @@ class PublishResult:
     url: str = ""
     slug: str = ""
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class GcResult:
+    """Итог уборки превью: что снесено, что сохранено и что не вышло."""
+    deleted: list[tuple[int, str, str]] = field(default_factory=list)
+    kept_sold: int = 0
+    failed: list[str] = field(default_factory=list)
 
 
 async def build_draft(lead_id: int, *,
@@ -333,6 +344,46 @@ async def publish_preview(lead_id: int, *,
     return await _publish(lead, draft_id, html, actor_tg_id)
 
 
+async def expire_previews(*,
+                          actor_tg_id: int = config.ADMIN_TG_ID) -> GcResult:
+    """Убрать превью, которым вышел срок, и превью закрытых лидов (10.14).
+
+    Превью проданного лида не трогается никогда (10.15): именно эта страница
+    становится основой боевого сайта. Ровно поэтому уборку делает бот, а не
+    lifecycle-правило бакета — правило про статус лида ничего не знает.
+
+    Слаг у снесённого превью остаётся в строке черновика: он больше не
+    выдаётся другой компании, иначе сохранённая клиентом ссылка однажды
+    открыла бы чужой сайт.
+    """
+    if not r2_ready():
+        return GcResult(failed=["не заданы ключи R2"])
+    async with Session() as s:
+        rows = list(await s.execute(
+            select(Draft, Lead).join(Lead, Lead.id == Draft.lead_id)
+            .where(Draft.status == "published", Draft.r2_prefix.is_not(None))
+        ))
+    deadline = _now() - timedelta(days=PREVIEW_TTL_DAYS)
+    deleted, failed, sold = [], [], 0
+    for draft, lead in rows:
+        if lead.status == "sold":
+            sold += 1
+            continue
+        why = _expire_reason(draft, lead, deadline)
+        if not why:
+            continue
+        try:
+            await _delete_prefix(draft.r2_prefix)
+        except Exception as e:
+            log.exception("лид %s: превью %s не снесено", lead.id,
+                          draft.r2_prefix)
+            failed.append(f"#{lead.id}: {e}")
+            continue
+        await _mark_expired(draft.id, lead.id, why, actor_tg_id)
+        deleted.append((lead.id, draft.r2_prefix, why))
+    return GcResult(deleted=deleted, kept_sold=sold, failed=failed)
+
+
 # --- внутреннее ---------------------------------------------------------------
 
 def _now() -> datetime:
@@ -386,6 +437,49 @@ async def _publish(lead, draft_id: int, html: str,
         log.exception("лид %s: превью не выложено", lead.id)
         return PublishResult(False, slug=slug, reason=f"R2 недоступен: {e}")
     return PublishResult(True, url=f"https://{host}/", slug=slug)
+
+
+def _expire_reason(draft, lead, deadline: datetime) -> str:
+    """Почему превью пора убрать. Пусто — рано."""
+    if lead.deleted_at or lead.cancelled_at or lead.status in CLOSED_STATUSES:
+        return "лид закрыт"
+    if draft.published_at and draft.published_at < deadline:
+        return f"срок {PREVIEW_TTL_DAYS} дней"
+    return ""
+
+
+async def _delete_prefix(slug: str, bucket: str | None = None) -> int:
+    """Снести всё под префиксом слага: превью из одного файла бывает не всегда
+    (руками через tools/publish_r2.py уезжает вся папка)."""
+    s3, bucket = s3_client(), _bucket(bucket)
+    removed, token = 0, None
+    while True:
+        kw = {"Bucket": bucket, "Prefix": f"{slug}/"}
+        if token:
+            kw["ContinuationToken"] = token
+        page = await asyncio.to_thread(s3.list_objects_v2, **kw)
+        keys = [{"Key": o["Key"]} for o in page.get("Contents") or []]
+        if keys:
+            await asyncio.to_thread(s3.delete_objects, Bucket=bucket,
+                                    Delete={"Objects": keys})
+            removed += len(keys)
+        token = page.get("NextContinuationToken")
+        if not token:
+            return removed
+
+
+async def _mark_expired(draft_id: int, lead_id: int, why: str,
+                        actor_tg_id: int):
+    """Строка черновика и ссылка на лиде — одной транзакцией с событием."""
+    async with Session() as s, s.begin():
+        draft = await s.get(Draft, draft_id)
+        lead = await s.get(Lead, lead_id)
+        draft.status = "expired"
+        # ссылка ведёт в 404: в карточке и в письме ей больше не место
+        if lead is not None and lead.draft_url == draft.preview_url:
+            lead.draft_url = None
+        log_event(s, lead_id, "preview_expired", actor_tg_id,
+                  old=draft.preview_host, new=why)
 
 
 async def _save(lead, status, actor_tg_id, *, trace=None, checks=None,
