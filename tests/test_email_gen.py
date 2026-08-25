@@ -9,6 +9,7 @@ from sqlalchemy import select
 import config
 import costs
 import email_gen
+import email_legal
 from models import GAP_TTL_DAYS, CostLedger, Session, Suppression, company_key
 
 # Ответы модели: валидный JSON, честный отказ и мусор вместо JSON.
@@ -47,7 +48,7 @@ async def test_valid_answer_builds_the_letter(model, gap_lead):
     assert result.slots["offer"] in result.body
     assert result.slots["cta"] in email_gen.CTA["uk"]
     assert "Микола Тобі, tobisite" in result.body
-    assert email_gen.OPT_OUT["uk"] in result.body
+    assert email_legal.OPT_OUT["uk"] in result.body
     assert result.subject
     assert len(fake.messages.calls) == 1
 
@@ -236,7 +237,7 @@ async def test_letters_2_and_3_are_constants(model, gap_lead):
     assert third.ok and str(email_gen.DRAFT_HOLD_DAYS) in third.body
     assert "«ні»" in third.body
     assert second.body.startswith("Доброго дня!")
-    assert email_gen.OPT_OUT["uk"] in second.body
+    assert email_legal.OPT_OUT["uk"] in second.body
     # модель для касаний 2 и 3 не зовётся вообще
     assert fake.messages.calls == []
 

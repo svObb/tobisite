@@ -79,7 +79,11 @@ async def approve(cb: CallbackQuery, worker, is_admin: bool):
     if not decision.ok:
         await _stale(cb, draft_id)
         return
-    await cb.answer("Одобрено")
+    # 9.8: подпись без физического адреса — не письмо для отправки. Отдельным
+    # сообщением об этом не пишем: пока переменная не заполнена, оно повторялось
+    # бы на каждой карточке. Подробности — в истории лида и в логе.
+    await cb.answer("Одобрено · отправлять пока нельзя"
+                    if decision.legal_fails else "Одобрено")
     await _next_card(cb)
 
 

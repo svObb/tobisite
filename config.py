@@ -82,6 +82,10 @@ ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
 SIGNATURE_NAME = (os.getenv("SIGNATURE_NAME") or "").strip()
 SIGNATURE_COMPANY = (os.getenv("SIGNATURE_COMPANY") or "").strip()
 POSTAL_ADDRESS = (os.getenv("POSTAL_ADDRESS") or "").strip()
+# Ссылка отписки (9.30): подставлять её будет Instantly своим merge-тегом,
+# точное написание узнаем при подключении. Пусто — строки в письме нет, и
+# email_legal.missing() считает это незакрытым требованием.
+UNSUBSCRIBE_TAG = (os.getenv("UNSUBSCRIBE_TAG") or "").strip()
 TZ = ZoneInfo(os.getenv("TZ", "Europe/Kyiv"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")

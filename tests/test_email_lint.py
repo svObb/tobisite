@@ -21,8 +21,11 @@ GOOD_SLOTS = {
     "offer": "Я зібрав чернетку вашої головної на ваших реальних даних, "
              "вона відкривається за секунду.",
     "cta": "Скинути подивитись? Відповідайте «так».",
+    # ровно то, что собирает email_legal.footer для украинского лида:
+    # отправитель, адрес, пометка рекламы (9.9) и отказ ответом STOP (9.30)
     "signature": "Микола Тобі, tobisite\nвулиця Соборна 12, Київ\n"
-                 "Не цікаво — просто відповідайте «ні», більше не напишу.",
+                 "Це рекламний лист.\n"
+                 "Не цікаво — відповідайте «STOP», більше не напишу.",
 }
 # Якоря — то же, что вернул бы email_gen.anchors_of: имя контакта, город,
 # ниша в форме зачина, название и цифра наблюдения. Тема письма участвует в
@@ -252,7 +255,8 @@ def _english_slots(**changes):
                  "and it loads in under a second.",
         "cta": "Want me to send it over? Just reply yes.",
         "signature": "Mykola Tobi, tobisite\n12 Soborna Street, Kyiv\n"
-                     "If this is not relevant, just reply no and I won't "
+                     "This email is an advertisement.\n"
+                     "If this is not relevant, reply STOP and I won't "
                      "write again.",
     }
     return slots | changes

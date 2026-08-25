@@ -106,13 +106,19 @@ class LintResult:
 
 
 def lint(body: str, *, lang: str, slots: dict[str, str], anchors=(),
-         subject: str = "") -> LintResult:
+         subject: str = "", legal=()) -> LintResult:
     """Проверяет собранное письмо 1. slots — тот же разбор, что делал email_gen.
 
     Метрики считаются по телу письма; тема участвует только в поиске якорей —
     название компании чаще всего стоит именно там, и читатель его видит.
+
+    legal — чего не хватает подписи по закону (email_legal.missing, 9.8–9.9).
+    Это warn, а не fail: письмо от этого не становится плохим, а отправки в
+    конвейере всё равно нет. Отправлять его нельзя, и об этом дежурный читает
+    прямо в карточке — жёсткий запрет стоит там, где появится сама отправка.
     """
     fails, warns = [], []
+    warns += [f"нельзя отправлять: {gap}" for gap in legal]
     generated = " ".join(slots.get(name, "") for name in GENERATED).strip()
     sentences = [s for name in PROSE for s in _sentences(slots.get(name, ""))]
     lengths = [len(_words(s)) for s in sentences]
@@ -139,14 +145,17 @@ def lint(body: str, *, lang: str, slots: dict[str, str], anchors=(),
                          f"нужно от {STDEV_MIN}: одинаковые предложения — "
                          f"ритм модели")
 
-    # Приветствие — константа, и украинское «Доброго дня!» пишется со знаком по
-    # норме языка. Запрет Д12 §5 — про восклицания в прозе письма, поэтому знак
-    # ищется во всём письме, кроме этого слота.
-    if "!" in body.replace(slots.get("greeting") or "", "", 1):
+    # Приветствие и юридический низ — константы слоя 0: украинское «Доброго
+    # дня!» пишется со знаком по норме языка, а STOP в строке отписки — слово
+    # команды, а не крик. Запреты Д12 §5 — про прозу письма, поэтому оба слота
+    # из проверок знака и регистра исключены. Всё, что человек переписал
+    # целиком, разбора по слотам не имеет и проверяется без единого исключения.
+    prose_only = _without(body, slots.get("greeting"), slots.get("signature"))
+    if "!" in prose_only:
         fails.append("восклицательный знак")
     if EMOJI_RE.search(body):
         fails.append("эмодзи")
-    caps = [w for w in WORD_RE.findall(body) if w.isupper()]
+    caps = [w for w in WORD_RE.findall(prose_only) if w.isupper()]
     if caps:
         fails.append(f"слово заглавными: {caps[0]}")
 
@@ -210,6 +219,14 @@ def _ai_markers(generated: str, lang: str) -> list[str]:
         if not CONTRACTION_RE.search(generated):
             found.append("ни одного сокращения в английском тексте")
     return found
+
+
+def _without(text: str, *parts) -> str:
+    """Письмо без перечисленных слотов — по одному вхождению каждого."""
+    for part in parts:
+        if part:
+            text = text.replace(part, "", 1)
+    return text
 
 
 def _sentences(text: str) -> list[str]:

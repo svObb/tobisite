@@ -18,6 +18,7 @@ import anthropic
 
 import config
 import costs
+import email_legal
 import email_lint
 import phrases
 from email_fewshot import FEWSHOT
@@ -153,11 +154,6 @@ CTA = {
     ],
 }
 
-OPT_OUT = {
-    "uk": "Не цікаво — просто відповідайте «ні», більше не напишу.",
-    "en": "If this is not relevant, just reply no and I won't write again.",
-}
-
 # Письмо 2: ссылка на превью. Письмо 3: цифра-пруф (срок хранения черновика —
 # наша собственная цифра) и break-up. Тексты — константы, модель не зовётся.
 LETTER_2 = {
@@ -248,15 +244,9 @@ def build_email_3(lead) -> EmailResult:
     return _constant_letter(lead, lang, SUBJECT_3[lang], body)
 
 
-def signature(lang: str) -> str:
-    """Подпись, юридические строки и opt-out — слой 0 (Д12 §1).
-
-    Пустые переменные просто не дают строки: до подключения M365 настоящего
-    почтового адреса нет, и вписывать вместо него выдумку нельзя.
-    """
-    who = ", ".join(p for p in (config.SIGNATURE_NAME, config.SIGNATURE_COMPANY)
-                    if p)
-    return "\n".join(p for p in (who, config.POSTAL_ADDRESS, OPT_OUT[lang]) if p)
+def signature(lead, lang: str, *, with_link: bool = False) -> str:
+    """Подпись, юридические строки и opt-out — слой 0 (Д12 §1), см. email_legal."""
+    return email_legal.footer(lead, lang, with_link=with_link)
 
 
 def greeting(lang: str, name: str) -> str:
@@ -408,21 +398,26 @@ def _assemble(lead, lang, first_line, slots) -> EmailResult:
     slots["greeting"] = greeting(lang, _contact_name(lead))
     slots["first_line"] = first_line
     slots["cta"] = phrases.variant(lead.id, CTA[lang])
-    slots["signature"] = signature(lang)
+    # ссылки в письме 1 нет ни одной (9.1), поэтому и ссылки отписки тоже:
+    # отказаться от переписки здесь можно ответом «STOP»
+    slots["signature"] = signature(lead, lang)
 
     body = compose_body(slots)
     subject = phrases.subject(lead)
     anchors = anchors_of(lead)
     result = email_lint.lint(body, lang=lang, slots=slots, anchors=anchors,
-                             subject=subject)
+                             subject=subject,
+                             legal=email_legal.missing(lead, lang))
     return EmailResult(ok=result.ok, lang=lang, subject=subject, body=body,
                        slots=slots, anchors=anchors, model=MODEL, lint=result,
                        reason="" if result.ok else "; ".join(result.fails))
 
 
 def _constant_letter(lead, lang, subject, text) -> EmailResult:
+    # письма 2 и 3 ссылки уже несут (превью), поэтому и ссылка отписки идёт
+    # именно здесь — там, где она никакого правила не нарушает
     slots = {"greeting": greeting(lang, _contact_name(lead)),
-             "text": text, "signature": signature(lang)}
+             "text": text, "signature": signature(lead, lang, with_link=True)}
     body = "\n\n".join(p for p in slots.values() if p)
     return EmailResult(ok=True, lang=lang, subject=subject, body=body,
                        slots=slots, anchors=anchors_of(lead))

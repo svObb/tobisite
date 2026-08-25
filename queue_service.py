@@ -12,7 +12,7 @@
 approved. Ни одна функция модуля не отправляет письмо наружу.
 """
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from difflib import SequenceMatcher
@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 import config
 import draft_service
 import email_gen
+import email_legal
 import email_lint
 import phrases
 from models import (
@@ -121,6 +122,9 @@ class Decision:
     notify_tg_id: int | None = None
     too_fast: bool = False
     lint_fails: list[str] = field(default_factory=list)
+    # чего письму не хватает по закону (9.8–9.9): одобрению не мешает,
+    # отправке помешает — см. approve()
+    legal_fails: list[str] = field(default_factory=list)
 
 
 def min_read_ms(words: int) -> int:
@@ -327,9 +331,27 @@ async def queue_size() -> int:
 # --- решения ------------------------------------------------------------------
 
 async def approve(draft_id: int, version_id: int, worker_tg_id: int) -> Decision:
-    """Конец конвейера v1: письмо одобрено, но никуда не уходит (СТОП-точка)."""
-    return await _decide(draft_id, version_id, worker_tg_id, "approved",
-                         "letter_approved")
+    """Конец конвейера v1: письмо одобрено, но никуда не уходит (СТОП-точка).
+
+    Одобрено не значит «можно отправлять»: юридический низ письма собирается
+    из переменных окружения, и пока в них нет физического адреса, письмо не
+    проходит по CAN-SPAM (9.8). Кнопку это не блокирует — отправки в конвейере
+    всё равно нет, — но факт попадает в историю лида и в ответ дежурному.
+    """
+    decision = await _decide(draft_id, version_id, worker_tg_id, "approved",
+                             "letter_approved")
+    if not decision.ok:
+        return decision
+    async with Session() as s, s.begin():
+        draft = await s.get(MessageDraft, draft_id)
+        lead = await s.get(Lead, decision.lead_id)
+        gaps = email_legal.missing(lead, draft.lang) if lead and draft else []
+        if gaps:
+            log.warning("письмо лида %s одобрено, но отправлять его нельзя: %s",
+                        decision.lead_id, "; ".join(gaps))
+            log_event(s, decision.lead_id, "letter_legal_gap", worker_tg_id,
+                      new="; ".join(gaps)[:200])
+    return replace(decision, legal_fails=gaps)
 
 
 async def reject(draft_id: int, version_id: int, worker_tg_id: int,
@@ -418,7 +440,8 @@ async def edit_slot(draft_id: int, version_id: int, worker_tg_id: int,
         body = _body_of(slots)
         lint = email_lint.lint(body, lang=draft.lang, slots=_lint_slots(slots),
                                anchors=email_gen.anchors_of(lead),
-                               subject=subject)
+                               subject=subject,
+                               legal=email_legal.missing(lead, draft.lang))
         version = MessageVersion(
             draft_id=draft.id, author="human", subject=subject, body=body,
             slots_json=slots, edited_slots=[slot],
