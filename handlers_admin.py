@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
+import billing
 import config
 import costs
 import draft_service
@@ -30,9 +31,10 @@ from handlers_worker import (
     local, outcome_line, pick, safe_edit, send_screenshot, status_counts,
 )
 from models import (
-    COMMISSION_MAX, COMMISSION_MIN, ClientService, CommissionChange, Contact,
-    CostLedger, Lead, LeadEvent, Sale, Session, SuppressionEvent, Worker,
-    commission_due, day_start, log_event, month_start, suppress_lead,
+    COMMISSION_MAX, COMMISSION_MIN, OPEN_INVOICE_STATUSES, ClientService,
+    CommissionChange, Contact, CostLedger, Invoice, Lead, LeadEvent, Sale,
+    Session, SuppressionEvent, Worker, commission_due, day_start, log_event,
+    month_start, suppress_lead,
 )
 from scout.niches import NICHE_TAGS
 from scout.runner import run_scout, run_scout_paste, scout_busy
@@ -359,6 +361,208 @@ async def _subs_cancel(message: Message, num_s: str):
         log_event(s, cs.lead_id, "sub_cancel", message.from_user.id,
                   field=cs.service_id, old="active", new="canceled")
     await message.answer(f"✅ Подписка #{num} отменена.")
+
+
+# --- счета подписки (/invoice, 12.29, 12.16, 12.30) --------------------------
+
+INVOICE_USAGE = (
+    "Формат:\n"
+    "/invoice — открытые счета и активные подписки\n"
+    "/invoice on &lt;id лида&gt; &lt;сумма/мес&gt; — включить ежемесячный счёт\n"
+    "/invoice off &lt;id лида&gt; — остановить цикл\n"
+    "/invoice paid &lt;номер счёта&gt; — деньги пришли\n"
+    "/invoice cancel &lt;номер счёта&gt; — снять счёт\n"
+    "/invoice run — пройти по календарю сейчас\n\n"
+    "Сумма — в валюте сделки. Счёт клиенту выставляет человек: бот ведёт "
+    "календарь, статусы и напоминания, денег он не двигает."
+)
+INVOICE_STATUS_LABELS = {"issued": "выставлен", "overdue": "просрочен",
+                         "paid": "оплачен", "cancelled": "снят"}
+
+
+@router.message(Command("invoice"))
+async def invoice_cmd(message: Message, state: FSMContext,
+                      command: CommandObject):
+    await state.set_state(None)
+    args = (command.args or "").split()
+    if not args:
+        await _invoice_list(message)
+    elif args[0] == "on" and len(args) == 3:
+        await _invoice_on(message, args[1], args[2])
+    elif args[0] == "off" and len(args) == 2:
+        await _invoice_off(message, args[1])
+    elif args[0] in ("paid", "cancel") and len(args) == 2:
+        await _invoice_mark_cmd(message, args[0], args[1])
+    elif args[0] == "run" and len(args) == 1:
+        await _invoice_run(message)
+    else:
+        await message.answer(INVOICE_USAGE)
+
+
+async def _invoice_list(message: Message):
+    async with Session() as s:
+        rows = (await s.execute(
+            select(Invoice, Lead.name).join(Lead, Lead.id == Invoice.lead_id)
+            .where(Invoice.status.in_(OPEN_INVOICE_STATUSES))
+            .order_by(Invoice.id).limit(config.PAGE_SIZE)
+        )).all()
+        # валюты не складываем — как в начислениях: доллары с евро не сумма
+        cycles = (await s.execute(
+            select(Sale.currency, func.count(), func.sum(Sale.sub_amount))
+            .where(Sale.sub_amount.isnot(None), Sale.sub_cancelled_at.is_(None))
+            .group_by(Sale.currency).order_by(Sale.currency)
+        )).all()
+    lines = ["<b>🧾 Счета подписки</b>"]
+    for currency, count, total in cycles:
+        lines.append(f"Подписок: {count} — {total:.2f} {esc(currency)}/мес")
+    if not cycles:
+        lines.append("Активных подписок нет.")
+    if not rows:
+        lines.append("\nОткрытых счетов нет.")
+        await message.answer("\n".join(lines) + "\n\n" + INVOICE_USAGE)
+        return
+    lines.append("\n<b>Открытые</b>")
+    for invoice, lead_name in rows:
+        tail = (f", напоминаний {invoice.reminders}" if invoice.reminders
+                else "")
+        lines.append(
+            f"#{invoice.id} · лид #{invoice.lead_id} {esc(lead_name)} — "
+            f"{invoice.amount:.2f} {esc(invoice.currency)}, до "
+            f"{local(invoice.due_at) if invoice.due_at else '—'} "
+            f"({INVOICE_STATUS_LABELS[invoice.status]}{tail})"
+        )
+    await message.answer("\n".join(lines),
+                         reply_markup=kb.invoices_kb([i for i, _ in rows]))
+
+
+async def _invoice_on(message: Message, lead_id_s: str, amount_s: str):
+    deal = parse_deal(amount_s)
+    try:
+        lead_id = int(lead_id_s)
+    except ValueError:
+        await message.answer(INVOICE_USAGE)
+        return
+    if deal is None:
+        await message.answer("Сумма — больше нуля, максимум два знака после "
+                             "запятой: «40» или «40.50».")
+        return
+    amount = deal[0]
+    async with Session() as s, s.begin():
+        sale = await s.scalar(
+            select(Sale).where(Sale.lead_id == lead_id).with_for_update())
+        if sale is None:
+            await message.answer(
+                f"Продажи по #{lead_id} нет — подписку включать не на что.")
+            return
+        if sale.sub_amount is not None and sale.sub_cancelled_at is None:
+            await message.answer(
+                f"Цикл по #{lead_id} уже идёт: {sale.sub_amount:.2f} "
+                f"{esc(sale.currency)}/мес.")
+            return
+        now = datetime.now(config.TZ)
+        sale.sub_amount = amount
+        sale.sub_started_at = sale.sub_next_at = now
+        sale.sub_notified_at = sale.sub_cancelled_at = None
+        log_event(s, lead_id, "sub_cycle_on", message.from_user.id,
+                  new=f"{amount} {sale.currency}")
+        currency = sale.currency
+    await message.answer(
+        f"✅ Подписка по #{lead_id}: {amount:.2f} {esc(currency)}/мес.\n"
+        "Первый счёт выставится ближайшим заходом — /invoice run сделает это "
+        "сейчас."
+    )
+
+
+async def _invoice_off(message: Message, lead_id_s: str):
+    try:
+        lead_id = int(lead_id_s)
+    except ValueError:
+        await message.answer(INVOICE_USAGE)
+        return
+    async with Session() as s, s.begin():
+        sale = await s.scalar(
+            select(Sale).where(Sale.lead_id == lead_id).with_for_update())
+        if sale is None or sale.sub_amount is None or sale.sub_cancelled_at:
+            await message.answer(f"Подписки по #{lead_id} нет.")
+            return
+        sale.sub_cancelled_at = datetime.now(config.TZ)
+        log_event(s, lead_id, "sub_cycle_off", message.from_user.id,
+                  old=f"{sale.sub_amount} {sale.currency}")
+        open_left = await s.scalar(
+            select(func.count()).select_from(Invoice).where(
+                Invoice.sale_id == sale.id,
+                Invoice.status.in_(OPEN_INVOICE_STATUSES),
+            )
+        )
+    answer = f"🛑 Подписка по #{lead_id} остановлена, счетов больше не будет."
+    if open_left:
+        # выставленный счёт — это долг, а не план: снимать его молча нельзя
+        answer += (f"\nОткрытых счетов: {open_left} — они остаются. Снять: "
+                   "/invoice cancel &lt;номер&gt;.")
+    await message.answer(answer)
+
+
+async def _invoice_mark_cmd(message: Message, kind: str, num_s: str):
+    try:
+        invoice_id = int(num_s)
+    except ValueError:
+        await message.answer(INVOICE_USAGE)
+        return
+    await message.answer(
+        await _mark_invoice(invoice_id, kind, message.from_user.id))
+
+
+async def _mark_invoice(invoice_id: int, kind: str, actor_tg_id: int) -> str:
+    """Отметка счёта; ответ строкой. Повтор ничего не двигает: кнопка живёт
+    в чате вечно, а нажать её могут дважды."""
+    status = "paid" if kind == "paid" else "cancelled"
+    async with Session() as s, s.begin():
+        invoice = await s.get(Invoice, invoice_id, with_for_update=True)
+        if invoice is None:
+            return f"Счёта #{invoice_id} нет."
+        if invoice.status not in OPEN_INVOICE_STATUSES:
+            return (f"Счёт #{invoice_id} уже "
+                    f"{INVOICE_STATUS_LABELS[invoice.status]}.")
+        now = datetime.now(config.TZ)
+        invoice.status = status
+        setattr(invoice, "paid_at" if status == "paid" else "cancelled_at", now)
+        log_event(s, invoice.lead_id, f"invoice_{status}", actor_tg_id,
+                  field=str(invoice.id),
+                  new=f"{invoice.amount} {invoice.currency}")
+        if status == "paid":
+            return (f"💵 Счёт #{invoice_id} оплачен: {invoice.amount:.2f} "
+                    f"{esc(invoice.currency)}.")
+        return f"✖️ Счёт #{invoice_id} снят."
+
+
+@router.callback_query(F.data.startswith("ipd:"))
+async def invoice_paid(cb: CallbackQuery):
+    await _invoice_cb(cb, "paid")
+
+
+@router.callback_query(F.data.startswith("icx:"))
+async def invoice_cancel(cb: CallbackQuery):
+    await _invoice_cb(cb, "cancel")
+
+
+async def _invoice_cb(cb: CallbackQuery, kind: str):
+    invoice_id = await cb_id(cb)
+    if invoice_id is None:
+        return
+    await cb.answer()
+    await cb.message.answer(
+        await _mark_invoice(invoice_id, kind, cb.from_user.id))
+
+
+async def _invoice_run(message: Message):
+    """Ручной заход по календарю: фоновая задача ходит раз в час, а счёт
+    иногда нужен сейчас — сразу после включения подписки."""
+    result = await billing.tick(message.bot)
+    await message.answer(
+        f"Выставлено счетов: {len(result.issued)}.\n"
+        f"Напоминаний: {len(result.reminded)}.\n"
+        f"Предупреждений о следующем счёте: {len(result.upcoming)}."
+    )
 
 
 # --- стоп-лист и журнал отписок (/stop, /stops, 9.27, 9.34) ------------------

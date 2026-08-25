@@ -42,6 +42,12 @@ COST_OPS = ["scout", "classify", "draft", "letter", "qa", "places", "twilio",
 # Статусы подписки клиента на доп-услугу (16.13). Новый статус = запись здесь
 # + миграция CHECK-констрейнта, как у статусов лида.
 CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]
+# Состояния счёта за месяц подписки (12.29): выставлен → оплачен, просрочен или
+# отменён. Списаний в списке нет: деньги приходят руками, отметку ставит админ.
+# Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
+INVOICE_STATUSES = ["issued", "paid", "overdue", "cancelled"]
+# Счёт, по которому ещё ждут денег: он же попадает в напоминания (12.16).
+OPEN_INVOICE_STATUSES = ("issued", "overdue")
 GAP_TYPE_KEYS = [k for k, _ in config.GAP_TYPES]
 # Причины отклонения лида (6.17). Новая причина = запись в config
 # + миграция CHECK-констрейнта, как у статусов лида.
@@ -411,10 +417,24 @@ class Sale(Base, TimesMixin):
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     note: Mapped[str | None] = mapped_column(Text)
+    # Ежемесячная подписка по этой продаже (12.29): сумма в месяц и календарь.
+    # Пусто — подписки нет и счета не выставляются. Сумму называет админ: вилка
+    # 12.2 — решение основателя, а конкретное число это договорённость с
+    # клиентом, и выдумывать её в коде нечем.
+    sub_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    sub_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # дата следующего счёта; двигается ровно на месяц с каждым выставленным,
+    # поэтому простой бота не «съедает» месяц — цикл догоняет пропущенное
+    sub_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # когда админам уходило предупреждение о ближайшем счёте (12.30)
+    sub_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sub_cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(f"rate_pct {PCT_RANGE}", name="ck_sales_rate_pct"),
         CheckConstraint("deal_amount > 0", name="ck_sales_deal_amount"),
+        CheckConstraint("sub_amount IS NULL OR sub_amount > 0",
+                        name="ck_sales_sub_amount"),
         # одна продажа на лид: повторный перевод в sold не должен начислять
         # работнику второй раз за ту же сделку
         UniqueConstraint("lead_id", name="uq_sales_lead"),
@@ -446,6 +466,59 @@ def commission_due(deal_amount: Decimal, rate_pct: int) -> Decimal:
     """Начисление работнику. Считается один раз — при записи продажи."""
     return (deal_amount * rate_pct / 100).quantize(Decimal("0.01"),
                                                    rounding=ROUND_HALF_UP)
+
+
+class Invoice(Base, TimesMixin):
+    """Счёт за месяц подписки (12.29): чей, за какой период и на сколько.
+
+    Строка появляется сама, пока у продажи живёт цикл (sales.sub_amount и
+    sub_next_at). Наружу она не уходит: счёт клиенту выставляет человек, а бот
+    держит календарь, статусы и напоминания. Автосписаний нет — деньги
+    приходят руками, оплату отмечает админ, как «деньги пришли» в 7.14.
+
+    UNIQUE(sale_id, period_start) — идемпотентность цикла: перезапуск бота
+    посреди прогона не выставит второй счёт за тот же месяц.
+    """
+    __tablename__ = "invoices"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("leads.id"), nullable=False
+    )
+    sale_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sales.id"), nullable=False
+    )
+    # начало оплачиваемого месяца; оно же ключ идемпотентности цикла
+    period_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(
+        Text, nullable=False, default="USD", server_default="USD"
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="issued", server_default="issued"
+    )
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # последнее напоминание и сколько их было (12.16): без счётчика троттлинг
+    # не отличить от «напоминали каждый час»
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminders: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(in_list("status", INVOICE_STATUSES),
+                        name="ck_invoices_status"),
+        CheckConstraint("amount > 0", name="ck_invoices_amount"),
+        UniqueConstraint("sale_id", "period_start",
+                         name="uq_invoices_sale_period"),
+        Index("ix_invoices_lead_id", "lead_id"),
+        Index("ix_invoices_status", "status"),
+    )
 
 
 class Suppression(Base, TimesMixin):

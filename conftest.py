@@ -46,8 +46,8 @@ from sqlalchemy import delete, select, tuple_  # noqa: E402
 
 from models import (  # noqa: E402
     ClientService, CommissionChange, Contact, CostLedger, Draft, FsmState,
-    Lead, LeadEvent, MessageDraft, MessageVersion, PreviewHit, Sale, Session,
-    Suppression, SuppressionEvent, Worker, suppression_keys,
+    Invoice, Lead, LeadEvent, MessageDraft, MessageVersion, PreviewHit, Sale,
+    Session, Suppression, SuppressionEvent, Worker, suppression_keys,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -86,6 +86,8 @@ async def _cleanup():
                 await s.execute(delete(Draft).where(Draft.lead_id.in_(lids)))
                 await s.execute(delete(PreviewHit)
                                 .where(PreviewHit.lead_id.in_(lids)))
+                # счета — раньше продаж: invoices.sale_id держит строку продажи
+                await s.execute(delete(Invoice).where(Invoice.lead_id.in_(lids)))
                 await s.execute(delete(Sale).where(Sale.lead_id.in_(lids)))
                 await s.execute(delete(LeadEvent).where(LeadEvent.lead_id.in_(lids)))
                 await s.execute(delete(CostLedger).where(CostLedger.lead_id.in_(lids)))

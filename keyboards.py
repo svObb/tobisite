@@ -350,6 +350,43 @@ def sales_kb(sales):
     return b.as_markup()
 
 
+# --- счета подписки (12.29) ---------------------------------------------------
+
+def invoice_kb(invoice_id):
+    """Два шага счёта: деньги пришли или счёт снят. Отправки клиенту тут нет."""
+    b = InlineKeyboardBuilder()
+    b.button(text="💵 Оплачен", callback_data=f"ipd:{invoice_id}")
+    b.button(text="✖️ Отменить счёт", callback_data=f"icx:{invoice_id}")
+    b.adjust(2)
+    return b.as_markup()
+
+
+def invoices_kb(invoices):
+    """Список открытых счетов: у каждого один следующий шаг — «оплачен».
+
+    Снять счёт с кнопки нельзя намеренно: отмена долга — решение, а не
+    промах пальцем. Для неё есть /invoice cancel с номером.
+    """
+    b = InlineKeyboardBuilder()
+    for invoice in invoices:
+        b.button(text=f"💵 #{invoice.id} оплачен",
+                 callback_data=f"ipd:{invoice.id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def stop_all_kb(stopped: bool):
+    """Экстренный стоп исходящего (1.26): включение и снятие — в два шага."""
+    b = InlineKeyboardBuilder()
+    if stopped:
+        b.button(text="▶️ Снять стоп", callback_data="sal:off")
+    else:
+        b.button(text="⛔ Да, остановить всё", callback_data="sal:on")
+    b.button(text="⬅️ Отмена", callback_data=CANCEL_CB)
+    b.adjust(1)
+    return b.as_markup()
+
+
 def page_row(b: InlineKeyboardBuilder, pfx, offset, total):
     row = InlineKeyboardBuilder()
     if offset > 0:

@@ -80,6 +80,16 @@ SCOUT_GATE_MAX = int(os.getenv("SCOUT_GATE_MAX", "20"))
 # без ключей R2 он и так молча спит.
 PREVIEW_HITS_POLL_SEC = int(os.getenv("PREVIEW_HITS_POLL_SEC", "120"))
 PAGESPEED_API_KEY = (os.getenv("PAGESPEED_API_KEY") or "").strip()
+# Счета подписки (12.29, 12.16, 12.30). Сколько дней у клиента на оплату,
+# как часто повторять напоминание по неоплаченному и за сколько дней
+# предупреждать о следующем счёте. Ежемесячность самого цикла — не настройка:
+# подписка помесячная (12.2).
+INVOICE_DUE_DAYS = int(os.getenv("INVOICE_DUE_DAYS", "7"))
+INVOICE_REMIND_EVERY_DAYS = int(os.getenv("INVOICE_REMIND_EVERY_DAYS", "3"))
+INVOICE_NOTICE_DAYS = int(os.getenv("INVOICE_NOTICE_DAYS", "3"))
+# Как часто бот смотрит на календарь счетов. Раз в час: счета живут в днях,
+# чаще незачем. 0 выключает фоновую задачу — цикл двигают руками, /invoice run.
+BILLING_POLL_SEC = int(os.getenv("BILLING_POLL_SEC", "3600"))
 # Цена одного вызова платного не-ИИ API, $ (20.3): Places считается по SKU,
 # Twilio — по сообщению. Числа берутся из прайса провайдера и живут в .env:
 # выдуманная цена в коде врала бы в юнит-экономике месяцами. Не задана —

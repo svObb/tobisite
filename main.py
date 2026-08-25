@@ -10,6 +10,7 @@ from aiogram.types import (
 )
 from sqlalchemy import select
 
+import billing
 import config
 import draft_service
 import handlers_admin
@@ -164,6 +165,8 @@ async def main():
                     BotCommand(command="metrics",
                                description="Метрики недели, csv — выгрузка"),
                     BotCommand(command="subs", description="Подписки на доп-услуги"),
+                    BotCommand(command="invoice",
+                               description="Счета подписки: on, off, paid"),
                     BotCommand(command="stop", description="Стоп-лист: id лида"),
                     BotCommand(command="stops", description="Журнал отписок и жалоб"),
                     BotCommand(command="numbers",
@@ -196,6 +199,8 @@ async def main():
     if config.PREVIEW_HITS_POLL_SEC > 0:
         # ссылку держим: задачу без владельца сборщик мусора вправе убить
         _bg_tasks.add(asyncio.create_task(preview_hits.poll_forever(bot)))
+    if config.BILLING_POLL_SEC > 0:
+        _bg_tasks.add(asyncio.create_task(billing.run_forever(bot)))
     log.info(
         "bot started: @%s, режим %s",
         me.username, "ТЕСТОВЫЙ" if config.TEST_MODE else "боевой",
