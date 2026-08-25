@@ -159,6 +159,8 @@ async def main():
                     BotCommand(command="subs", description="Подписки на доп-услуги"),
                     BotCommand(command="stop", description="Стоп-лист: id лида"),
                     BotCommand(command="stops", description="Журнал отписок и жалоб"),
+                    BotCommand(command="numbers",
+                               description="Цифры клиента для письма 3"),
                     BotCommand(command="scout", description="Скаут: страна ниша город"),
                     BotCommand(command="scout_paste",
                                description="Скаут: домены из Ads Transparency"),

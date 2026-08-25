@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 import config
 import costs
 import draft_service
+import email_gen
 import keyboards as kb
 import notify
 import phrases
@@ -389,6 +390,58 @@ async def stops_cmd(message: Message, state: FSMContext, command: CommandObject)
             f"{esc(lead_name or '—')} ({esc(ev.source or '?')}){tail}"
         )
     await message.answer("\n".join(lines))
+
+
+# --- цифры клиента для формулы потерянной выручки (/numbers, 9.35) -----------
+
+NUMBERS_USAGE = (
+    "Формат: /numbers &lt;id лида&gt; &lt;пропущено обращений в месяц&gt; "
+    "&lt;конверсия %&gt; &lt;средний чек [валюта]&gt;\n"
+    "Пример: /numbers 42 20 25 800 UAH (без валюты — USD)\n\n"
+    "Только те цифры, которые назвал сам клиент: в письмо 3 они уйдут как есть."
+)
+
+
+@router.message(Command("numbers"))
+async def numbers_cmd(message: Message, state: FSMContext,
+                      command: CommandObject):
+    await state.set_state(None)
+    args = (command.args or "").split()
+    if len(args) not in (4, 5):
+        await message.answer(NUMBERS_USAGE)
+        return
+    try:
+        lead_id, missed, pct = int(args[0]), int(args[1]), int(args[2])
+    except ValueError:
+        await message.answer(NUMBERS_USAGE)
+        return
+    deal = parse_deal(" ".join(args[3:]))
+    if deal is None or missed <= 0 or not 0 < pct <= 100:
+        await message.answer("Пропущенных — больше нуля, конверсия — 1–100, "
+                             "чек — сумма вида «800» или «800 UAH».")
+        return
+    ticket, currency = deal
+    async with Session() as s, s.begin():
+        lead = await s.get(Lead, lead_id)
+        if lead is None or lead.deleted_at:
+            await message.answer(f"Лид #{lead_id} не найден или удалён.")
+            return
+        # JSONB меняем присваиванием: правку словаря на месте SQLAlchemy не
+        # заметит и в базу ничего не уйдёт
+        lead.enrichment = dict(lead.enrichment or {}) | {
+            email_gen.LOSS_KEY: {
+                "missed_per_month": missed, "conversion_pct": pct,
+                "avg_ticket": str(ticket), "currency": currency,
+            },
+        }
+        log_event(s, lead_id, "client_numbers", message.from_user.id,
+                  new=f"{missed} / {pct}% / {ticket} {currency}")
+        lang = phrases.lang_of(lead)
+        line = email_gen.lost_revenue(lead, lang) if lang else ""
+    answer = f"✅ Цифры лида #{lead_id} записаны."
+    if line:
+        answer += f"\n\nВ письмо 3 пойдёт строка:\n{esc(line)}"
+    await message.answer(answer)
 
 
 # --- лид-скаут (/scout, /scout_paste) ----------------------------------------

@@ -12,7 +12,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 import anthropic
 
@@ -172,6 +172,20 @@ LETTER_3 = {
 SUBJECT_2 = {"uk": "Чернетка вашої головної", "en": "your draft is ready"}
 SUBJECT_3 = {"uk": "Закриваю тему", "en": "closing this out"}
 
+# Слот потерянной выручки (9.35). Три множителя, все три — цифры самого
+# клиента: сколько обращений в месяц проходит мимо, какая у него конверсия и
+# какой средний чек. Наших цифр в формуле нет ни одной, среднего по рынку тем
+# более: письмо считает его арифметику, а не рассказывает про рынок.
+LOSS_KEY = "client_numbers"
+LOST_REVENUE = {
+    "uk": ("Ваші ж цифри: {missed} пропущених звернень на місяць, "
+           "конверсія {pct}%, середній чек {ticket} {cur}. "
+           "Разом {loss} {cur} на місяць."),
+    "en": ("Your own numbers: {missed} missed enquiries a month, "
+           "{pct}% conversion, average ticket {ticket} {cur}. "
+           "That's {loss} {cur} a month."),
+}
+
 
 @dataclass(frozen=True)
 class EmailResult:
@@ -242,12 +256,44 @@ def build_email_2(lead, preview_host: str) -> EmailResult:
 
 
 def build_email_3(lead) -> EmailResult:
-    """Касание 3: срок хранения черновика и выход из переписки."""
+    """Касание 3: потерянная выручка, срок хранения черновика и выход.
+
+    Цифра-пруф письма 3 (9.6) — потерянная выручка, если клиент назвал свои
+    цифры; иначе остаётся единственная наша цифра, срок хранения черновика.
+    """
     lang = phrases.lang_of(lead)
     if lang is None:
         return _manual(f"нет фраз для языка «{lead.language}» — письмо руками")
     body = LETTER_3[lang].format(days=DRAFT_HOLD_DAYS)
-    return _constant_letter(lead, lang, SUBJECT_3[lang], body)
+    return _constant_letter(lead, lang, SUBJECT_3[lang], body,
+                            loss=lost_revenue(lead, lang))
+
+
+def lost_revenue(lead, lang: str) -> str:
+    """Строка потерянной выручки (9.35). Пусто — цифр клиента нет.
+
+    Не хватает хотя бы одного множителя — строки не будет вовсе: подставить
+    вместо неизвестного среднее по рынку значит соврать в письме, а
+    единственный источник цифр здесь — сам клиент.
+    """
+    numbers = (getattr(lead, "enrichment", None) or {}).get(LOSS_KEY) or {}
+    try:
+        missed = int(numbers["missed_per_month"])
+        pct = int(numbers["conversion_pct"])
+        ticket = Decimal(str(numbers["avg_ticket"]))
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return ""
+    currency = str(numbers.get("currency") or "").strip()
+    if not (missed > 0 and 0 < pct <= 100 and ticket > 0 and currency
+            and lang in LOST_REVENUE):
+        return ""
+    # вниз: цифра в письме не имеет права оказаться больше настоящей
+    loss = (missed * pct * ticket / 100).quantize(Decimal("1"),
+                                                  rounding=ROUND_DOWN)
+    if loss <= 0:
+        return ""
+    return LOST_REVENUE[lang].format(missed=missed, pct=pct, cur=currency,
+                                     ticket=_money(ticket), loss=_money(loss))
 
 
 def signature(lead, lang: str, *, with_link: bool = False) -> str:
@@ -419,10 +465,10 @@ def _assemble(lead, lang, first_line, slots) -> EmailResult:
                        reason="" if result.ok else "; ".join(result.fails))
 
 
-def _constant_letter(lead, lang, subject, text) -> EmailResult:
+def _constant_letter(lead, lang, subject, text, *, loss: str = "") -> EmailResult:
     # письма 2 и 3 ссылки уже несут (превью), поэтому и ссылка отписки идёт
     # именно здесь — там, где она никакого правила не нарушает
-    slots = {"greeting": greeting(lang, _contact_name(lead)),
+    slots = {"greeting": greeting(lang, _contact_name(lead)), "loss": loss,
              "text": text, "signature": signature(lead, lang, with_link=True)}
     body = "\n\n".join(p for p in slots.values() if p)
     return EmailResult(ok=True, lang=lang, subject=subject, body=body,
@@ -445,6 +491,12 @@ async def _log_cost(lead, usage):
 
 def _manual(reason: str, lang: str | None = None, lint=None) -> EmailResult:
     return EmailResult(ok=False, lang=lang, reason=reason, lint=lint)
+
+
+def _money(value: Decimal) -> str:
+    """«800», а не «800.00»; копейки остаются, если они есть."""
+    return (f"{value:.0f}" if value == value.to_integral_value()
+            else f"{value:.2f}")
 
 
 def _contact_name(lead) -> str:
