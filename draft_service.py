@@ -34,6 +34,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 import config
 import slot_gen
@@ -91,6 +92,12 @@ DEFAULT_BUCKET = "tobisite-previews"
 # Лид закрыт — превью больше некому показывать (10.14). sold сюда не входит
 # намеренно: его страница становится основой боевого сайта (10.15).
 CLOSED_STATUSES = ("refused", "rejected")
+# Черновики, за которыми может стоять объект в бакете: publishing — тот, чей
+# PUT не досчитался ответа, и его страница тоже подлежит уборке.
+IN_BUCKET_STATUSES = ("publishing", "published")
+# Сколько раз подряд подбирать слаг, проиграв гонку за него. Больше — это уже
+# не гонка, а сломанный уникальный индекс, и молча крутиться незачем.
+SLUG_TRIES = 5
 
 
 @dataclass(frozen=True)
@@ -276,6 +283,39 @@ async def free_slug(session, lead) -> str:
     return unique_slug(lead.name or f"lead-{lead.id}", taken.__contains__)
 
 
+async def reserve_slug(draft_id: int, lead) -> str:
+    """Закрепить слаг за черновиком ДО выкладки в R2 (10.12).
+
+    Свободный слаг, выбранный по таблице, свободен только до чужого commit'а:
+    два параллельных «Собрать черновик» для компаний с одинаковым транслитом
+    названия получают один и тот же вариант. Проигравшего гонку ловит
+    уникальный индекс — он берёт следующий вариант и пробует снова.
+
+    Слаг остаётся за черновиком навсегда, в том числе после неудачного PUT:
+    повтор публикации обязан лечь по тому же адресу, что ушёл в письме.
+    """
+    for _ in range(SLUG_TRIES):
+        async with Session() as s:
+            draft = await s.get(Draft, draft_id)
+            if draft is None:
+                raise ValueError(f"нет черновика {draft_id}")
+            if draft.r2_prefix:
+                return draft.r2_prefix
+            slug = await free_slug(s, lead)
+        try:
+            async with Session() as s, s.begin():
+                draft = await s.get(Draft, draft_id, with_for_update=True)
+                if draft.r2_prefix:
+                    return draft.r2_prefix
+                draft.r2_prefix = slug
+                draft.status = "publishing"
+        except IntegrityError:
+            log.info("лид %s: слаг %s занят, беру следующий", lead.id, slug)
+            continue
+        return slug
+    raise RuntimeError(f"слаг {slug} не закрепился за черновиком {draft_id}")
+
+
 async def publish_draft(draft_id: int, html: str, slug: str,
                         bucket: str | None = None, *,
                         actor_tg_id: int = config.ADMIN_TG_ID) -> str:
@@ -315,6 +355,10 @@ async def publish_preview(lead_id: int, *,
     Страница пересобирается из сохранённых слотов: модель второй раз не зовётся,
     а правки карточки, сделанные после сборки, в превью попадают. Слаг у лида
     один навсегда — иначе ссылка из уже отправленного письма умрёт.
+
+    Библиотека секций с тех пор могла обновиться, и тогда сохранённые тексты
+    относятся к другим вариантам секций. Такой черновик пересобирают, а не
+    публикуют: иначе на превью молча уехали бы заготовки рецепта.
     """
     if not r2_ready():
         return PublishResult(False, reason="не заданы ключи R2")
@@ -330,6 +374,9 @@ async def publish_preview(lead_id: int, *,
             # ради публикации значит выложить не ту страницу, что в письме
             return PublishResult(False, reason="черновик собран без слотов, "
                                                "пересоберите его")
+        stale = _stale_library(draft)
+        if stale:
+            return PublishResult(False, reason=stale)
         draft_id, slots = draft.id, dict(draft.slots_json)
         profile = await build_profile(s, lead)
 
@@ -361,7 +408,8 @@ async def expire_previews(*,
     async with Session() as s:
         rows = list(await s.execute(
             select(Draft, Lead).join(Lead, Lead.id == Draft.lead_id)
-            .where(Draft.status == "published", Draft.r2_prefix.is_not(None))
+            .where(Draft.status.in_(IN_BUCKET_STATUSES),
+                   Draft.r2_prefix.is_not(None))
         ))
     deadline = _now() - timedelta(days=PREVIEW_TTL_DAYS)
     deleted, failed, sold = [], [], 0
@@ -373,13 +421,16 @@ async def expire_previews(*,
         if not why:
             continue
         try:
+            # снос и отметка о нём — одна операция: упади база после удаления,
+            # остальные превью всё равно должны быть разобраны, а этот лид —
+            # попасть в failed, а не потеряться в тишине до следующего прогона
             await _delete_prefix(draft.r2_prefix)
+            await _mark_expired(draft.id, lead.id, why, actor_tg_id)
         except Exception as e:
             log.exception("лид %s: превью %s не снесено", lead.id,
                           draft.r2_prefix)
             failed.append(f"#{lead.id}: {e}")
             continue
-        await _mark_expired(draft.id, lead.id, why, actor_tg_id)
         deleted.append((lead.id, draft.r2_prefix, why))
     return GcResult(deleted=deleted, kept_sold=sold, failed=failed)
 
@@ -441,29 +492,76 @@ async def list_keys(prefix: str, limit: int = 1000) -> list[str]:
 
 
 async def delete_keys(keys) -> int:
-    """Удаление пачками по 1000: столько принимает delete_objects за раз."""
-    s3, keys = s3_client(), list(keys)
+    """Удаление пачками по 1000: столько принимает delete_objects за раз.
+
+    Возвращает число действительно удалённых ключей: пачка отвечает 200 и с
+    Errors внутри, и посчитать неудалённое удалённым — значит решить, что
+    превью снесено, когда оно живо.
+    """
+    s3, keys, gone = s3_client(), list(keys), 0
     for start in range(0, len(keys), 1000):
-        await asyncio.to_thread(
+        chunk = keys[start:start + 1000]
+        answer = await asyncio.to_thread(
             s3.delete_objects, Bucket=bucket_name(),
-            Delete={"Objects": [{"Key": k} for k in keys[start:start + 1000]]},
+            Delete={"Objects": [{"Key": k} for k in chunk]},
         )
-    return len(keys)
+        errors = answer.get("Errors") or []
+        for err in errors:
+            log.warning("R2 не удалил %s: %s", err.get("Key"),
+                        err.get("Message") or err.get("Code"))
+        gone += len(chunk) - len(errors)
+    return gone
 
 
 async def _publish(lead, draft_id: int, html: str,
                    actor_tg_id: int) -> PublishResult:
-    """Слаг лида (старый или новый) + выкладка. Сбой R2 черновик не отменяет."""
-    async with Session() as s:
-        draft = await s.get(Draft, draft_id)
-        slug = draft.r2_prefix or await free_slug(s, lead)
+    """Резерв слага -> выкладка -> запись адреса. Сбой R2 черновик не отменяет.
+
+    Порядок именно такой: слаг в базе появляется раньше объекта в бакете, и
+    объекта без строки о нём не остаётся даже при упавшей транзакции.
+    """
+    try:
+        slug = await reserve_slug(draft_id, lead)
+    except Exception as e:
+        log.exception("лид %s: слаг не закреплён", lead.id)
+        return PublishResult(False, reason=f"слаг не закреплён: {e}")
     try:
         host = await publish_draft(draft_id, html, slug, actor_tg_id=actor_tg_id)
     except Exception as e:
         # сеть, ключи, бакет — исход один: превью нет, а черновик в базе есть
         log.exception("лид %s: превью не выложено", lead.id)
+        await _release_slug(draft_id)
         return PublishResult(False, slug=slug, reason=f"R2 недоступен: {e}")
     return PublishResult(True, url=f"https://{host}/", slug=slug)
+
+
+async def _release_slug(draft_id: int):
+    """Вернуть черновик из publishing в собранный: слаг за ним остаётся.
+
+    Не вышло и это — черновик останется в publishing, и его подберёт /publish:
+    страница и слаг на месте, повторная выкладка ляжет по тому же адресу.
+    """
+    try:
+        async with Session() as s, s.begin():
+            draft = await s.get(Draft, draft_id)
+            if draft is not None and draft.status == "publishing":
+                draft.status = "generated"
+    except Exception:
+        log.exception("черновик %s: статус publishing не снят", draft_id)
+
+
+def _stale_library(draft) -> str:
+    """Почему черновик нельзя выложить как есть. Пусто — версия та же.
+
+    Версия библиотеки решает, какие варианты секций выиграют композицию, а
+    ключ сохранённого текста — это «вариант.слот». Разъехались версии —
+    разъедутся и ключи, и часть страницы соберётся из заготовок рецепта.
+    """
+    current = str(render.load_tokens()["version"])
+    if (draft.library_version or "") == current:
+        return ""
+    return (f"черновик собран на библиотеке {draft.library_version or '—'}, "
+            f"сейчас {current} — пересоберите черновик")
 
 
 def _expire_reason(draft, lead, deadline: datetime) -> str:
@@ -477,8 +575,16 @@ def _expire_reason(draft, lead, deadline: datetime) -> str:
 
 async def _delete_prefix(slug: str) -> int:
     """Снести всё под префиксом слага: превью из одного файла бывает не всегда
-    (руками через tools/publish_r2.py уезжает вся папка)."""
-    return await delete_keys(await list_keys(f"{slug}/", limit=10_000))
+    (руками через tools/publish_r2.py уезжает вся папка).
+
+    Удалилось не всё — это неудача целиком: страница ещё открывается, и
+    помечать превью снесённым нельзя.
+    """
+    keys = await list_keys(f"{slug}/", limit=10_000)
+    gone = await delete_keys(keys)
+    if gone < len(keys):
+        raise RuntimeError(f"{slug}: осталось объектов {len(keys) - gone}")
+    return gone
 
 
 async def _mark_expired(draft_id: int, lead_id: int, why: str,

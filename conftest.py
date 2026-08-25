@@ -180,12 +180,17 @@ class FakeMessages:
 
 
 class FakeR2:
-    """Бакет в памяти вместо R2. fail — исключение, которым отвечает вызов."""
+    """Бакет в памяти вместо R2. fail — исключение, которым отвечает вызов.
+
+    refuse — ключи, которые бакет отказывается удалять: delete_objects отвечает
+    на них 200 с Errors внутри, ровно как настоящий R2.
+    """
 
     def __init__(self):
         self.objects = {}
         self.puts = []
         self.fail = None
+        self.refuse = set()
 
     def put_object(self, **kw):
         self._check()
@@ -200,9 +205,14 @@ class FakeR2:
 
     def delete_objects(self, **kw):
         self._check()
+        errors = []
         for obj in kw["Delete"]["Objects"]:
+            if obj["Key"] in self.refuse:
+                errors.append({"Key": obj["Key"], "Code": "AccessDenied",
+                               "Message": "pytest не даёт удалить"})
+                continue
             self.objects.pop(obj["Key"], None)
-        return {}
+        return {"Errors": errors} if errors else {}
 
     def _check(self):
         if self.fail:

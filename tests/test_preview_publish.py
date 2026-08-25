@@ -4,6 +4,7 @@
 список. Без ключей R2 фикстура не ставится, и тогда проверяется обратное —
 сборка работает как раньше, а публикации просто нет.
 """
+import itertools
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from sqlalchemy import select
 import config
 import draft_service
 from models import PREVIEW_TTL_DAYS, Draft, Lead, LeadEvent, Session
+from site_factory.engine import render
 
 
 async def _draft(lead_id: int) -> Draft:
@@ -83,8 +85,82 @@ async def test_dead_r2_does_not_cancel_the_draft(slot_answer, draft_lead, r2):
     assert result.ok and result.status == "generated"
     assert not result.preview_url and "бакета нет" in result.publish_reason
     row = await _draft(lead.id)
-    assert row.status == "generated" and row.r2_prefix is None
+    # слаг остаётся закреплённым за черновиком, а адреса превью нет: страницы
+    # в бакете тоже нет, и ссылке взяться неоткуда
+    assert row.status == "generated" and row.r2_prefix
+    assert row.preview_host is None
     assert (await _lead(lead.id)).draft_url is None
+
+
+async def test_repeat_after_a_failed_upload_uses_the_same_slug(slot_answer,
+                                                               draft_lead, r2):
+    lead = await draft_lead(name="Кава і Пара")
+    await slot_answer(lead)
+    r2.fail = RuntimeError("бакета нет")
+    assert not (await draft_service.build_draft(lead.id)).preview_url
+    reserved = (await _draft(lead.id)).r2_prefix
+    r2.fail = None
+
+    result = await draft_service.publish_preview(lead.id)
+
+    assert result.ok and result.slug == reserved
+    assert list(r2.objects) == [f"{reserved}/index.html"]
+    assert (await _draft(lead.id)).status == "published"
+
+
+async def _new_draft(lead_id: int) -> int:
+    async with Session() as s, s.begin():
+        row = Draft(lead_id=lead_id, status="generated")
+        s.add(row)
+        await s.flush()
+        return row.id
+
+
+async def test_racing_drafts_do_not_share_one_slug(draft_lead, monkeypatch):
+    first, second = await draft_lead(name="Гонка"), await draft_lead(name="Гонка")
+    ids = [await _new_draft(first.id), await _new_draft(second.id)]
+    real, calls = draft_service.free_slug, itertools.count()
+
+    async def same_slug(session, lead):
+        # обе сборки успели выбрать слаг раньше, чем соседняя записала свой
+        return "honka-race" if next(calls) < 2 else await real(session, lead)
+
+    monkeypatch.setattr(draft_service, "free_slug", same_slug)
+
+    slugs = [await draft_service.reserve_slug(ids[0], first),
+             await draft_service.reserve_slug(ids[1], second)]
+
+    assert slugs[0] == "honka-race" and slugs[1] != slugs[0]
+    assert (await _draft(second.id)).r2_prefix == slugs[1]
+    # слаг закреплён до выкладки: страницы под ним ещё нет
+    assert (await _draft(first.id)).status == "publishing"
+
+
+async def test_draft_from_another_library_is_not_published(slot_answer,
+                                                           draft_lead, r2):
+    lead = await draft_lead()
+    await slot_answer(lead)
+    assert (await draft_service.build_draft(lead.id)).ok
+    async with Session() as s, s.begin():
+        (await s.get(Draft, (await _draft(lead.id)).id)).library_version = "0"
+
+    result = await draft_service.publish_preview(lead.id)
+
+    assert not result.ok and "пересоберите" in result.reason
+    assert len(r2.puts) == 1                   # второй выкладки не было
+
+
+async def test_slot_without_saved_text_drops_the_section(draft_lead, slot_plan):
+    lead = await draft_lead()
+    plan = await slot_plan(lead)
+    texts = {spec["slot"]: "Рядок" for spec in plan.specs}
+    lost = next(s["slot"] for s in plan.specs if s["role"] == "hero")
+    texts.pop(lost)
+
+    html, trace = render.render(plan.profile, free_texts=texts)
+
+    # заготовка рецепта на месте пропавшего текста означала бы рыбу на превью
+    assert html is None and "hero" in trace["dropped_sections"]
 
 
 async def test_republish_keeps_the_slug_and_does_not_ask_the_model(
@@ -201,6 +277,47 @@ async def test_failed_deletion_keeps_the_row_as_it_was(slot_answer, draft_lead,
     assert any(f"#{lead.id}" in line for line in result.failed)
     assert (await _draft(lead.id)).status == "published"
     assert (await _lead(lead.id)).draft_url == url
+
+
+async def test_gc_survives_a_database_failure_in_the_middle(
+        slot_answer, draft_lead, r2, monkeypatch):
+    first = await _published(slot_answer, draft_lead, name="Перша Гілка")
+    second = await _published(slot_answer, draft_lead, name="Друга Гілка")
+    await _age(first.id, PREVIEW_TTL_DAYS + 1)
+    await _age(second.id, PREVIEW_TTL_DAYS + 1)
+    real = draft_service._mark_expired
+
+    async def flaky(draft_id, lead_id, why, actor_tg_id):
+        if lead_id == first.id:
+            raise RuntimeError("база отвалилась")
+        await real(draft_id, lead_id, why, actor_tg_id)
+
+    monkeypatch.setattr(draft_service, "_mark_expired", flaky)
+
+    result = await draft_service.expire_previews()
+
+    # соседнее превью разобрано, а сбой виден в отчёте, а не только в логах
+    done = [x[0] for x in result.deleted]
+    assert second.id in done and first.id not in done
+    assert any(f"#{first.id}" in line for line in result.failed)
+    assert (await _draft(first.id)).status == "published"
+    assert (await _draft(second.id)).status == "expired"
+
+
+async def test_preview_the_bucket_refused_to_delete_stays_published(
+        slot_answer, draft_lead, r2):
+    lead = await _published(slot_answer, draft_lead)
+    slug = (await _draft(lead.id)).r2_prefix
+    await _age(lead.id, PREVIEW_TTL_DAYS + 1)
+    r2.refuse.add(f"{slug}/index.html")
+
+    result = await draft_service.expire_previews()
+
+    # 200 с Errors внутри — не удаление: страница открывается, значит превью живо
+    assert any(f"#{lead.id}" in line for line in result.failed)
+    assert f"{slug}/index.html" in r2.objects
+    assert (await _draft(lead.id)).status == "published"
+    assert (await _lead(lead.id)).draft_url
 
 
 async def test_slug_of_a_removed_preview_is_not_given_away(slot_answer,

@@ -60,10 +60,14 @@ DRAFT_STATUSES = ["queued", "claimed", "approved", "rejected", "cancelled",
                   "needs_manual"]
 # Кто написал версию текста: модель или человек в очереди (Д12 §6.5).
 VERSION_AUTHORS = ["model", "human"]
-# Состояния черновика сайта (Д13 §5). published ставит публикация в R2,
-# expired — уборка превью по сроку (10.14).
+# Состояния черновика сайта (Д13 §5). publishing — слаг закреплён, страница ещё
+# не в бакете; published ставит публикация в R2, expired — уборка превью по
+# сроку (10.14).
 # Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
-BUILD_STATUSES = ["generated", "published", "failed", "expired"]
+BUILD_STATUSES = ["generated", "publishing", "published", "failed", "expired"]
+# Черновик собран и на него можно ссылаться. publishing сюда входит: страница
+# уже есть в базе, в бакет её кладут прямо сейчас.
+LIVE_BUILD_STATUSES = ("generated", "publishing", "published")
 # Комиссия работника, % от суммы сделки (7.9). Границы — решение основателя
 # «15–30%»; они же стоят CHECK-констрейнтом и на workers, и на строке продажи.
 COMMISSION_MIN, COMMISSION_MAX = 15, 30
@@ -681,7 +685,9 @@ class Draft(Base, TimesMixin):
     «чисто».
 
     r2_prefix и preview_host заполняет публикация в R2 (10.13): пока их нет,
-    черновик живёт в базе и в письме, но не в интернете.
+    черновик живёт в базе и в письме, но не в интернете. Слаг закрепляется за
+    черновиком ДО выкладки и уникален по всей таблице: одинаковый транслит
+    названия у двух компаний иначе означал бы одну страницу на двоих.
     """
     __tablename__ = "drafts"
 
@@ -716,6 +722,10 @@ class Draft(Base, TimesMixin):
         # тот же, а не плодит вторую страницу с другим дизайном
         Index("uq_drafts_lead_active", "lead_id", unique=True,
               postgresql_where="deleted_at IS NULL"),
+        # слаг занят навсегда, даже у снесённого превью (10.14): сохранённая
+        # клиентом ссылка не должна однажды открыть чужой сайт
+        Index("uq_drafts_r2_prefix", "r2_prefix", unique=True,
+              postgresql_where="r2_prefix IS NOT NULL"),
         Index("ix_drafts_status", "status"),
     )
 
@@ -757,8 +767,7 @@ class PreviewHit(Base, TimesMixin):
 
 def draft_fresh(draft) -> bool:
     """Черновик, на который письмо ещё может ссылаться."""
-    if draft is None or draft.deleted_at or draft.status not in ("generated",
-                                                                 "published"):
+    if draft is None or draft.deleted_at or draft.status not in LIVE_BUILD_STATUSES:
         return False
     if draft.expires_at is None:
         return True
