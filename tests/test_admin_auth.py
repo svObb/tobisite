@@ -9,7 +9,7 @@ import pytest
 
 from admin.app import SECURITY_HEADERS
 
-SCREENS = ["/", "/leads", "/costs", "/subs", "/robots.txt"]
+SCREENS = ["/", "/leads", "/metrics", "/costs", "/subs", "/robots.txt"]
 
 
 @pytest.mark.parametrize("path", SCREENS)

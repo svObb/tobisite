@@ -12,8 +12,11 @@ from sqlalchemy import func, select
 
 import config
 import costs
+import metrics
+from admin import queries
 from models import (
-    ClientService, Contact, CostLedger, Lead, Session, log_event, month_start,
+    ClientService, Contact, CostLedger, Lead, PreviewHit, Session, log_event,
+    month_start,
 )
 
 ACTIVE = (Lead.cancelled_at.is_(None), Lead.deleted_at.is_(None))
@@ -69,6 +72,38 @@ async def test_dashboard_shows_last_events(admin, make_lead):
     html = (await admin.get("/")).text
     assert "pytest_event" in html
     assert f'href="/leads/{lead_id}"' in html
+
+
+async def test_metrics_screen_matches_the_bot(admin, make_lead):
+    async with Session() as s, s.begin():
+        lead = await make_lead(s)
+        log_event(s, lead.id, "preview_published", 1)
+        s.add(PreviewHit(lead_id=lead.id, slug=f"pytest-{lead.id}",
+                         event="view", happened_at=func.now(),
+                         object_key=f"_hits/pytest-{lead.id}/view/{lead.id}"))
+        lead.preview_opened_at = func.now()
+        lead_id = lead.id
+
+    week = (await metrics.weekly(1))[0]
+    async with Session() as s:
+        published, opened = await queries.preview_funnel(s)
+
+    html = (await admin.get("/metrics")).text
+    # цифры недели — те же, что отдаёт метрикам бот
+    assert f'data-week="{week.start}" data-leads="{week.leads}"' in html
+    assert value_of(html, "data-previews") == str(published)
+    assert value_of(html, "data-opened") == str(opened)
+    assert f'data-preview-lead="{lead_id}"' in html
+    # факт-стоимости раздела 13.5 — на том же экране
+    for unit in ("letter", "draft", "lead"):
+        assert f'data-unit="{unit}"' in html
+
+
+async def test_metrics_screen_shows_a_dash_when_there_is_nothing_to_divide(admin):
+    html = (await admin.get("/metrics?weeks=1")).text
+    assert html.count("<tr data-week=") == 1
+    # доставка писем не измеряется — в колонке прочерк, а не ноль
+    assert "Доставка" in html and "—" in html
 
 
 async def test_costs_screen_matches_direct_queries(admin):

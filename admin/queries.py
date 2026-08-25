@@ -1,9 +1,10 @@
 """Все SELECT-ы экранов панели. Только чтение — роль admin_ro большего и не умеет.
 
 Цифры обязаны сходиться с ботом, поэтому фильтры и суммы повторяют его код:
-расходы месяца считает costs.month_spent(), MRR — как /subs, воронка — по всем
-config.STATUSES, а условия и сортировка списка лидов — как flt_conditions/page
-в handlers_admin.py. Импортировать оттуда нельзя: это модуль aiogram-хендлеров.
+расходы месяца считает costs.month_spent(), метрики недели — metrics.weekly(),
+MRR — как /subs, воронка — по всем config.STATUSES, а условия и сортировка
+списка лидов — как flt_conditions/page в handlers_admin.py. Импортировать
+оттуда нельзя: это модуль aiogram-хендлеров.
 """
 from decimal import Decimal
 
@@ -11,9 +12,10 @@ from sqlalchemy import func, select
 
 import config
 import costs
+import metrics
 from models import (
-    ClientService, Contact, CostLedger, Lead, LeadEvent, Worker, day_start,
-    month_start,
+    ClientService, Contact, CostLedger, Lead, LeadEvent, PreviewHit, Worker,
+    day_start, month_start,
 )
 
 PAGE_SIZE = 25
@@ -125,6 +127,58 @@ async def lead_card(session, lead_id: int) -> dict | None:
     ))
     return {"lead": lead, "author": author, "contacts": contacts,
             "events": events, "subs": subs}
+
+
+# --- метрики недели и превью-хиты (13.1, 13.4, 20.10) -------------------------
+
+WEEKS = metrics.WEEKS
+PREVIEW_LEADS = 20
+PREVIEW_HITS = 20
+
+
+async def weekly(session, weeks: int = WEEKS):
+    """Таблица метрик недели — ровно та же, что показывает /metrics в боте."""
+    return await metrics.weekly(weeks, session)
+
+
+async def unit_costs(session, since):
+    """Факт-стоимости письма, черновика и лида за окно (13.5)."""
+    return await costs.unit_costs(since, session)
+
+
+async def preview_funnel(session) -> tuple[int, int]:
+    """(лидов с выложенным превью, из них открывших) — конверсия открытий."""
+    published = await session.scalar(
+        select(func.count(func.distinct(LeadEvent.lead_id)))
+        .where(LeadEvent.event == "preview_published")
+    )
+    opened = await session.scalar(
+        select(func.count()).select_from(Lead)
+        .where(Lead.preview_opened_at.is_not(None))
+    )
+    return published, opened
+
+
+async def preview_leads(session, limit: int = PREVIEW_LEADS):
+    """Кто открывал превью: лид, слаг, число событий, первое и последнее."""
+    return (await session.execute(
+        select(
+            PreviewHit.lead_id, Lead.name, PreviewHit.slug, func.count(),
+            func.min(PreviewHit.happened_at), func.max(PreviewHit.happened_at),
+        )
+        .join(Lead, Lead.id == PreviewHit.lead_id)
+        .group_by(PreviewHit.lead_id, Lead.name, PreviewHit.slug)
+        .order_by(func.max(PreviewHit.happened_at).desc()).limit(limit)
+    )).all()
+
+
+async def preview_recent(session, limit: int = PREVIEW_HITS):
+    """Последние события превью: одна строка на событие, как их прислал воркер."""
+    return (await session.execute(
+        select(PreviewHit, Lead.name)
+        .join(Lead, Lead.id == PreviewHit.lead_id)
+        .order_by(PreviewHit.happened_at.desc()).limit(limit)
+    )).all()
 
 
 # --- расходы и подписки ------------------------------------------------------

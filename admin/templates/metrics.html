@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Метрики{% endblock %}
+{% block body %}
+<h1>Метрики недели</h1>
+<p class="meta">
+  Неделя от понедельника. Те же цифры показывает /metrics в боте, выгрузка —
+  /metrics csv.
+</p>
+
+<table class="grid">
+  <thead>
+    <tr>
+      <th>Неделя</th><th>Лиды</th><th>Письма</th><th>Доставка</th>
+      <th>Превью</th><th>Открытия</th><th>Ответы</th><th>Интерес</th>
+      <th>Продажи</th><th>Выручка</th><th>Расходы</th>
+      <th>$/лид</th><th>$/черновик</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for week in weeks %}
+    <tr data-week="{{ week.start }}" data-leads="{{ week.leads }}">
+      <td class="nowrap">{{ week.label }}</td>
+      <td class="num">{{ week.leads }}</td>
+      <td class="num">{{ week.letters }}</td>
+      <td class="num">—</td>
+      <td class="num">{{ week.previews }}</td>
+      <td class="num">{{ week.opens }}</td>
+      <td class="num">{{ week.replies }}</td>
+      <td class="num">{{ week.interested }}</td>
+      <td class="num">{{ week.sales }}</td>
+      <td class="num">${{ week.revenue|usd2 }}</td>
+      <td class="num">${{ week.spent|usd4 }}</td>
+      <td class="num" data-per-lead="{{ week.per_lead if week.per_lead is not none else '' }}">
+        {% if week.per_lead is not none %}${{ week.per_lead|usd4 }}{% else %}—{% endif %}
+      </td>
+      <td class="num">
+        {% if week.per_draft is not none %}${{ week.per_draft|usd4 }}{% else %}—{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="meta">
+  Доставка писем не считается: рассылки ещё нет, а открытия писем не
+  трекаются совсем — вовлечённость видно по превью-хитам и ответам.
+</p>
+
+<h2>Факт-стоимости с {{ since|local }}</h2>
+<section class="cards">
+  {% for unit in units %}
+  <div class="card" data-unit="{{ unit.unit }}" data-per-unit="{{ unit.per_unit|usd4 }}">
+    <h2>{{ unit.label }}</h2>
+    <p class="big">{% if unit.units %}${{ unit.per_unit|usd4 }}{% else %}—{% endif %}</p>
+    <p class="sub">
+      {{ unit.units }} шт. · ${{ unit.total|usd4 }}
+      {%- if unit.target is not none %} · цель ${{ unit.target|usd2 }}
+        {%- if not unit.within_target %} ⚠️{% endif %}
+      {%- endif %}
+    </p>
+  </div>
+  {% endfor %}
+</section>
+
+<h2>Превью-хиты</h2>
+<section class="cards">
+  <div class="card">
+    <h2>Превью выложено</h2>
+    <p class="big" data-previews="{{ published }}">{{ published }}</p>
+    <p class="sub">лидов со своей страницей</p>
+  </div>
+  <div class="card">
+    <h2>Открыли</h2>
+    <p class="big" data-opened="{{ opened }}">{{ opened }}</p>
+    <p class="sub">
+      {% if conversion is not none %}{{ conversion|round(1) }}% от выложенных{% else %}превью ещё не выкладывали{% endif %}
+    </p>
+  </div>
+</section>
+
+<table class="grid">
+  <thead>
+    <tr><th>Лид</th><th>Слаг</th><th>События</th><th>Первое</th><th>Последнее</th></tr>
+  </thead>
+  <tbody>
+  {% for lead_id, name, slug, hits, first, last in preview_leads %}
+    <tr data-preview-lead="{{ lead_id }}" data-hits="{{ hits }}">
+      <td><a href="/leads/{{ lead_id }}">#{{ lead_id }} {{ name }}</a></td>
+      <td>{{ slug }}</td>
+      <td class="num">{{ hits }}</td>
+      <td class="nowrap">{{ first|local }}</td>
+      <td class="nowrap">{{ last|local }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">Открытий пока нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Последние события</h2>
+<table class="grid">
+  <thead><tr><th>Когда</th><th>Лид</th><th>Событие</th><th>Слаг</th></tr></thead>
+  <tbody>
+  {% for hit, name in hits %}
+    <tr data-hit="{{ hit.id }}">
+      <td class="nowrap">{{ hit.happened_at|local }}</td>
+      <td><a href="/leads/{{ hit.lead_id }}">#{{ hit.lead_id }} {{ name }}</a></td>
+      <td>{{ hit.event }}</td>
+      <td>{{ hit.slug }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">Событий нет.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

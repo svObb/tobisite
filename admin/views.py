@@ -12,6 +12,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 import config
+from models import month_start
+
 from . import queries
 from .app import READ_METHODS
 
@@ -107,6 +109,23 @@ async def lead(request: Request, lead_id: int):
     return render(request, "lead.html", active="leads",
                   labels=config.STATUS_LABELS,
                   contact_labels=config.CONTACT_TYPE_LABELS, **card)
+
+
+@router.api_route("/metrics", methods=READ_METHODS, response_class=HTMLResponse)
+async def weekly_metrics(request: Request, weeks: int = Query(None, ge=1, le=52)):
+    """Метрики недели (13.1), юнит-экономика (20.10) и превью-хиты (13.4)."""
+    async with request.app.state.db() as session:
+        weeks_rows = await queries.weekly(session, weeks or queries.WEEKS)
+        units = await queries.unit_costs(session, month_start())
+        published, opened = await queries.preview_funnel(session)
+        leads_rows = await queries.preview_leads(session)
+        hits = await queries.preview_recent(session)
+    return render(
+        request, "metrics.html", active="metrics", weeks=weeks_rows,
+        units=units, since=month_start(), published=published, opened=opened,
+        conversion=(opened / published * 100 if published else None),
+        preview_leads=leads_rows, hits=hits,
+    )
 
 
 @router.api_route("/costs", methods=READ_METHODS, response_class=HTMLResponse)

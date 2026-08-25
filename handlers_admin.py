@@ -168,7 +168,7 @@ async def metrics_report(message: Message, state: FSMContext,
         await message.answer_document(
             FSInputFile(path, filename="metrics.csv"),
             caption=f"Недель: {len(rows)}. Доставка писем — прочерк: "
-                    "отправки нет до Instantly.",
+                    "рассылки ещё нет.",
         )
     finally:
         try:
