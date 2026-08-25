@@ -6,6 +6,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 import config
@@ -141,11 +142,8 @@ def test_stop_word_in_the_signature_is_not_a_shout():
     assert not any("заглавными" in f for f in result.fails)
 
 
-async def test_approval_records_the_legal_gap(monkeypatch, model, gap_lead):
-    """Одобрение не блокируется, но факт «отправлять нельзя» не теряется."""
-    filled(monkeypatch, POSTAL_ADDRESS="")
-    model(UK_JSON)
-    lead = await gap_lead(status="verified")
+async def _claimed_card(lead) -> tuple[int, int]:
+    """Карточка лида в руках ADMIN: (draft_id, version_id)."""
     queued = await qs.enqueue(lead.id, actor_tg_id=ADMIN, draft_summary=UK_DRAFT)
     assert queued.ok, queued.reason
     # карточка берётся напрямую: claim_next выдал бы старейшую в общей базе
@@ -154,14 +152,46 @@ async def test_approval_records_the_legal_gap(monkeypatch, model, gap_lead):
         draft.status, draft.claimed_by = "claimed", ADMIN
         draft.claimed_at = datetime.now(config.TZ)
         draft.expires_at = draft.claimed_at + timedelta(minutes=qs.LEASE_MINUTES)
-        version_id = draft.shown_version_id
+        return draft.id, draft.shown_version_id
 
-    decision = await qs.approve(queued.draft_id, version_id, ADMIN)
+
+async def _events_of(lead) -> list[str]:
+    async with Session() as s:
+        return list(await s.scalars(
+            select(LeadEvent.event).where(LeadEvent.lead_id == lead.id)
+        ))
+
+
+async def test_approval_records_the_legal_gap(monkeypatch, model, gap_lead):
+    """Одобрение не блокируется, но факт «отправлять нельзя» не теряется."""
+    filled(monkeypatch, POSTAL_ADDRESS="")
+    model(UK_JSON)
+    lead = await gap_lead(status="verified")
+    draft_id, version_id = await _claimed_card(lead)
+
+    decision = await qs.approve(draft_id, version_id, ADMIN)
 
     assert decision.ok
     assert any("POSTAL_ADDRESS" in g for g in decision.legal_fails)
+    assert "letter_legal_gap" in await _events_of(lead)
+
+
+async def test_gap_and_approval_commit_together(monkeypatch, model, gap_lead):
+    """Гэп считается в транзакции одобрения: иначе падение теряет сигнал."""
+    filled(monkeypatch, POSTAL_ADDRESS="")
+    model(UK_JSON)
+    lead = await gap_lead(status="verified")
+    draft_id, version_id = await _claimed_card(lead)
+
+    def boom(lead, lang):
+        raise RuntimeError("проверка гэпа упала")
+
+    monkeypatch.setattr(qs.email_legal, "missing", boom)
+    with pytest.raises(RuntimeError):
+        await qs.approve(draft_id, version_id, ADMIN)
+
+    # одобрение откатилось вместе с гэпом: карточка всё ещё у дежурного
     async with Session() as s:
-        events = list(await s.scalars(
-            select(LeadEvent.event).where(LeadEvent.lead_id == lead.id)
-        ))
-    assert "letter_legal_gap" in events
+        draft = await s.get(MessageDraft, draft_id)
+    assert draft.status == "claimed"
+    assert "letter_approved" not in await _events_of(lead)

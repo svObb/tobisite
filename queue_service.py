@@ -12,7 +12,7 @@
 approved. Ни одна функция модуля не отправляет письмо наружу.
 """
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from difflib import SequenceMatcher
@@ -338,20 +338,8 @@ async def approve(draft_id: int, version_id: int, worker_tg_id: int) -> Decision
     проходит по CAN-SPAM (9.8). Кнопку это не блокирует — отправки в конвейере
     всё равно нет, — но факт попадает в историю лида и в ответ дежурному.
     """
-    decision = await _decide(draft_id, version_id, worker_tg_id, "approved",
-                             "letter_approved")
-    if not decision.ok:
-        return decision
-    async with Session() as s, s.begin():
-        draft = await s.get(MessageDraft, draft_id)
-        lead = await s.get(Lead, decision.lead_id)
-        gaps = email_legal.missing(lead, draft.lang) if lead and draft else []
-        if gaps:
-            log.warning("письмо лида %s одобрено, но отправлять его нельзя: %s",
-                        decision.lead_id, "; ".join(gaps))
-            log_event(s, decision.lead_id, "letter_legal_gap", worker_tg_id,
-                      new="; ".join(gaps)[:200])
-    return replace(decision, legal_fails=gaps)
+    return await _decide(draft_id, version_id, worker_tg_id, "approved",
+                         "letter_approved", legal_gap=True)
 
 
 async def reject(draft_id: int, version_id: int, worker_tg_id: int,
@@ -489,7 +477,7 @@ def _diff_ratio(before: str, after: str) -> Decimal:
 
 
 async def _decide(draft_id, version_id, worker_tg_id, status, event,
-                  field=None) -> Decision:
+                  field=None, legal_gap=False) -> Decision:
     async with Session() as s, s.begin():
         draft = await _claimed(s, draft_id, worker_tg_id)
         if draft is None or draft.shown_version_id != version_id:
@@ -502,8 +490,19 @@ async def _decide(draft_id, version_id, worker_tg_id, status, event,
             # не блокируем: задержка учит ждать и жать, а доля too_fast — это
             # метрика штамповки, по ней отстраняют от очереди (Д12 §6.7)
             log_event(s, draft.lead_id, "too_fast", worker_tg_id, field=field)
+        gaps = []
+        if legal_gap:
+            # в той же транзакции, что и одобрение: разойдись они, падение
+            # между коммитами оставило бы «одобрено» без отметки о гэпе
+            lead = await s.get(Lead, draft.lead_id)
+            gaps = email_legal.missing(lead, draft.lang) if lead else []
+            if gaps:
+                log.warning("письмо лида %s одобрено, но отправлять его "
+                            "нельзя: %s", draft.lead_id, "; ".join(gaps))
+                log_event(s, draft.lead_id, "letter_legal_gap", worker_tg_id,
+                          new="; ".join(gaps)[:200])
         return Decision(True, lead_id=draft.lead_id, version_id=version_id,
-                        too_fast=too_fast)
+                        too_fast=too_fast, legal_fails=gaps)
 
 
 async def _claimed(session, draft_id: int, worker_tg_id: int):

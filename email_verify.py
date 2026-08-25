@@ -103,6 +103,17 @@ async def verify_lead(session, lead) -> tuple[bool, str]:
     return False, "почта не проходит проверку: " + reasons[0]
 
 
+def forget(contact) -> None:
+    """Значение контакта изменилось — прежний вердикт к нему не относится.
+
+    Без сброса stale() считает проверку свежей, и письмо соберётся на адрес,
+    который никто не проверял: старый был живой, новый может быть каким угодно.
+    """
+    contact.verify_status = None
+    contact.verify_note = None
+    contact.verified_at = None
+
+
 def stale(contact) -> bool:
     """Проверять заново: не проверяли, не смогли или проверка постарела."""
     if contact.verify_status in (None, "unknown") or contact.verified_at is None:
@@ -139,14 +150,18 @@ async def _lookup(domain: str) -> bool | None:
     except (dns.exception.DNSException, OSError) as e:
         log.warning("MX для %s не выяснить: %s", domain, e)
         return None
-    try:
-        return bool(len(await resolver.resolve(domain, "A")))
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN,
-            dns.resolver.NoNameservers):
-        return False
-    except (dns.exception.DNSException, OSError) as e:
-        log.warning("A для %s не выяснить: %s", domain, e)
-        return None
+    for rdtype in ("A", "AAAA"):
+        # достаточно любой из двух: домен только на IPv6 почту принимает так же
+        try:
+            if len(await resolver.resolve(domain, rdtype)):
+                return True
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN,
+                dns.resolver.NoNameservers):
+            continue
+        except (dns.exception.DNSException, OSError) as e:
+            log.warning("%s для %s не выяснить: %s", rdtype, domain, e)
+            return None
+    return False
 
 
 def _now() -> datetime:

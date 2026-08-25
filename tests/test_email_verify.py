@@ -14,10 +14,12 @@ from sqlalchemy import select
 import config
 import email_gen
 import email_verify
+from handlers_worker import save_contact_value
 from models import VERIFY_TTL_DAYS, Contact, Session
 from test_email_gen import UK_DRAFT, UK_JSON
 
 REAL_DOMAIN_ACCEPTS = email_verify.domain_accepts_mail
+ACTOR = 1
 
 
 class FakeResolver:
@@ -97,9 +99,16 @@ async def test_unknown_domain_does_not_accept_mail(monkeypatch):
     assert await email_verify._lookup("nope.example") is False
 
 
-async def test_domain_without_mx_and_without_a_record(monkeypatch):
+async def test_domain_only_on_ipv6_accepts_mail(monkeypatch):
+    fake = resolver(monkeypatch, MX=dns.resolver.NoAnswer(),
+                    A=dns.resolver.NoAnswer(), AAAA=["2001:db8::25"])
+    assert await email_verify._lookup("example.com") is True
+    assert [rdtype for _, rdtype in fake.asked] == ["MX", "A", "AAAA"]
+
+
+async def test_domain_without_mx_and_without_address_records(monkeypatch):
     resolver(monkeypatch, MX=dns.resolver.NoAnswer(),
-             A=dns.resolver.NoAnswer())
+             A=dns.resolver.NoAnswer(), AAAA=dns.resolver.NoAnswer())
     assert await email_verify._lookup("nope.example") is False
 
 
@@ -213,6 +222,46 @@ def test_unknown_is_always_repeated():
     contact = Contact(verify_status="unknown",
                       verified_at=datetime.now(config.TZ))
     assert email_verify.stale(contact)
+
+
+async def test_edited_address_loses_the_old_verdict(monkeypatch, model,
+                                                    gap_lead):
+    """Адрес поправили — прежнее «valid» относилось не к нему."""
+    model(UK_JSON)
+    lead = await gap_lead()
+    await _email_contact(lead)
+    async with Session() as s:
+        await email_verify.verify_lead(s, lead)
+    contact, = await _contacts_of(lead)
+    assert contact.verify_status == "valid"
+
+    await save_contact_value(lead.id, contact.id, "email", None,
+                             "office@nope.example", None, ACTOR)
+
+    contact, = await _contacts_of(lead)
+    assert contact.verify_status is None and contact.verified_at is None
+
+    async def _dead(domain):
+        return False
+
+    monkeypatch.setattr(email_verify, "domain_accepts_mail", _dead)
+    result = await email_gen.build_email(lead, UK_DRAFT)
+    # без сброса письмо ушло бы на непроверенный адрес по старому вердикту
+    assert result.needs_manual and "почта не проходит проверку" in result.reason
+
+
+async def test_untouched_value_keeps_the_verdict(gap_lead):
+    lead = await gap_lead()
+    await _email_contact(lead)
+    async with Session() as s:
+        await email_verify.verify_lead(s, lead)
+    contact, = await _contacts_of(lead)
+
+    await save_contact_value(lead.id, contact.id, "email", None,
+                             contact.value, None, ACTOR)
+
+    contact, = await _contacts_of(lead)
+    assert contact.verify_status == "valid" and contact.verified_at
 
 
 async def test_second_letter_does_not_ask_dns_again(monkeypatch, model,

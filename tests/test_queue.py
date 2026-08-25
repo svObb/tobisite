@@ -4,8 +4,10 @@
 кроме себя самого. Клиент модели подменяет фикстура model из conftest — сети
 в тестах нет, письма наружу не уходят ни при каком исходе.
 """
+import ast
 import asyncio
 import pathlib
+import re
 from datetime import datetime, timedelta
 
 import pytest
@@ -543,11 +545,67 @@ def test_word_forms_read_like_russian():
         "слово", "слова", "слов", "слов", "слово"]
 
 
+# --- СТОП-точка этапа ---------------------------------------------------------
+
+MAIL_SEND = re.compile(
+    r"smtp|sendmail|starttls|send_mail|send_email|send_letter|sendgrid|"
+    r"mailgun|postmark|sparkpost|mandrill|mailchimp|sendinblue|brevo|"
+    r"instantly|resend|amazonses",
+    re.IGNORECASE,
+)
+SKIP_PARTS = {"tests", "__pycache__", "node_modules", "venv", ".venv",
+              ".wrangler"}
+
+
+def _sources():
+    """Весь код репозитория: отправку добавят там, где её никто не ждёт."""
+    return (p for p in ROOT.rglob("*.py") if not SKIP_PARTS & set(p.parts))
+
+
+def _docstrings(tree) -> set[int]:
+    """Узлы докстрингов: в них объясняют, почему отправки нет (email_verify)."""
+    holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, holders) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(
+                    getattr(first.value, "value", None), str):
+                found.add(id(first.value))
+    return found
+
+
+def _mail_words(path) -> list[str]:
+    """Имена и строки модуля, похожие на отправку почты. Комментарии не в счёт."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docs = _docstrings(tree)
+    words = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            words += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            words.append(node.module or "")
+        elif isinstance(node, ast.Attribute):
+            words.append(node.attr)
+        elif isinstance(node, ast.Name):
+            words.append(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            words.append(node.name)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in docs:
+                words.append(node.value)
+    return [w for w in words if MAIL_SEND.search(w)]
+
+
 def test_no_code_path_sends_a_letter():
-    """СТОП-точка этапа: конвейер кончается на approved."""
-    forbidden = ("smtplib", "aiosmtplib", "sendgrid", "send_email",
-                 "instantly", "SMTP")
-    for name in ("queue_service.py", "email_gen.py", "handlers_review.py"):
-        source = (ROOT / name).read_text(encoding="utf-8")
-        for word in forbidden:
-            assert word not in source, (name, word)
+    """СТОП-точка этапа: конвейер кончается на approved.
+
+    До подключения Instantly письмо живёт только в базе. Сторож смотрит на код
+    всего репозитория, а не на три файла конвейера.
+    """
+    scanned = {str(p.relative_to(ROOT)) for p in _sources()}
+    # обход сломается молча: без этой строчки пустой список тоже «зелёный»
+    assert {"queue_service.py", "email_gen.py", "handlers_review.py"} <= scanned
+    found = {str(p.relative_to(ROOT)): words
+             for p in _sources() if (words := _mail_words(p))}
+    assert found == {}, found

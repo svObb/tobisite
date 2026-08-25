@@ -13,6 +13,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
+import email_verify
 import gap_validation as gv
 import keyboards as kb
 import notify
@@ -1769,6 +1770,36 @@ async def contact_edit(cb: CallbackQuery, state: FSMContext, worker, is_admin: b
     await cb.message.answer("Новое значение:", reply_markup=kb.cancel_kb())
 
 
+async def save_contact_value(lead_id: int, contact_id: int | None, ctype: str,
+                             ctype_other: str | None, value: str,
+                             norm: str | None, actor_tg_id: int) -> bool:
+    """Пишет значение контакта. False — контакта уже нет, писать некуда.
+
+    IntegrityError уходит наверх: сообщение о дубле собирает хендлер.
+    """
+    async with Session() as s, s.begin():
+        if contact_id:
+            contact = await s.get(Contact, contact_id)
+            if contact is None or contact.deleted_at:
+                return False
+            old = contact.value
+            contact.value = value
+            contact.value_norm = norm
+            if value != old:
+                # вердикт проверки относился к прежнему адресу (9.29)
+                email_verify.forget(contact)
+            log_event(s, lead_id, "contact_edit", actor_tg_id,
+                      contact_label(contact), old, value)
+        else:
+            contact = Contact(lead_id=lead_id, ctype=ctype,
+                              ctype_other=ctype_other,
+                              value=value, value_norm=norm)
+            s.add(contact)
+            log_event(s, lead_id, "contact_add", actor_tg_id,
+                      contact_label(contact), None, value)
+    return True
+
+
 @edit_router.message(Ed.c_value)
 async def contact_value(message: Message, state: FSMContext, worker, is_admin: bool):
     d = await state.get_data()
@@ -1806,31 +1837,19 @@ async def contact_value(message: Message, state: FSMContext, worker, is_admin: b
             )
             return
     try:
-        async with Session() as s, s.begin():
-            norm = normalize_phone(val, region) if ctype == "phone" else None
-            if d.get("contact_id"):
-                contact = await s.get(Contact, d["contact_id"])
-                if contact is None or contact.deleted_at:
-                    await state.clear()
-                    await message.answer("Контакт больше недоступен.")
-                    return
-                old = contact.value
-                contact.value = val
-                contact.value_norm = norm
-                log_event(s, lead_id, "contact_edit", message.from_user.id,
-                          contact_label(contact), old, val)
-            else:
-                contact = Contact(
-                    lead_id=lead_id, ctype=ctype, ctype_other=d.get("ctype_other"),
-                    value=val, value_norm=norm,
-                )
-                s.add(contact)
-                log_event(s, lead_id, "contact_add", message.from_user.id,
-                          contact_label(contact), None, val)
+        alive = await save_contact_value(
+            lead_id, d.get("contact_id"), ctype, d.get("ctype_other"), val,
+            normalize_phone(val, region) if ctype == "phone" else None,
+            message.from_user.id,
+        )
     except IntegrityError as e:
         log.warning("dup on contact lead=%s: %s", lead_id, e.orig)
         await state.clear()
         await message.answer(f"{dup_message(e)} Старое значение осталось.")
+        return
+    if not alive:
+        await state.clear()
+        await message.answer("Контакт больше недоступен.")
         return
     await state.clear()
     async with Session() as s:
