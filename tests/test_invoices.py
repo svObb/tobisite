@@ -19,7 +19,9 @@ from sqlalchemy.exc import IntegrityError
 
 import billing
 import config
-from handlers_admin import INVOICE_USAGE, invoice_cmd, invoice_paid
+from handlers_admin import (
+    INVOICE_USAGE, delete_lead, invoice_cmd, invoice_paid,
+)
 from conftest import TEST_TG_BASE
 from models import (
     OPEN_INVOICE_STATUSES, Invoice, Lead, LeadEvent, Sale, Session, Worker,
@@ -84,6 +86,19 @@ async def _rewind_invoice(invoice_id: int, **kw):
     async with Session() as s, s.begin():
         await s.execute(update(Invoice).where(Invoice.id == invoice_id)
                         .values(**kw))
+
+
+async def _delete(lead_id: int):
+    """Удаление в обход хендлера: проверяется защита самого календаря."""
+    async with Session() as s, s.begin():
+        await s.execute(update(Lead).where(Lead.id == lead_id)
+                        .values(deleted_at=_now()))
+
+
+def _day(moment: datetime) -> tuple[int, int]:
+    """(месяц, число) в нашем часовом поясе — из базы время приходит в UTC."""
+    local = moment.astimezone(config.TZ)
+    return local.month, local.day
 
 
 def _mine(bot: FakeBot, lead) -> list[str]:
@@ -223,6 +238,76 @@ def test_next_month_keeps_the_day_inside_the_month():
     february = billing.next_month(january)
     assert (february.month, february.day) == (2, 28)
     assert billing.next_month(datetime(2026, 12, 15, tzinfo=config.TZ)).year == 2027
+
+
+def test_next_month_walks_from_the_anchor_day():
+    """Без якоря один короткий февраль сдвинул бы весь остаток года на 28-е."""
+    day = datetime(2026, 1, 31, 12, 0, tzinfo=config.TZ)
+    walked = []
+    for _ in range(4):
+        day = billing.next_month(day, 31)
+        walked.append((day.month, day.day))
+    assert walked == [(2, 28), (3, 31), (4, 30), (5, 31)]
+
+
+async def test_the_billing_day_survives_a_short_month(make_lead, worker_id,
+                                                      monkeypatch):
+    lead, sale_id = await _sold(make_lead, worker_id)
+    await _cmd(f"on {lead.id} 40")
+    january = datetime(2026, 1, 31, 12, 0, tzinfo=config.TZ)
+    await _rewind(sale_id, sub_started_at=january, sub_next_at=january)
+    monkeypatch.setattr(billing, "_now",
+                        lambda: datetime(2026, 6, 15, 12, 0, tzinfo=config.TZ))
+
+    await billing.issue_due(FakeBot())
+
+    assert [_day(i.period_start) for i in await _invoices(lead.id)] == [
+        (1, 31), (2, 28), (3, 31), (4, 30), (5, 31)]
+
+
+# --- удалённый лид (12.29, 12.16, 12.30) --------------------------------------
+
+async def test_deleting_a_lead_stops_the_subscription(make_lead, worker_id):
+    lead, sale_id = await _sold(make_lead, worker_id)
+    await _cmd(f"on {lead.id} 40")
+
+    cb = FakeCb(f"del:{lead.id}")
+    await delete_lead(cb)
+
+    assert (await _sale(sale_id)).sub_cancelled_at is not None
+    assert "одписка отменена" in cb.message.sent[0]
+    assert "sub_cycle_off" in await _events(lead.id)
+
+
+async def test_a_deleted_lead_gets_no_invoices_and_no_reminders(make_lead,
+                                                                worker_id):
+    """Второй рубеж: строка, закрытая в обход хендлера, тоже гасит календарь."""
+    lead, sale_id = await _sold(make_lead, worker_id)
+    await _cmd(f"on {lead.id} 40")
+    await billing.tick(FakeBot())
+    invoice = (await _invoices(lead.id))[0]
+    await _delete(lead.id)
+    await _rewind(sale_id, sub_next_at=_now() - timedelta(days=1))
+    await _rewind_invoice(invoice.id, due_at=_now() - timedelta(days=30))
+    bot = FakeBot()
+
+    result = await billing.tick(bot)
+
+    assert len(await _invoices(lead.id)) == 1
+    assert invoice.id not in result.reminded and _mine(bot, lead) == []
+
+
+async def test_a_deleted_lead_is_not_warned_about_the_next_invoice(make_lead,
+                                                                   worker_id):
+    lead, sale_id = await _sold(make_lead, worker_id)
+    await _cmd(f"on {lead.id} 40")
+    await _delete(lead.id)
+    await _rewind(sale_id, sub_next_at=_now() + timedelta(days=1))
+    bot = FakeBot()
+
+    result = await billing.tick(bot)
+
+    assert lead.id not in result.upcoming and _mine(bot, lead) == []
 
 
 # --- отметки оплаты (12.29) ---------------------------------------------------

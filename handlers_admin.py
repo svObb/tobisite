@@ -1587,10 +1587,23 @@ async def delete_lead(cb: CallbackQuery):
         )
         await queue_service.cancel_drafts(s, lead_id, cb.from_user.id,
                                           "лид удалён")
+        # подписка не живёт без карточки: календарь продолжал бы выставлять
+        # счета по компании, которой у нас больше нет. Открытые счета остаются
+        # долгом — их снимает человек командой, как и при /invoice off
+        sale = await s.scalar(
+            select(Sale).where(Sale.lead_id == lead_id).with_for_update())
+        cycle = sale is not None and sale.sub_amount is not None \
+            and sale.sub_cancelled_at is None
+        if cycle:
+            sale.sub_cancelled_at = now
+            log_event(s, lead_id, "sub_cycle_off", cb.from_user.id,
+                      old=f"{sale.sub_amount} {sale.currency}", new="лид удалён")
         log_event(s, lead_id, "delete", cb.from_user.id)
     log.info("lead %s soft-deleted", lead_id)
     await cb.answer("Удалено")
-    await cb.message.answer(f"Запись #{lead_id} удалена (мягко).")
+    await cb.message.answer(
+        f"Запись #{lead_id} удалена (мягко)."
+        + ("\nПодписка отменена, счетов больше не будет." if cycle else ""))
 
 
 # --- поиск -------------------------------------------------------------------

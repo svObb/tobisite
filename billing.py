@@ -30,6 +30,12 @@ from notify import esc
 
 log = logging.getLogger(__name__)
 
+# Удалённая карточка гасит календарь: счёт по лиду, которого у нас больше нет,
+# некому объяснить и не с кем сверить. Подписку при удалении снимает сам
+# хендлер (handlers_admin.delete_lead), а это — второй рубеж на случай строки,
+# закрытой в обход него.
+LIVE = Lead.deleted_at.is_(None)
+
 # Потолок догона за один заход. Бот, простоявший полгода, выставит счета за все
 # пропущенные месяцы — это настоящий долг клиента, — но упереться в потолок
 # честнее, чем крутить бесконечный цикл на битой дате.
@@ -44,16 +50,18 @@ class Tick:
     upcoming: list[int] = field(default_factory=list)
 
 
-def next_month(moment: datetime) -> datetime:
-    """Тот же день следующего месяца; 31-е в коротком месяце — последний день.
+def next_month(moment: datetime, anchor_day: int = 0) -> datetime:
+    """Следующий месяц; в коротком месяце — его последний день.
 
-    Без подрезки день бы «съезжал» навсегда: счёт от 31 января иначе не
-    выставился бы в феврале вовсе.
+    День берётся от якоря — дня, с которого начали подписку, а не от дня
+    предыдущего счёта. Иначе подписка от 31 января, разок подрезанная февралём,
+    так и осталась бы 28-го навсегда: один короткий месяц сдвигал бы весь
+    остаток года.
     """
     year, month = divmod(moment.month, 12)
     year, month = moment.year + year, month + 1
-    return moment.replace(year=year, month=month,
-                          day=min(moment.day, calendar.monthrange(year, month)[1]))
+    day = min(anchor_day or moment.day, calendar.monthrange(year, month)[1])
+    return moment.replace(year=year, month=month, day=day)
 
 
 async def issue_due(bot) -> list[int]:
@@ -61,10 +69,11 @@ async def issue_due(bot) -> list[int]:
     now = _now()
     async with Session() as s:
         sale_ids = list(await s.scalars(
-            select(Sale.id).where(
+            select(Sale.id).join(Lead, Lead.id == Sale.lead_id).where(
                 Sale.sub_amount.isnot(None),
                 Sale.sub_cancelled_at.is_(None),
                 Sale.sub_next_at <= now,
+                LIVE,
             ).order_by(Sale.id)
         ))
     made = []
@@ -95,7 +104,7 @@ async def remind_unpaid(bot) -> list[int]:
             .join(Lead, Lead.id == Invoice.lead_id)
             .outerjoin(Worker, Worker.id == Lead.worker_id)
             .where(Invoice.status.in_(OPEN_INVOICE_STATUSES),
-                   Invoice.due_at <= now)
+                   Invoice.due_at <= now, LIVE)
             .order_by(Invoice.id)
         )).all()
     sent = []
@@ -135,7 +144,8 @@ async def notify_upcoming(bot) -> list[int]:
             .where(Sale.sub_amount.isnot(None),
                    Sale.sub_cancelled_at.is_(None),
                    Sale.sub_next_at > now,
-                   Sale.sub_next_at <= now + _notice())
+                   Sale.sub_next_at <= now + _notice(),
+                   LIVE)
             .order_by(Sale.id)
         )).all()
     told = []
@@ -191,7 +201,13 @@ def _notice() -> timedelta:
 
 
 def _date(moment: datetime | None) -> str:
-    return moment.astimezone(config.TZ).strftime("%d.%m.%Y") if moment else "—"
+    return _local(moment).strftime("%d.%m.%Y") if moment else "—"
+
+
+def _local(moment: datetime | None) -> datetime | None:
+    """Дата в нашем часовом поясе: из базы время приходит в UTC, а «31-е» — это
+    31-е по календарю клиента, а не по гринвичу."""
+    return moment.astimezone(config.TZ) if moment else None
 
 
 def _due_to_remind(invoice, now: datetime) -> bool:
@@ -208,8 +224,13 @@ async def _issue(sale_id: int, now: datetime) -> list[int]:
         sale = await s.get(Sale, sale_id, with_for_update=True)
         if sale is None or sale.sub_amount is None or sale.sub_cancelled_at:
             return []
+        lead = await s.get(Lead, sale.lead_id)
+        if lead is None or lead.deleted_at:
+            return []
+        anchor = _local(sale.sub_started_at)
+        anchor_day = anchor.day if anchor else 0
         for _ in range(MAX_CATCHUP):
-            period = sale.sub_next_at
+            period = _local(sale.sub_next_at)
             if period is None or period > now:
                 break
             # конфликт по (sale_id, period_start) значит, что счёт за этот
@@ -222,7 +243,7 @@ async def _issue(sale_id: int, now: datetime) -> list[int]:
                 ).on_conflict_do_nothing(constraint="uq_invoices_sale_period")
                 .returning(Invoice.id)
             )
-            sale.sub_next_at = next_month(period)
+            sale.sub_next_at = next_month(period, anchor_day)
             if invoice_id is not None:
                 made.append(invoice_id)
                 log_event(s, sale.lead_id, "invoice_issued",
@@ -266,7 +287,7 @@ async def _announce(bot, invoice_id: int):
     async with Session() as s:
         invoice = await s.get(Invoice, invoice_id)
         lead = await s.get(Lead, invoice.lead_id) if invoice else None
-    if invoice is None or lead is None:
+    if invoice is None or lead is None or lead.deleted_at:
         return
     await notify.to_admins(
         bot,
