@@ -824,6 +824,16 @@ def day_start(days_back: int = 0) -> datetime:
     return start - timedelta(days=days_back)
 
 
+def week_start(weeks_back: int = 0) -> datetime:
+    """Понедельник 00:00 по нашему поясу — окно метрик недели (13.1).
+
+    Понедельник, а не «семь дней назад»: так же режет неделю date_trunc('week')
+    в Postgres, и цифры бота, панели и выгрузки сходятся буквально.
+    """
+    start = day_start()
+    return start - timedelta(days=start.weekday() + 7 * weeks_back)
+
+
 def month_start() -> datetime:
     """Начало текущего месяца по нашему поясу — окно месячного кэпа ИИ."""
     now = datetime.now(config.TZ)

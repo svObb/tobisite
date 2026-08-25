@@ -20,6 +20,7 @@ import costs
 import draft_service
 import email_gen
 import keyboards as kb
+import metrics
 import notify
 import phrases
 import queue_service
@@ -140,6 +141,40 @@ async def stats(message: Message, state: FSMContext):
         outcome_line(by_status),
     ]
     await message.answer("\n".join(lines))
+
+
+# --- метрики недели (/metrics) -----------------------------------------------
+
+METRICS_USAGE = ("Формат:\n"
+                 "/metrics — таблица метрик по неделям\n"
+                 "/metrics csv — те же метрики файлом для таблицы")
+
+
+@router.message(Command("metrics"))
+async def metrics_report(message: Message, state: FSMContext,
+                         command: CommandObject):
+    """Таблица метрик недели (13.1) и её выгрузка (13.2)."""
+    await state.set_state(None)
+    arg = (command.args or "").strip().lower()
+    if arg not in ("", "csv"):
+        await message.answer(METRICS_USAGE)
+        return
+    if arg != "csv":
+        await message.answer(metrics.report(await metrics.weekly()))
+        return
+    rows = await metrics.weekly(metrics.CSV_WEEKS)
+    path = metrics.export_csv(rows)
+    try:
+        await message.answer_document(
+            FSInputFile(path, filename="metrics.csv"),
+            caption=f"Недель: {len(rows)}. Доставка писем — прочерк: "
+                    "отправки нет до Instantly.",
+        )
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            log.warning("временный файл %s не удалён", path)
 
 
 # --- расходы на ИИ (/costs) --------------------------------------------------

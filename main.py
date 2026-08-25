@@ -161,6 +161,8 @@ async def main():
                     BotCommand(command="start", description="Начать заново"),
                     BotCommand(command="queue", description="Очередь писем"),
                     BotCommand(command="costs", description="Расходы на ИИ за месяц"),
+                    BotCommand(command="metrics",
+                               description="Метрики недели, csv — выгрузка"),
                     BotCommand(command="subs", description="Подписки на доп-услуги"),
                     BotCommand(command="stop", description="Стоп-лист: id лида"),
                     BotCommand(command="stops", description="Журнал отписок и жалоб"),
