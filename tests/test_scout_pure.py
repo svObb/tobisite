@@ -2,10 +2,14 @@
 разбор аргументов /scout. Ни одного сетевого вызова и ни одной записи в базу.
 """
 from datetime import datetime
+from decimal import Decimal
 
 from handlers_admin import _parse_scout_args
+from scout.gate import GateResult
+from scout.ingest import IngestStats
 from scout.overpass import MAX_RESULTS, build_query, parse_elements
-from scout.scoring import score
+from scout.runner import _digest
+from scout.scoring import score, split
 from scout.site_probe import analyze_html, parse_psi
 from scout.types import RawBiz
 
@@ -168,3 +172,35 @@ def test_parse_psi_bad_payloads():
     assert parse_psi({"error": {"message": "Lighthouse returned error"}}) is None
     assert parse_psi({}) is None
     assert parse_psi({"lighthouseResult": None}) is None
+
+
+# --- дайджест: спорные и гейт (15.15, 15.18) ---------------------------------
+
+def _parts(candidates=1, gray=1, rejected=2):
+    def cards(n, verdict):
+        return [RawBiz(name=f"карточка {verdict} {i}", verdict=verdict)
+                for i in range(n)]
+    return split(cards(candidates, "candidate") + cards(gray, "review")
+                 + cards(rejected, "reject"))
+
+
+def _text(parts, verdict):
+    text, _ = _digest("Скаут", parts, verdict, IngestStats(), Decimal("0.02"))
+    return text
+
+
+def test_digest_shows_the_gray_share_and_gate_verdict():
+    text = _text(_parts(), GateResult(True, kept=1, dropped=0))
+    assert "Найдено карточек: 4" in text
+    assert "Отсеяно скорингом: 2" in text
+    assert "Спорных: 1 (25%) — гейт оставил 1, отсеял 0" in text
+
+
+def test_digest_says_when_the_gate_did_not_work():
+    text = _text(_parts(), GateResult(False, unseen=1,
+                                      reason="не задан ANTHROPIC_API_KEY"))
+    assert "гейт не работал: не задан ANTHROPIC_API_KEY" in text
+
+
+def test_digest_without_gray_cards_says_nothing_about_the_gate():
+    assert "Спорных" not in _text(_parts(gray=0), GateResult(True))

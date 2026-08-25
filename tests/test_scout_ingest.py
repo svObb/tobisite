@@ -109,3 +109,14 @@ async def test_ingest_daily_limit(worker_id, monkeypatch):
 
     stats = await _ingest([_card(), _card()], worker_id)
     assert stats.imported_raw == 1 and stats.limit_skipped == 1
+
+
+async def test_gate_hook_lands_in_the_note_marked_unchecked(worker_id):
+    card = _card(gate_write=True, gate_hook="Кофейня без сайта, но с телефоном.")
+    stats = await _ingest([card], worker_id)
+
+    async with Session() as s:
+        lead = await s.scalar(select(Lead).where(Lead.id == stats.imported[0][1]))
+    # зацепку писала модель: модератор должен видеть, что её никто не проверял
+    assert "Зацепка гейта (не проверено): Кофейня без сайта" in lead.note
+    assert lead.status == "raw"

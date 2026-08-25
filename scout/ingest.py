@@ -46,7 +46,7 @@ async def scout_imported_today(session) -> int:
 async def ingest(cards: list[RawBiz], *, country: str, niche: str,
                  default_city: str, worker_id: int, actor_tg_id: int,
                  batch_id: str) -> IngestStats:
-    """Пишет карточки с вердиктом candidate/review; reject сюда не доходит.
+    """Пишет карточки candidate/review; reject и отсеянные гейтом не доходят.
 
     Транзакция на карточку: один дубль не откатывает весь прогон.
     """
@@ -93,6 +93,10 @@ async def ingest(cards: list[RawBiz], *, country: str, niche: str,
                     + "; ".join(card.reasons))
             if card.address:
                 note += f". Адрес: {card.address}"
+            if card.gate_hook:
+                # зацепку писала модель, и никто её не проверял: в письмо она
+                # попадёт только руками модератора (15.18)
+                note += f". Зацепка гейта (не проверено): {card.gate_hook}"
             # SELECT-ы дедупа выше уже открыли транзакцию (autobegin),
             # поэтому s.begin() здесь бросил бы InvalidRequestError. INSERT
             # едет в той же транзакции — дедуп и вставка видят один снимок.

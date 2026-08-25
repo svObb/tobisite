@@ -229,6 +229,22 @@ def slot_model(monkeypatch):
     return _install
 
 
+@pytest.fixture
+def gate_model(monkeypatch):
+    """gate_model(ответ, ...) — тот же приём для ИИ-гейта спорных карточек."""
+    import config
+    from scout import gate
+
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "pytest-key")
+
+    def _install(*replies):
+        fake = SimpleNamespace(messages=FakeMessages(replies))
+        monkeypatch.setattr(gate, "_client", fake)
+        return fake
+
+    return _install
+
+
 # Обогащение карточки под черновик (Д13 §3 шаг 1). Компания выдумана целиком,
 # телефон несуществующий; цифры — входные данные теста, а не текст страницы.
 DRAFT_ENRICHMENT = {

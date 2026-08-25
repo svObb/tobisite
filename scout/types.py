@@ -21,3 +21,6 @@ class RawBiz:
     score: int = 0
     verdict: str = ""                 # candidate | review | reject
     reasons: list = field(default_factory=list)
+    # решение ИИ-гейта по спорной карточке (15.18); None — гейт её не смотрел
+    gate_write: bool | None = None
+    gate_hook: str = ""

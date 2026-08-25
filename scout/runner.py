@@ -3,7 +3,8 @@
 Запускается фоновой задачей из /scout и /scout_paste (15.22, 15.24).
 Каждый прогон пишет свои вызовы в cost_ledger (15.20): Overpass и probe
 бесплатны, но /costs должен видеть и число вызовов — иначе неоткуда узнать,
-что скаут вообще работал.
+что скаут вообще работал. Платит прогон только за ИИ-гейт, и тот пишется
+отдельным op — своей строкой в /costs.
 """
 import asyncio
 import logging
@@ -17,9 +18,10 @@ import config
 import costs
 from dedup import normalize_domain
 from models import CostLedger, Session, ensure_admin_worker
-from scout import overpass, site_probe
+from scout import gate, overpass, site_probe
+from scout.gate import GateResult
 from scout.niches import NICHE_TAGS
-from scout.scoring import score
+from scout.scoring import Split, score, split
 from scout.types import RawBiz
 from scout.ingest import IngestStats, ingest
 
@@ -46,12 +48,28 @@ async def _spent(batch_id: str) -> Decimal:
         ))
 
 
-def _digest(header: str, found: int, rejected: int, stats: IngestStats,
-            spent: Decimal) -> tuple[str, object]:
+def _gate_line(parts: Split, verdict: GateResult) -> str:
+    """Строка про спорные карточки: сколько их и что с ними сделал гейт."""
+    line = (f"Спорных: {len(parts.gray)} ({parts.gray_share:.0%})")
+    if verdict.ok:
+        line += f" — гейт оставил {verdict.kept}, отсеял {verdict.dropped}"
+        if verdict.unseen:
+            line += f", не смотрел {verdict.unseen}"
+    else:
+        line += f" — гейт не работал: {verdict.reason}"
+    return line
+
+
+def _digest(header: str, parts: Split, verdict: GateResult,
+            stats: IngestStats, spent: Decimal) -> tuple[str, object]:
     lines = [
         f"<b>🔭 {header}</b>",
-        f"Найдено карточек: {found}",
-        f"Отсеяно скорингом: {rejected}",
+        f"Найдено карточек: {parts.total}",
+        f"Отсеяно скорингом: {len(parts.rejected)}",
+    ]
+    if parts.gray:
+        lines.append(_gate_line(parts, verdict))
+    lines += [
         f"Дубликаты: домен {stats.dup_domain}, телефон {stats.dup_phone}, "
         f"гонка {stats.race_dup}",
         f"Импортировано: кандидатов {stats.imported_candidate}, "
@@ -90,15 +108,19 @@ async def _run_cards(bot, chat_id: int, *, header: str, cards: list[RawBiz],
 
     for c in cards:
         score(c, c.probe)
-    keep = [c for c in cards if c.verdict != "reject"]
-    rejected = len(cards) - len(keep)
+    parts = split(cards)
+    # спорные — единственные, кто видит платную модель (15.18); отброшенные ею
+    # в базу не попадают, остальные едут на модерацию сырыми, как и раньше
+    verdict = await gate.run(parts.gray, batch_id=batch_id, niche=niche,
+                             city=city, bot=bot)
+    keep = parts.candidates + [c for c in parts.gray if c.gate_write is not False]
 
     admin = await ensure_admin_worker()
     stats = await ingest(
         keep, country=country, niche=niche, default_city=city,
         worker_id=admin.id, actor_tg_id=config.ADMIN_TG_ID, batch_id=batch_id,
     )
-    text, markup = _digest(header, len(cards), rejected, stats,
+    text, markup = _digest(header, parts, verdict, stats,
                            await _spent(batch_id))
     await bot.send_message(chat_id, text, reply_markup=markup)
     await _psi_followup(bot, chat_id, keep, niche=niche, city=city,
