@@ -28,7 +28,7 @@ import email_lint
 import phrases
 from models import (
     Contact, Lead, MessageDraft, MessageVersion, Session, Worker, day_start,
-    log_event,
+    log_event, suppression_hit,
 )
 
 log = logging.getLogger(__name__)
@@ -167,6 +167,11 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
         if lead.status != "verified":
             return Queued(False, reason="письмо собирается только по "
                                         "проверенному лиду")
+        # 11.6: стоп-лист закрывает вход в очередь целиком. Проверка есть и
+        # внутри сборки письма 1, но касания 2 и 3 её не проходят вовсе —
+        # а запрет писать не про то, какое по счёту письмо
+        if await suppression_hit(s, lead):
+            return Queued(False, reason="лид в стоп-листе: писать нельзя")
         if touch_number > config.MAX_TOUCHES_PER_LEAD:
             return Queued(False, reason=f"больше {config.MAX_TOUCHES_PER_LEAD} "
                                         f"касаний одному лиду не пишем")

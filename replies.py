@@ -1,4 +1,5 @@
-"""Разбор ответа на письмо: категория по правилам, без ИИ (11.21).
+"""Разбор ответа на письмо: категория по правилам (11.21) и стоп-лист по
+негативу (11.24).
 
 Словари фраз uk/en плюс порядок приоритетов — и всё. Чистая функция: её можно
 проверить сотней примеров, а не «на глаз», она не стоит ни цента за вызов и не
@@ -18,8 +19,15 @@
 нельзя утопить в вежливом «дякую, ні» — она сильнее любого отказа. Автоответ
 «я у відпустці» не значит ни отказа, ни интереса, и решать по нему нечего.
 """
+import logging
 import re
 from dataclasses import dataclass
+
+import config
+import queue_service
+from models import Lead, Session, log_event, suppress_lead
+
+log = logging.getLogger(__name__)
 
 BOUNCE = "bounce"
 STOP = "stop"
@@ -168,3 +176,52 @@ def _first(haystack: str, phrases) -> str:
         if f" {phrase} " in haystack:
             return phrase
     return ""
+
+
+# --- негативный ответ закрывает компанию (11.24) ------------------------------
+
+@dataclass(frozen=True)
+class Applied:
+    """Что сделал разбор: вердикт, закрытые значения, снятые карточки."""
+    verdict: Verdict
+    suppressed: bool = False
+    added: int = 0
+    cancelled: int = 0
+
+
+async def apply(lead_id: int, text: str, *, subject: str = "",
+                from_addr: str = "", source: str = "reply",
+                actor_tg_id: int | None = None) -> Applied:
+    """Разобрать ответ и закрыть компанию, если ответ негативный (11.24).
+
+    Стоп-лист и снятие карточек с очереди — одной транзакцией: разойдись они,
+    письмо успели бы одобрить между двумя коммитами.
+
+    Идемпотентно: закрытие идёт по тем же трём пространствам значений, что и
+    проверка, и повторный разбор того же ответа ничего не добавляет. Журнал
+    отписок при этом пополняется всегда — доказывать приходится факт и дату
+    обращения, а не устройство нашего стоп-листа (models.SuppressionEvent).
+
+    Отказ пишется в журнал событием unsubscribe: своего вида у него нет, а
+    придумывать пятый вид ради оттенка «сказали нет» вместо «просили не
+    писать» незачем — оттенок остаётся в заметке и в событии лида.
+    """
+    verdict = classify(text, subject=subject, from_addr=from_addr)
+    if not verdict.negative:
+        return Applied(verdict)
+    actor = actor_tg_id if actor_tg_id is not None else config.ADMIN_TG_ID
+    note = f"{LABELS[verdict.category]}: {verdict.matched}"
+    async with Session() as s, s.begin():
+        lead = await s.get(Lead, lead_id)
+        if lead is None:
+            log.warning("ответ по лиду %s разобран, но лида нет", lead_id)
+            return Applied(verdict)
+        added = await suppress_lead(s, lead, event="unsubscribe", source=source,
+                                    note=note, actor_tg_id=actor_tg_id)
+        cancelled = await queue_service.cancel_drafts(s, lead.id, actor,
+                                                      note=note)
+        log_event(s, lead.id, "reply_negative", actor,
+                  field=verdict.category, new=verdict.matched)
+    log.info("лид %s: ответ «%s» — компания закрыта, снято карточек %s",
+             lead_id, verdict.category, cancelled)
+    return Applied(verdict, suppressed=True, added=added, cancelled=cancelled)
