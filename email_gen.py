@@ -22,6 +22,7 @@ import email_legal
 import email_lint
 import email_verify
 import phrases
+from draft_service import PREVIEW_HOST_SUFFIX
 from email_fewshot import FEWSHOT
 from models import Session, gap_stale, suppression_hit
 
@@ -172,6 +173,18 @@ LETTER_3 = {
 SUBJECT_2 = {"uk": "Чернетка вашої головної", "en": "your draft is ready"}
 SUBJECT_3 = {"uk": "Закриваю тему", "en": "closing this out"}
 
+# Два инлайн-снимка письма 2 (9.5): как черновик выглядит с телефона и с
+# компьютера. Здесь лежат сами слоты — cid, что снимать и с какой ширины;
+# файлов в них пока нет.
+# TODO(9.5): снимать страницу превью headless-браузером. На сервере бота его
+# нет, ставить Chromium ради двух картинок раньше, чем появится отправка,
+# незачем: письмо 2 всё равно заканчивается одобрением, а не письмом. Слот
+# заполнит тот же шаг, который научится отправлять.
+SHOTS_2 = (
+    {"cid": "preview-mobile", "view": "mobile", "width": 390},
+    {"cid": "preview-desktop", "view": "desktop", "width": 1280},
+)
+
 # Слот потерянной выручки (9.35). Три множителя, все три — цифры самого
 # клиента: сколько обращений в месяц проходит мимо, какая у него конверсия и
 # какой средний чек. Наших цифр в формуле нет ни одной, среднего по рынку тем
@@ -195,6 +208,8 @@ class EmailResult:
     subject: str = ""
     body: str = ""
     slots: dict[str, str] = field(default_factory=dict)
+    # инлайн-картинки письма (9.5): пока только слоты, файлов в них нет
+    shots: list[dict] = field(default_factory=list)
     anchors: list[str] = field(default_factory=list)
     model: str | None = None
     prompt_version: str = PROMPT_VERSION
@@ -247,12 +262,29 @@ async def build_email(lead, draft_summary: str) -> EmailResult:
 
 
 def build_email_2(lead, preview_host: str) -> EmailResult:
-    """Касание 2: ссылка на превью. Слой 0 Д12 §1 — чистая константа."""
+    """Касание 2: ссылка на превью и два инлайн-снимка (9.5).
+
+    Ссылка обязана вести на опубликованное превью: письмо со ссылкой в никуда
+    хуже неотправленного, поэтому пустой или чужой хост уводит карточку в
+    ручную ветку, а не подставляется как есть. Слой 0 Д12 §1 — модель не
+    зовётся.
+    """
     lang = phrases.lang_of(lead)
     if lang is None:
         return _manual(f"нет фраз для языка «{lead.language}» — письмо руками")
-    body = LETTER_2[lang].format(host=preview_host)
-    return _constant_letter(lead, lang, SUBJECT_2[lang], body)
+    host = (preview_host or "").strip().lower().split("://")[-1].strip("/")
+    slug = (host[: -len(PREVIEW_HOST_SUFFIX)]
+            if host.endswith(PREVIEW_HOST_SUFFIX) else "")
+    if not slug:
+        return _manual("превью не опубликовано: ссылки на черновик нет", lang)
+    # wildcard-сертификат покрывает ровно одну метку: на
+    # pravo.i.dilo.tobisitepreview.com клиент увидит предупреждение браузера
+    if "." in slug:
+        return _manual(f"поддомен превью «{slug}» с точкой: HTTPS не сработает",
+                       lang)
+    body = LETTER_2[lang].format(host=host)
+    return _constant_letter(lead, lang, SUBJECT_2[lang], body,
+                            shots=_shots(host))
 
 
 def build_email_3(lead) -> EmailResult:
@@ -465,14 +497,21 @@ def _assemble(lead, lang, first_line, slots) -> EmailResult:
                        reason="" if result.ok else "; ".join(result.fails))
 
 
-def _constant_letter(lead, lang, subject, text, *, loss: str = "") -> EmailResult:
+def _constant_letter(lead, lang, subject, text, *, loss: str = "",
+                     shots=()) -> EmailResult:
     # письма 2 и 3 ссылки уже несут (превью), поэтому и ссылка отписки идёт
     # именно здесь — там, где она никакого правила не нарушает
     slots = {"greeting": greeting(lang, _contact_name(lead)), "loss": loss,
              "text": text, "signature": signature(lead, lang, with_link=True)}
     body = "\n\n".join(p for p in slots.values() if p)
     return EmailResult(ok=True, lang=lang, subject=subject, body=body,
-                       slots=slots, anchors=anchors_of(lead))
+                       slots=slots, anchors=anchors_of(lead),
+                       shots=list(shots))
+
+
+def _shots(host: str) -> list[dict]:
+    """Слоты снимков письма 2 под конкретное превью. file пустой — не снято."""
+    return [dict(shot, url=f"https://{host}", file="") for shot in SHOTS_2]
 
 
 async def _log_cost(lead, usage):
