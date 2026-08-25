@@ -204,3 +204,11 @@ def test_digest_says_when_the_gate_did_not_work():
 
 def test_digest_without_gray_cards_says_nothing_about_the_gate():
     assert "Спорных" not in _text(_parts(gray=0), GateResult(True))
+
+
+def test_digest_shows_the_numbers_of_a_half_failed_gate():
+    # решения удавшихся чанков уже применены: без цифр отсев выглядел бы потерей
+    text = _text(_parts(gray=6), GateResult(False, kept=2, dropped=2, unseen=2,
+                                            reason="чанк 2: модель недоступна"))
+    assert "гейт не работал: чанк 2: модель недоступна" in text
+    assert "успел оставить 2, отсеять 2, не видел 2" in text

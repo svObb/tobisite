@@ -55,8 +55,13 @@ def _gate_line(parts: Split, verdict: GateResult) -> str:
         line += f" — гейт оставил {verdict.kept}, отсеял {verdict.dropped}"
         if verdict.unseen:
             line += f", не смотрел {verdict.unseen}"
-    else:
-        line += f" — гейт не работал: {verdict.reason}"
+        return line
+    line += f" — гейт не работал: {verdict.reason}"
+    if verdict.kept or verdict.dropped:
+        # часть пачки гейт всё-таки решил, и эти карточки уже отсеяны: без
+        # цифр отсев выглядел бы как потеря
+        line += (f"; успел оставить {verdict.kept}, отсеять {verdict.dropped}, "
+                 f"не видел {verdict.unseen}")
     return line
 
 

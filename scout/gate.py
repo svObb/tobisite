@@ -36,8 +36,11 @@ PROMPT_VERSION = "g1"
 # (Overpass, probe, PageSpeed), и гейт — единственная платная операция прогона.
 # В /costs она обязана стоять своей строкой, иначе её рост незаметен.
 COST_OP = "classify"
-# По строке решения на карточку: двадцати карточкам хватает с запасом.
-MAX_TOKENS = 1500
+# Потолок ответа. Двадцать решений с зацепками по 120 символов — это около
+# полутора тысяч токенов, то есть впритык; платим мы за фактические токены,
+# а не за потолок, поэтому запас здесь ничего не стоит, а обрезанный ответ
+# стоил бы целой пачки.
+MAX_TOKENS = 4000
 # Прайс Haiku 4.5, $/1M токенов. Кэш: чтение ~0,1×, запись ~1,25× от входа.
 PRICE_IN, PRICE_OUT = Decimal("1"), Decimal("5")
 CACHE_READ_RATE, CACHE_WRITE_RATE = Decimal("0.1"), Decimal("1.25")
@@ -188,26 +191,31 @@ async def run(cards: list, *, batch_id: str, niche: str, city: str,
     if not config.ANTHROPIC_API_KEY:
         return GateResult(False, unseen=len(cards),
                           reason="не задан ANTHROPIC_API_KEY")
-    if await costs.cap_reached():
-        return GateResult(False, unseen=len(cards),
-                          reason="месячный кэп расходов на ИИ исчерпан")
 
     # за потолком карточки остаются нерешёнными: они уедут на модерацию сырыми
-    reason = ""
+    failures = []
     looked = cards[:config.SCOUT_GATE_MAX]
     for start in range(0, len(looked), CHUNK):
         chunk = looked[start:start + CHUNK]
+        number = start // CHUNK + 1
+        # кэп проверяется перед каждым чанком: его мог исчерпать предыдущий
+        if await costs.cap_reached():
+            failures.append("месячный кэп расходов на ИИ исчерпан")
+            break  # дальше будет то же самое, остальные чанки не спрашиваем
         verdicts, reason = await _ask(chunk, batch_id=batch_id, niche=niche,
                                       city=city, bot=bot)
         if reason:
-            break
+            # сбойный чанк не отменяет остальные: решения — по карточкам,
+            # а не по прогону
+            failures.append(f"чанк {number}: {reason}")
+            continue
         _apply(chunk, verdicts)
     return GateResult(
-        not reason,
+        not failures,
         kept=sum(1 for c in cards if c.gate_write is True),
         dropped=sum(1 for c in cards if c.gate_write is False),
         unseen=sum(1 for c in cards if c.gate_write is None),
-        reason=reason,
+        reason="; ".join(failures),
     )
 
 
@@ -267,6 +275,12 @@ async def _ask(cards, *, batch_id, niche, city, bot):
 
     await _log_cost(response.usage, batch_id=batch_id, niche=niche, city=city,
                     cards=len(cards), bot=bot)
+    if getattr(response, "stop_reason", "") == "max_tokens":
+        # обрезанный JSON не разберётся, и это не «модель ответила не по
+        # формату»: чинится потолком, а не промптом
+        log.warning("гейт скаута %s: ответ обрезан на %s карточках", batch_id,
+                    len(cards))
+        return {}, "ответ обрезан лимитом токенов"
     text = "".join(b.text for b in response.content if b.type == "text").strip()
     try:
         data = json.loads(text)

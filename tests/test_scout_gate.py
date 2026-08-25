@@ -5,6 +5,7 @@
 уезжают на модерацию такими же, какими пришли.
 """
 import json
+from types import SimpleNamespace
 
 import anthropic
 import pytest
@@ -33,6 +34,35 @@ def _answer(*rows) -> str:
         {"i": i, "write": write, "hook": hook}
         for i, (write, hook) in enumerate(rows, 1)
     ]}, ensure_ascii=False)
+
+
+class ScriptedMessages:
+    """Ответы по очереди на каждый чанк; Exception — падение этого вызова."""
+
+    def __init__(self, script, stop_reason="end_turn"):
+        self.script = list(script)
+        self.stop_reason = stop_reason
+        self.calls = []
+
+    async def create(self, **kw):
+        self.calls.append(kw)
+        step = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
+        if isinstance(step, Exception):
+            raise step
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=step)],
+            stop_reason=self.stop_reason,
+            usage=SimpleNamespace(input_tokens=120, output_tokens=60,
+                                  cache_read_input_tokens=1800,
+                                  cache_creation_input_tokens=0),
+        )
+
+
+def _scripted(monkeypatch, gate_model, script, stop_reason="end_turn"):
+    fake = gate_model("{}")
+    messages = ScriptedMessages(script, stop_reason)
+    monkeypatch.setattr(fake, "messages", messages)
+    return messages
 
 
 async def _run(cards, batch=BATCH, **kw):
@@ -175,6 +205,57 @@ async def test_cards_beyond_the_run_limit_are_left_alone(gate_model,
     assert "Друга" not in fake.messages.calls[0]["messages"][0]["content"]
     assert seen.gate_write is False and unseen.gate_write is None
     assert result.unseen == 1
+
+
+# --- прогон в несколько чанков ------------------------------------------------
+
+async def test_failed_chunk_does_not_cancel_the_others(monkeypatch, gate_model):
+    monkeypatch.setattr(gate, "CHUNK", 2)
+    monkeypatch.setattr(config, "SCOUT_GATE_MAX", 6)
+    cards = [_card(f"Картка {n}") for n in range(6)]
+    messages = _scripted(monkeypatch, gate_model, [
+        _answer((True, "перша"), (False, "")),
+        anthropic.APIError("сломалось", request=None, body=None),
+        _answer((True, "пʼята"), (False, "")),
+    ])
+
+    result = await _run(cards)
+
+    assert len(messages.calls) == 3  # сбойный чанк не отменил третий
+    assert [c.gate_write for c in cards] == [True, False, None, None, True, False]
+    assert not result.ok and "чанк 2" in result.reason
+    # цифры честные: решения удавшихся чанков уже применены к карточкам
+    assert (result.kept, result.dropped, result.unseen) == (2, 2, 2)
+
+
+async def test_cap_reached_mid_run_silences_the_rest(monkeypatch, gate_model):
+    monkeypatch.setattr(gate, "CHUNK", 2)
+    monkeypatch.setattr(config, "SCOUT_GATE_MAX", 6)
+    cards = [_card(f"Картка {n}") for n in range(6)]
+    messages = _scripted(monkeypatch, gate_model, [_answer((True, ""), (False, ""))])
+    checks = []
+
+    async def _reached():
+        checks.append(1)
+        return len(checks) > 1  # кэп кончился на первом же чанке
+
+    monkeypatch.setattr(costs, "cap_reached", _reached)
+    result = await _run(cards)
+
+    assert len(messages.calls) == 1
+    assert not result.ok and "кэп" in result.reason
+    assert (result.kept, result.dropped, result.unseen) == (1, 1, 4)
+
+
+async def test_truncated_answer_is_named_as_such(monkeypatch, gate_model):
+    card = _card()
+    _scripted(monkeypatch, gate_model, [_answer((True, "зацепка"))],
+              stop_reason="max_tokens")
+
+    result = await _run([card])
+
+    assert not result.ok and "обрезан" in result.reason
+    assert card.gate_write is None
 
 
 # --- деградация без ключа и по кэпу -------------------------------------------
