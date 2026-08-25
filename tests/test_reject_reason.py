@@ -44,11 +44,16 @@ class FakeMsg:
         self.sent = []
         self.markups = []
         self.notified = []
+        self.edits = []
         self.bot = SimpleNamespace(send_message=self._send)
 
     async def answer(self, text, reply_markup=None, **kw):
         self.sent.append(text)
         self.markups.append(reply_markup)
+
+    async def edit_reply_markup(self, reply_markup=None):
+        """Кнопки снимают после нажатия — чтобы её не нажали второй раз."""
+        self.edits.append(reply_markup)
 
     async def _send(self, chat_id, text, **kw):
         self.notified.append((chat_id, text))

@@ -168,6 +168,8 @@ async def main():
                     BotCommand(command="invoice",
                                description="Счета подписки: on, off, paid"),
                     BotCommand(command="stop", description="Стоп-лист: id лида"),
+                    BotCommand(command="stop_all",
+                               description="Экстренный стоп исходящего"),
                     BotCommand(command="stops", description="Журнал отписок и жалоб"),
                     BotCommand(command="numbers",
                                description="Цифры клиента для письма 3"),

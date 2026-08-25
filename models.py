@@ -317,6 +317,25 @@ class FsmState(Base, TimesMixin):
     data: Mapped[str | None] = mapped_column(Text)
 
 
+class Setting(Base, TimesMixin):
+    """Переключатели, которые обязаны пережить рестарт (1.26).
+
+    Ключ-значение, а не колонка на каждый флаг: сегодня здесь один выключатель
+    исходящего, и заводить ради него таблицу с одной строкой и одним булевым
+    полем — значит заводить миграцию под каждый следующий. Значение строкой:
+    «1»/«0» одинаково читается и ботом, и глазами в psql.
+
+    actor_tg_id и updated_at — это и есть журнал переключателя: кто последним
+    трогал и когда. В lead_events такой записи места нет — там события лидов,
+    а у экстренного стопа лида не бывает.
+    """
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_tg_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
 class CostLedger(Base, TimesMixin):
     """Журнал расходов на ИИ и платные API (раздел 20 плана).
 

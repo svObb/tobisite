@@ -23,6 +23,7 @@ import email_gen
 import keyboards as kb
 import metrics
 import notify
+import outbound
 import phrases
 import queue_service
 import services
@@ -646,6 +647,49 @@ async def stops_cmd(message: Message, state: FSMContext, command: CommandObject)
             f"{esc(lead_name or '—')} ({esc(ev.source or '?')}){tail}"
         )
     await message.answer("\n".join(lines))
+
+
+# --- экстренный стоп исходящего (/stop_all, 1.26) ----------------------------
+
+STOP_ALL_HELP = (
+    "Пока стоп включён, письма не собираются и не одобряются, и любая "
+    "будущая отправка откажет тоже. Флаг лежит в базе — рестарт бота его "
+    "не снимет.\n\n"
+    "Если рассылку надо остановить прямо сейчас, а бот не отвечает — звоните."
+)
+
+
+@router.message(Command("stop_all"))
+async def stop_all_cmd(message: Message, state: FSMContext):
+    await state.set_state(None)
+    on, row = await outbound.state()
+    lines = ["<b>⛔ Исходящее остановлено</b>" if on
+             else "<b>▶️ Исходящее разрешено</b>"]
+    if row is not None:
+        who = f", tg {row.actor_tg_id}" if row.actor_tg_id else ""
+        lines.append(f"Последнее переключение: {local(row.updated_at)}{who}.")
+    lines += ["", STOP_ALL_HELP]
+    await message.answer("\n".join(lines), reply_markup=kb.stop_all_kb(on))
+
+
+@router.callback_query(F.data.startswith("sal:"))
+async def stop_all_set(cb: CallbackQuery):
+    on = (cb.data or "").split(":")[-1] == "on"
+    changed = await outbound.set_stopped(on, cb.from_user.id)
+    await cb.answer("Остановлено" if on else "Разрешено")
+    await cb.message.edit_reply_markup(reply_markup=None)
+    if not changed:
+        await cb.message.answer(
+            "⛔ Исходящее и так остановлено." if on
+            else "▶️ Исходящее и так разрешено.")
+        return
+    text = ("⛔ Исходящее остановлено. Очередь писем закрыта.\n\n"
+            "Снять: /stop_all." if on else
+            "▶️ Исходящее разрешено, очередь работает как раньше.")
+    await cb.message.answer(text)
+    # второй админ (6.16) узнаёт о стопе сам: команду мог набрать не он,
+    # а расходятся такие решения дорого
+    await notify.to_admins(cb.bot, text, skip_tg_id=cb.from_user.id)
 
 
 # --- цифры клиента для формулы потерянной выручки (/numbers, 9.35) -----------

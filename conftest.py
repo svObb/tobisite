@@ -44,10 +44,11 @@ if not (os.getenv("TEST_DATABASE_URL") or (ROOT / ".env").exists()):
 
 from sqlalchemy import delete, select, tuple_  # noqa: E402
 
+import outbound  # noqa: E402
 from models import (  # noqa: E402
     ClientService, CommissionChange, Contact, CostLedger, Draft, FsmState,
     Invoice, Lead, LeadEvent, MessageDraft, MessageVersion, PreviewHit, Sale,
-    Session, Suppression, SuppressionEvent, Worker, suppression_keys,
+    Session, Setting, Suppression, SuppressionEvent, Worker, suppression_keys,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -105,6 +106,9 @@ async def _cleanup():
                         .where(SuppressionEvent.source.like("pytest%")))
         await s.execute(delete(Suppression).where(Suppression.source.like("pytest%")))
         await s.execute(delete(FsmState).where(FsmState.key.like(f"{FSM_BOT_ID}:%")))
+        # экстренный стоп — единственный на всю базу: прогон, упавший с
+        # включённым флагом, иначе закрыл бы очередь и следующему
+        await s.execute(delete(Setting).where(Setting.key == outbound.KEY))
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -25,6 +25,7 @@ import draft_service
 import email_gen
 import email_legal
 import email_lint
+import outbound
 import phrases
 from models import (
     Contact, Lead, MessageDraft, MessageVersion, Session, Worker, day_start,
@@ -161,6 +162,10 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
     остаётся фолбэком на лидов, у которых черновика ещё нет.
     """
     async with Session() as s:
+        # 1.26: экстренный стоп бьёт по всему исходящему разом, до всех
+        # остальных проверок — на то он и экстренный
+        if await outbound.stopped(s):
+            return Queued(False, reason=outbound.REASON)
         lead = await s.get(Lead, lead_id)
         if lead is None or lead.deleted_at or lead.cancelled_at:
             return Queued(False, reason="лид недоступен")
@@ -342,7 +347,13 @@ async def approve(draft_id: int, version_id: int, worker_tg_id: int) -> Decision
     из переменных окружения, и пока в них нет физического адреса, письмо не
     проходит по CAN-SPAM (9.8). Кнопку это не блокирует — отправки в конвейере
     всё равно нет, — но факт попадает в историю лида и в ответ дежурному.
+
+    А вот экстренный стоп (1.26) блокирует: «одобрено» — это ровно тот статус,
+    с которого письмо однажды уедет, и набирать такие письма во время стопа
+    значит готовить залп на момент его снятия.
     """
+    if await outbound.stopped():
+        return Decision(False, reason=outbound.REASON)
     return await _decide(draft_id, version_id, worker_tg_id, "approved",
                          "letter_approved", legal_gap=True)
 

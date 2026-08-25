@@ -77,7 +77,9 @@ async def approve(cb: CallbackQuery, worker, is_admin: bool):
     draft_id, version_id = ids
     decision = await qs.approve(draft_id, version_id, cb.from_user.id)
     if not decision.ok:
-        await _stale(cb, draft_id)
+        # у отказа бывает причина, не связанная с устаревшей кнопкой: при
+        # экстренном стопе (1.26) дежурному важно прочитать именно её
+        await _stale(cb, draft_id, decision.reason)
         return
     # 9.8: подпись без физического адреса — не письмо для отправки. Отдельным
     # сообщением об этом не пишем: пока переменная не заполнена, оно повторялось
@@ -328,8 +330,8 @@ async def _next_card(cb: CallbackQuery):
                     kb.review_card_kb(card.draft.id, card.version.id))
 
 
-async def _stale(cb: CallbackQuery, draft_id: int):
-    await cb.answer(STALE, show_alert=True)
+async def _stale(cb: CallbackQuery, draft_id: int, reason: str = ""):
+    await cb.answer(reason or STALE, show_alert=True)
     await _redraw(cb, draft_id)
 
 
