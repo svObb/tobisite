@@ -164,6 +164,8 @@ async def main():
                     BotCommand(command="scout", description="Скаут: страна ниша город"),
                     BotCommand(command="scout_paste",
                                description="Скаут: домены из Ads Transparency"),
+                    BotCommand(command="publish",
+                               description="Выложить превью лида заново"),
                 ],
                 scope=BotCommandScopeChat(chat_id=admin_id),
             )

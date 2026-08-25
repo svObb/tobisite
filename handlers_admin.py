@@ -1107,12 +1107,40 @@ async def build_draft_run(cb: CallbackQuery):
 
 def draft_report(result) -> str:
     if result.ok:
-        return (f"🧱 Черновик собран: {esc(result.summary)}.\n"
-                "Публикация превью — руками, после деплоя Worker.")
+        line = f"🧱 Черновик собран: {esc(result.summary)}."
+        if result.preview_url:
+            return f"{line}\nПревью: {esc(result.preview_url)}"
+        if result.publish_reason:
+            return (f"{line}\n⚠️ Превью не выложено: "
+                    f"{esc(result.publish_reason)}\nПовторить: /publish "
+                    f"{result.lead_id}")
+        return f"{line}\nПревью не публикуется: не заданы ключи R2."
     if result.needs_enrichment:
         missing = esc("\n".join(result.missing))
         return f"📋 Черновик не собрать, не хватает данных:\n{missing}"
     return f"Не собралось: {esc(result.reason)}"
+
+
+PUBLISH_USAGE = ("Формат: /publish <id лида>\n"
+                 "Страница пересобирается из сохранённых слотов и уезжает "
+                 "в R2 под тем же адресом, что и раньше.")
+
+
+@router.message(Command("publish"))
+async def publish_cmd(message: Message, state: FSMContext,
+                      command: CommandObject):
+    """Публикация превью руками: сборка кладёт его сама, это повтор после сбоя."""
+    await state.set_state(None)
+    arg = (command.args or "").strip().lstrip("#")
+    if not arg.isdigit():
+        await message.answer(PUBLISH_USAGE)
+        return
+    note = await message.answer("Публикую превью…")
+    result = await draft_service.publish_preview(
+        int(arg), actor_tg_id=message.from_user.id
+    )
+    await safe_edit(note, f"🌐 Превью: {esc(result.url)}" if result.ok
+                    else f"Не выложено: {esc(result.reason)}")
 
 
 async def _ask_enrichment(cb: CallbackQuery, lead, result):

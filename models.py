@@ -57,8 +57,8 @@ DRAFT_STATUSES = ["queued", "claimed", "approved", "rejected", "cancelled",
                   "needs_manual"]
 # Кто написал версию текста: модель или человек в очереди (Д12 §6.5).
 VERSION_AUTHORS = ["model", "human"]
-# Состояния черновика сайта (Д13 §5). published ставится только руками после
-# деплоя Worker: автоматической публикации превью в конвейере нет.
+# Состояния черновика сайта (Д13 §5). published ставит публикация в R2,
+# expired — уборка превью по сроку (10.14).
 # Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
 BUILD_STATUSES = ["generated", "published", "failed", "expired"]
 # Комиссия работника, % от суммы сделки (7.9). Границы — решение основателя
@@ -668,8 +668,8 @@ class Draft(Base, TimesMixin):
     нечем. checks_json — то, что нашли автопроверки; пустой словарь значит
     «чисто».
 
-    r2_prefix и preview_host заполняются только при ручной публикации: пока
-    Worker не задеплоен, черновик живёт в базе и в письме, но не в интернете.
+    r2_prefix и preview_host заполняет публикация в R2 (10.13): пока их нет,
+    черновик живёт в базе и в письме, но не в интернете.
     """
     __tablename__ = "drafts"
 
@@ -684,6 +684,9 @@ class Draft(Base, TimesMixin):
     section_variants: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     image_ids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     recipe_json: Mapped[dict | None] = mapped_column(JSONB)
+    # тексты слотов, написанные моделью: без них публикация означала бы новый
+    # вызов модели и другую страницу (10.13)
+    slots_json: Mapped[dict | None] = mapped_column(JSONB)
     r2_prefix: Mapped[str | None] = mapped_column(Text)
     preview_host: Mapped[str | None] = mapped_column(Text)
     checks_json: Mapped[dict | None] = mapped_column(JSONB)
@@ -703,6 +706,11 @@ class Draft(Base, TimesMixin):
               postgresql_where="deleted_at IS NULL"),
         Index("ix_drafts_status", "status"),
     )
+
+    @property
+    def preview_url(self) -> str:
+        """Адрес превью или пусто. Отдельной колонки нет: хост — её половина."""
+        return f"https://{self.preview_host}/" if self.preview_host else ""
 
 
 def draft_fresh(draft) -> bool:
