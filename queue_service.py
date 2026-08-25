@@ -53,6 +53,7 @@ ACTIVE_STATUSES = ("queued", "claimed")
 # попросившему не писать, значит оставить письмо в стопке на отправку.
 CANCELLABLE_STATUSES = ACTIVE_STATUSES + ("approved",)
 SUPPRESSED = "лид в стоп-листе: писать нельзя"
+GONE = "лид недоступен"
 # Статусы лида, на которых цепочка касаний останавливается (решение 5 этапа).
 # Именно список: replied_interested добавился сюда строкой, а не правкой
 # условия в трёх хендлерах.
@@ -169,7 +170,7 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
     async with Session() as s:
         lead = await s.get(Lead, lead_id)
         if lead is None or lead.deleted_at or lead.cancelled_at:
-            return Queued(False, reason="лид недоступен")
+            return Queued(False, reason=GONE)
         # 1.26 и 11.6: экстренный стоп и стоп-лист закрывают вход в очередь
         # целиком. Стоп-лист проверяется и внутри сборки письма 1, но касания
         # 2 и 3 её не проходят вовсе — а запрет писать не про то, какое по
@@ -210,12 +211,14 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
 async def _store(lead, result, touch_number, actor_tg_id) -> Queued:
     async with Session() as s, s.begin():
         # между проверками входа и этой транзакцией лежит сетевой вызов модели —
-        # секунды, за которые успевает прийти негативный ответ или экстренный
-        # стоп. Без повторной проверки карточка встала бы в очередь уже после
-        # запрета, и снимать её было бы некому: закрытие компании прошло раньше
+        # секунды, за которые лида успевают удалить, отменить или закрыть
+        # ответом. Без повторной проверки карточка встала бы в очередь уже
+        # после запрета, и снимать её было бы некому: cancel_drafts прошёл
+        # раньше, чем она появилась
         fresh = await s.get(Lead, lead.id)
-        refusal = "лид недоступен" if fresh is None else await _send_refusal(
-            s, fresh)
+        if fresh is None or fresh.deleted_at or fresh.cancelled_at:
+            return Queued(False, reason=GONE)
+        refusal = await _send_refusal(s, fresh)
         if refusal:
             return Queued(False, reason=refusal)
         draft = await s.scalar(select(MessageDraft).where(
@@ -515,9 +518,13 @@ async def _decide(draft_id, version_id, worker_tg_id, status, event,
         if draft is None or draft.shown_version_id != version_id:
             return Decision(False, stale=True, reason="карточка устарела")
         if sendable:
+            # карточка живёт дольше лида: удаление и отмена снимают её с
+            # очереди, но пережившую это карточку одобрять всё равно нечем —
+            # компании у нас больше нет
             lead = await s.get(Lead, draft.lead_id)
-            refusal = ("лид недоступен" if lead is None
-                       else await _send_refusal(s, lead))
+            if lead is None or lead.deleted_at or lead.cancelled_at:
+                return Decision(False, reason=GONE)
+            refusal = await _send_refusal(s, lead)
             if refusal:
                 return Decision(False, reason=refusal)
         version = await s.get(MessageVersion, version_id)

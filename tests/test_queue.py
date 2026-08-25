@@ -15,6 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
+import email_gen
 import handlers_review as hr
 import keyboards as kb
 import queue_service as qs
@@ -446,6 +447,52 @@ async def test_claimed_card_is_cancelled_too(model, gap_lead):
     assert (await _draft(draft_id)).status == "cancelled"
     # кнопка из уже показанной карточки после автостопа не срабатывает
     assert (await qs.approve(draft_id, version_id, REVIEWER)).stale
+
+
+async def _close_lead(lead_id: int, field: str):
+    """Удаление или отмена лида — то, что снимает с очереди всё по компании."""
+    async with Session() as s, s.begin():
+        await s.execute(update(Lead).where(Lead.id == lead_id)
+                        .values(**{field: datetime.now(config.TZ)}))
+
+
+@pytest.mark.parametrize("field", ["deleted_at", "cancelled_at"])
+async def test_a_lead_closed_during_generation_gets_no_card(model, gap_lead,
+                                                            monkeypatch, field):
+    """Пока модель писала письмо, лида закрыли: снимать карточку будет некому —
+    cancel_drafts прошёл раньше, чем она появилась."""
+    model(UK_JSON)
+    lead = await gap_lead(status="verified")
+    build = email_gen.build_email
+
+    async def _slow_build(*args, **kw):
+        result = await build(*args, **kw)
+        await _close_lead(lead.id, field)
+        return result
+
+    monkeypatch.setattr(email_gen, "build_email", _slow_build)
+
+    result = await qs.enqueue(lead.id, actor_tg_id=REVIEWER,
+                              draft_summary=UK_DRAFT)
+
+    assert not result.ok and result.reason == qs.GONE
+    async with Session() as s:
+        cards = list(await s.scalars(
+            select(MessageDraft).where(MessageDraft.lead_id == lead.id)))
+    assert cards == []
+
+
+@pytest.mark.parametrize("field", ["deleted_at", "cancelled_at"])
+async def test_a_card_of_a_closed_lead_is_not_approved(model, gap_lead, field):
+    model(UK_JSON)
+    lead, draft_id, version_id = await _queued(gap_lead)
+    await qs.claim_next(REVIEWER)
+    await _close_lead(lead.id, field)
+
+    decision = await qs.approve(draft_id, version_id, REVIEWER)
+
+    assert not decision.ok and decision.reason == qs.GONE
+    assert (await _draft(draft_id)).status == "claimed"
 
 
 async def test_approved_card_is_taken_back_as_well(model, gap_lead):
