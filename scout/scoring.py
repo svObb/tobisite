@@ -5,17 +5,43 @@
 рубрики скилла qdif-lead-qualify (закрывает старый пункт 14.24).
 
 Три исхода (15.15): candidate (>= CANDIDATE_MIN) — сразу на модерацию,
-review (>= REVIEW_MIN) — остаётся raw, в волне 2 поедет в ИИ-гейт,
+review (>= REVIEW_MIN) — спорная, её судьбу решает ИИ-гейт (scout.gate),
 reject — в базу не попадает, только строчка в дайджесте.
 """
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from scout.types import RawBiz
 
 CANDIDATE_MIN = 70
+# Спорных ждём 10–20% пачки: их и только их видит платный гейт. Доля уезжает
+# в дайджест каждого прогона — по ней калибруются оба порога (15.14).
 REVIEW_MIN = 40
 
 STALE_YEARS = 2  # копирайт отстал на столько лет — сайт признаём заброшенным
+
+
+@dataclass(frozen=True)
+class Split:
+    """Пачка, разложенная по трём исходам."""
+    candidates: list = field(default_factory=list)
+    gray: list = field(default_factory=list)
+    rejected: list = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.candidates) + len(self.gray) + len(self.rejected)
+
+    @property
+    def gray_share(self) -> float:
+        return len(self.gray) / self.total if self.total else 0.0
+
+
+def split(cards: list[RawBiz]) -> Split:
+    groups = {"candidate": [], "review": [], "reject": []}
+    for card in cards:
+        groups[card.verdict].append(card)  # KeyError = карточку не оценили
+    return Split(groups["candidate"], groups["review"], groups["reject"])
 
 
 def score(raw: RawBiz, probe: dict | None) -> RawBiz:
