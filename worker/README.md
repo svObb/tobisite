@@ -1,8 +1,9 @@
 # tobisite-preview — раздача превью
 
 Один Worker на все черновики: `<slug>.tobisitepreview.com` → префикс `<slug>/`
-в бакете R2. Публикация превью — не деплой, а несколько PUT в бакет
-(`python tools/publish_r2.py`). Деплой воркера нужен один раз и потом только
+в бакете R2. Публикация превью — не деплой, а PUT в бакет: его делает бот
+сразу после сборки черновика (`docs/preview-pipeline.md`), а папку целиком —
+`python tools/publish_r2.py`. Деплой воркера нужен один раз и потом только
 при правке кода.
 
 Локального `node_modules` тут нет: всё через `npx wrangler`.
@@ -13,11 +14,12 @@
 
 2. **Бакет:** `npx wrangler r2 bucket create tobisite-previews`
 
-3. **Автоудаление через 30 дней.** В коде срока жизни нет, он ставится
-   правилом на бакете: дашборд → R2 → `tobisite-previews` → Settings → Object
-   lifecycle rules → удалять объекты старше 30 дней. То же из консоли:
-   `npx wrangler r2 bucket lifecycle add tobisite-previews` (флаги посмотреть
-   через `--help`, они менялись между версиями wrangler).
+3. **Автоудаление.** Срок жизни превью — 60 дней, и держит его бот
+   (`draft_service.expire_previews`, см. `docs/preview-pipeline.md`): он один
+   знает, что превью проданного лида сносить нельзя. Правило на бакете
+   (дашборд → R2 → `tobisite-previews` → Settings → Object lifecycle rules)
+   годится только как страховка от мусора и обязано быть ДЛИННЕЕ 60 дней —
+   иначе снесёт страницу, из которой делается боевой сайт.
 
 4. **DNS зоны `tobisitepreview.com`:** одна запись `*` типа A на `192.0.2.1`
    (адрес-заглушка из TEST-NET, трафик до него не доходит), **proxied**,

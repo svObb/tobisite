@@ -11,7 +11,9 @@ aiogram==3.30.0
 aiohappyeyeballs==2.7.1
     # via aiohttp
 aiohttp==3.14.3
-    # via aiogram
+    # via
+    #   -r requirements.txt
+    #   aiogram
 aiosignal==1.4.0
     # via aiohttp
 alembic==1.19.1

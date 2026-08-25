@@ -112,9 +112,26 @@ def parse_psi(data: dict) -> int | None:
     return round(score * 100) if isinstance(score, (int, float)) else None
 
 
-async def psi_score(session: aiohttp.ClientSession, url: str,
-                    api_key: str = "") -> int | None:
-    """Мобильный performance-скор сайта. Ошибка — это данные (None), не исключение."""
+def parse_psi_metrics(data: dict) -> dict:
+    """Скор плюс LCP и Speed Index в миллисекундах (10.17).
+
+    Lighthouse mobile гоняет страницу через дросселирование 4G, поэтому его
+    LCP и есть ответ на вопрос «за сколько превью показывает главное».
+    None в поле значит «не измерено», а не «быстро».
+    """
+    audits = ((data or {}).get("lighthouseResult") or {}).get("audits") or {}
+
+    def ms(name: str) -> int | None:
+        value = (audits.get(name) or {}).get("numericValue")
+        return round(value) if isinstance(value, (int, float)) else None
+
+    return {"score": parse_psi(data), "lcp_ms": ms("largest-contentful-paint"),
+            "si_ms": ms("speed-index")}
+
+
+async def psi_raw(session: aiohttp.ClientSession, url: str,
+                  api_key: str = "") -> dict:
+    """Ответ PageSpeed целиком. Пустой словарь — не получилось (это данные)."""
     params = {"url": _with_scheme(url, "https"), "strategy": "mobile",
               "category": "performance"}
     if api_key:
@@ -123,12 +140,18 @@ async def psi_score(session: aiohttp.ClientSession, url: str,
         async with session.get(PSI_URL, params=params) as resp:
             if resp.status != 200:
                 log.info("PSI %s → HTTP %s", url, resp.status)
-                return None
-            return parse_psi(await resp.json())
+                return {}
+            return await resp.json()
     except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError,
             ValueError) as e:
         log.info("PSI %s → %s", url, e.__class__.__name__)
-        return None
+        return {}
+
+
+async def psi_score(session: aiohttp.ClientSession, url: str,
+                    api_key: str = "") -> int | None:
+    """Мобильный performance-скор сайта. Ошибка — это данные (None), не исключение."""
+    return parse_psi(await psi_raw(session, url, api_key))
 
 
 async def psi_many(urls: list[str], *, api_key: str = "",

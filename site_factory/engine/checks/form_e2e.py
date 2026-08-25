@@ -1,19 +1,23 @@
 """Форма заявки доходит до админ-чата.
 
-До Worker (подэтап 5.5) — заглушка: наличие формы, action=/api/lead, method=post
-и honeypot-поля. После — реальный POST с заголовком X-Tobisite-Test: 1, который
-возвращает {"ok": true, "test": true} и в чат ничего не пишет (§4).
+Проверок две, и они отвечают на разные вопросы.
 
-Сейчас проверка статическая и сети не касается. Она отвечает на вопрос
-«форма вообще есть и указывает туда, куда надо», и не отвечает на вопрос
-«заявка дошла». Второй вопрос закрывает CI-проверка после деплоя Worker:
-POST на https://<slug>.tobisitepreview.com/api/lead с заголовком
-X-Tobisite-Test: 1 и ожиданием {"ok": true, "test": true}. Когда она появится,
-её место — здесь же, отдельной функцией, а эту оставить как быструю.
+* check(html) — статическая: форма есть, ведёт на /api/lead методом post и
+  несёт honeypot. Сети не касается, идёт в run_all до всякой публикации.
+* check_live(url) — настоящий POST на живое превью с заголовком
+  X-Tobisite-Test: 1 (10.9): Worker проходит ту же валидацию, отвечает
+  {"ok": true, "test": true} и в админ-чат ничего не пишет.
+
+check_live в run_all не входит намеренно: автопроверки идут до публикации,
+когда стучаться ещё некуда, а CI не должен зависеть от чужой сети. Её зовёт
+tools/preview_check.py по уже выложенному превью.
 """
 from __future__ import annotations
 
+import asyncio
 import re
+
+import aiohttp
 
 ACTION = "/api/lead"
 METHOD = "post"
@@ -21,6 +25,11 @@ HONEYPOT = "company_website"
 REQUIRED_FIELDS = ("name", "phone")
 
 FORM = re.compile(r"<form\b([^>]*)>(.*?)</form>", re.S)
+
+TEST_HEADER = {"X-Tobisite-Test": "1"}
+LIVE_TIMEOUT = 15
+# заявка проходит валидацию Worker (имя ≥2, телефон ≥5), но никуда не уходит
+PROBE_LEAD = {"name": "tobisite check", "phone": "+380000000000"}
 
 
 def check(html: str) -> list[str]:
@@ -38,4 +47,40 @@ def check(html: str) -> list[str]:
             problems.append(f"в форме нет honeypot-поля {HONEYPOT!r}")
         problems += [f"в форме нет поля {field!r}" for field in REQUIRED_FIELDS
                      if f'name="{field}"' not in body]
+    return problems
+
+
+async def check_live(url: str, session=None) -> list[str]:
+    """Тестовая заявка на живое превью: сеть трогает только эта функция."""
+    if session is None:
+        timeout = aiohttp.ClientTimeout(total=LIVE_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as own:
+            return await check_live(url, own)
+    target = url.rstrip("/") + ACTION
+    try:
+        async with session.post(target, json=PROBE_LEAD,
+                                headers=TEST_HEADER) as resp:
+            # content_type=None: ошибку Cloudflare отдаёт и текстом
+            return check_answer(resp.status, await resp.json(content_type=None),
+                                target)
+    except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError,
+            ValueError) as e:
+        return [f"{target}: {e.__class__.__name__}"]
+
+
+def check_answer(status: int, body, target: str = ACTION) -> list[str]:
+    """Ответ Worker на тестовую заявку: 200 и {"ok": true, "test": true}."""
+    if status != 200:
+        return [f"{target}: HTTP {status}"]
+    if not isinstance(body, dict):
+        return [f"{target}: ответ не JSON"]
+    problems = []
+    if body.get("ok") is not True:
+        problems.append(f"{target}: ok={body.get('ok')!r}, "
+                        f"ошибка {body.get('error')!r}")
+    if body.get("test") is not True:
+        # без test:true заявка ушла в админ-чат: заголовок не долетел, и
+        # каждая такая проверка — сообщение о несуществующем клиенте
+        problems.append(f"{target}: тест-заголовок не сработал, "
+                        f"заявка ушла в чат")
     return problems
