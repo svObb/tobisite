@@ -29,8 +29,8 @@ from handlers_worker import (
 )
 from models import (
     COMMISSION_MAX, COMMISSION_MIN, ClientService, CommissionChange, Contact,
-    CostLedger, Lead, LeadEvent, Sale, Session, Worker, commission_due,
-    day_start, log_event, month_start,
+    CostLedger, Lead, LeadEvent, Sale, Session, SuppressionEvent, Worker,
+    commission_due, day_start, log_event, month_start, suppress_lead,
 )
 from scout.niches import NICHE_TAGS
 from scout.runner import run_scout, run_scout_paste, scout_busy
@@ -306,6 +306,89 @@ async def _subs_cancel(message: Message, num_s: str):
         log_event(s, cs.lead_id, "sub_cancel", message.from_user.id,
                   field=cs.service_id, old="active", new="canceled")
     await message.answer(f"✅ Подписка #{num} отменена.")
+
+
+# --- стоп-лист и журнал отписок (/stop, /stops, 9.27, 9.34) ------------------
+
+# в команде слова короткие, в базе — полные: журнал читают не только мы
+STOP_EVENTS = {"unsub": "unsubscribe", "complaint": "complaint",
+               "manual": "manual"}
+EVENT_LABELS = {"unsubscribe": "отписка", "complaint": "жалоба",
+                "bounce": "баунс", "manual": "вручную"}
+STOP_USAGE = (
+    "Формат:\n"
+    "/stop &lt;id лида&gt; [unsub|complaint|manual] [заметка]\n"
+    "/stops [сколько] — журнал отписок и жалоб\n\n"
+    "Закрывает компанию целиком: адрес, домен и «имя+город». "
+    "Без слова считается отпиской."
+)
+
+
+@router.message(Command("stop"))
+async def stop_cmd(message: Message, state: FSMContext, command: CommandObject):
+    await state.set_state(None)
+    args = (command.args or "").split()
+    if not args:
+        await message.answer(STOP_USAGE)
+        return
+    try:
+        lead_id = int(args[0])
+    except ValueError:
+        await message.answer(STOP_USAGE)
+        return
+    # слово вида события необязательно: «/stop 42 просил больше не писать»
+    # должно сработать, а не показать справку — отписку принимают как есть
+    event = STOP_EVENTS.get(args[1] if len(args) > 1 else "", "")
+    note = " ".join(args[2:] if event else args[1:])
+    event = event or "unsubscribe"
+    async with Session() as s, s.begin():
+        lead = await s.get(Lead, lead_id)
+        if lead is None:
+            await message.answer(f"Лид #{lead_id} не найден.")
+            return
+        # удалённый и отменённый лиды тоже закрываются: просьбу не писать
+        # исполняют независимо от того, в каком состоянии у нас карточка
+        added = await suppress_lead(s, lead, event=event, source="telegram",
+                                    note=note or None,
+                                    actor_tg_id=message.from_user.id)
+        dropped = await queue_service.cancel_drafts(
+            s, lead_id, message.from_user.id, note="стоп-лист")
+        log_event(s, lead_id, "suppressed", message.from_user.id,
+                  field=event, new=note or None)
+        name = lead.name
+    lines = [f"🚫 {esc(name)} — {EVENT_LABELS[event]}, писать больше не будем.",
+             f"Закрыто значений: {added}." if added else "Уже был в стоп-листе."]
+    if dropped:
+        lines.append(f"Снято с очереди карточек: {dropped}.")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("stops"))
+async def stops_cmd(message: Message, state: FSMContext, command: CommandObject):
+    await state.set_state(None)
+    try:
+        limit = max(1, min(int(command.args or 20), 50))
+    except ValueError:
+        await message.answer(STOP_USAGE)
+        return
+    async with Session() as s:
+        rows = (await s.execute(
+            select(SuppressionEvent, Lead.name)
+            .outerjoin(Lead, Lead.id == SuppressionEvent.lead_id)
+            .order_by(SuppressionEvent.id.desc())
+            .limit(limit)
+        )).all()
+    if not rows:
+        await message.answer("Отписок и жалоб не было.\n\n" + STOP_USAGE)
+        return
+    lines = ["<b>🚫 Журнал отписок и жалоб</b>"]
+    for ev, lead_name in rows:
+        tail = f" — {esc(ev.note)}" if ev.note else ""
+        lines.append(
+            f"{local(ev.created_at)} · {EVENT_LABELS.get(ev.event, ev.event)} · "
+            f"{esc(lead_name or '—')} ({esc(ev.source or '?')}){tail}"
+        )
+    await message.answer("\n".join(lines))
 
 
 # --- лид-скаут (/scout, /scout_paste) ----------------------------------------

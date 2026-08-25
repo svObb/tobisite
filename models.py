@@ -7,7 +7,7 @@ from sqlalchemy import (
     Numeric, SmallInteger, String, Text, UniqueConstraint, and_, func, or_,
     select, text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -44,6 +44,9 @@ GAP_TYPE_KEYS = [k for k, _ in config.GAP_TYPES]
 LEAD_REJECT_KEYS = [k for k, _ in config.LEAD_REJECT_REASONS]
 # Что заносится в suppression (7.22): хеш почты, домен, компания «имя+город».
 SUPPRESSION_KINDS = ["email_hash", "domain", "company"]
+# Отчего компания попала в стоп-лист (9.34). Новое основание = запись здесь
+# + миграция CHECK-констрейнта, как у статусов лида.
+SUPPRESSION_EVENTS = ["unsubscribe", "complaint", "bounce", "manual"]
 # Итог проверки адреса получателя (9.29). NULL — не проверяли; unknown — DNS
 # не ответил, и это не «в порядке»: письмо по такому адресу не собирается.
 VERIFY_STATUSES = ["valid", "invalid", "unknown"]
@@ -446,6 +449,42 @@ class Suppression(Base, TimesMixin):
     )
 
 
+class SuppressionEvent(Base, TimesMixin):
+    """Журнал отписок и жалоб (9.34): что случилось, когда и по чьей просьбе.
+
+    Стоп-лист отвечает на вопрос «писать ли этой компании сейчас», а журнал —
+    на вопрос «докажите, что вы прекратили»: строка suppression одна на
+    значение и молчит о том, когда и почему появилась, а повторная жалоба её
+    вообще не меняет. Поэтому запись сюда идёт всегда, даже если в стоп-листе
+    такое значение уже есть.
+
+    Время исполнения тоже здесь: created_at против даты обращения — то самое
+    «≤2 дней» из 9.30, и оно у нас нулевое, потому что стоп-лист закрывает
+    компанию в той же транзакции.
+    """
+    __tablename__ = "suppression_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    value_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    lead_id: Mapped[int | None] = mapped_column(BigInteger,
+                                                ForeignKey("leads.id"))
+    # откуда пришло обращение: «ответ на письмо», «звонок», «Instantly»
+    source: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    actor_tg_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    __table_args__ = (
+        CheckConstraint(in_list("event", SUPPRESSION_EVENTS),
+                        name="ck_suppression_events_event"),
+        CheckConstraint(in_list("kind", SUPPRESSION_KINDS),
+                        name="ck_suppression_events_kind"),
+        Index("ix_suppression_events_created_at", "created_at"),
+        Index("ix_suppression_events_lead_id", "lead_id"),
+    )
+
+
 def email_key(value: str) -> str:
     return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
@@ -454,8 +493,12 @@ def company_key(name: str, city: str) -> str:
     return f"{(name or '').strip().lower()}|{(city or '').strip().lower()}"
 
 
-async def suppression_hit(session, lead) -> bool:
-    """Лид в стоп-листе хотя бы по одному из трёх пространств значений."""
+async def suppression_keys(session, lead) -> list[tuple[str, str]]:
+    """Три пространства значений лида: компания, домен, хеши его адресов.
+
+    Один список и на проверку, и на запись — иначе стоп-лист однажды закроет
+    не то, что проверяет.
+    """
     pairs = [("company", company_key(lead.name, lead.city))]
     if lead.domain_norm:
         pairs.append(("domain", lead.domain_norm))
@@ -466,13 +509,47 @@ async def suppression_hit(session, lead) -> bool:
             Contact.deleted_at.is_(None),
         )
     )
-    pairs += [("email_hash", email_key(v)) for v in emails]
+    return pairs + [("email_hash", email_key(v)) for v in emails]
+
+
+async def suppression_hit(session, lead) -> bool:
+    """Лид в стоп-листе хотя бы по одному из трёх пространств значений."""
+    pairs = await suppression_keys(session, lead)
     return bool(await session.scalar(
         select(Suppression.id).where(or_(*[
             and_(Suppression.kind == k, Suppression.value_norm == v)
             for k, v in pairs
         ])).limit(1)
     ))
+
+
+async def suppress_lead(session, lead, *, event: str, source: str,
+                        note: str | None = None,
+                        actor_tg_id: int | None = None) -> int:
+    """Стоп-лист по всем трём пространствам сразу + запись в журнал (9.27, 9.34).
+
+    Отписка глобальна: адрес, домен и компания закрываются одной операцией,
+    иначе то же юрлицо получило бы письмо со второго адреса. Сколько ключей
+    добавилось — возвращается; ноль значит «уже был закрыт», и это не ошибка:
+    в журнал повторное обращение всё равно попадает.
+    """
+    pairs = await suppression_keys(session, lead)
+    added = 0
+    for kind, value in pairs:
+        result = await session.execute(
+            pg_insert(Suppression)
+            .values(kind=kind, value_norm=value, reason=event, source=source)
+            .on_conflict_do_nothing(constraint="uq_suppression_kind_value")
+        )
+        added += result.rowcount or 0
+    # в журнале одна строка на обращение, а не на каждое значение: доказывать
+    # приходится факт и дату, а не устройство нашего стоп-листа
+    main_kind, main_value = pairs[-1]
+    session.add(SuppressionEvent(
+        event=event, kind=main_kind, value_norm=main_value, lead_id=lead.id,
+        source=source, note=note, actor_tg_id=actor_tg_id,
+    ))
+    return added
 
 
 def gap_age_days(lead) -> int | None:

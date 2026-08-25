@@ -42,12 +42,12 @@ if not (os.getenv("TEST_DATABASE_URL") or (ROOT / ".env").exists()):
         returncode=3,
     )
 
-from sqlalchemy import delete, select  # noqa: E402
+from sqlalchemy import delete, select, tuple_  # noqa: E402
 
 from models import (  # noqa: E402
     ClientService, CommissionChange, Contact, CostLedger, Draft, FsmState,
     Lead, LeadEvent, MessageDraft, MessageVersion, Sale, Session, Suppression,
-    Worker,
+    SuppressionEvent, Worker, suppression_keys,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -65,6 +65,15 @@ async def _cleanup():
                 select(Lead.id).where(Lead.worker_id.in_(wids))
             ))
             if lids:
+                # ключи стоп-листа считаем до удаления контактов: у строк,
+                # оставленных командой /stop, боевой source, и по нему их от
+                # настоящих не отличить — только по значению ключа
+                pairs = []
+                for lead in await s.scalars(select(Lead).where(Lead.id.in_(lids))):
+                    pairs += await suppression_keys(s, lead)
+                await s.execute(delete(Suppression).where(
+                    tuple_(Suppression.kind, Suppression.value_norm).in_(pairs)
+                ))
                 # версии → карточки → лид: FK держит порядок удаления
                 dids = list(await s.scalars(
                     select(MessageDraft.id).where(MessageDraft.lead_id.in_(lids))
@@ -81,11 +90,15 @@ async def _cleanup():
                 await s.execute(delete(Contact).where(Contact.lead_id.in_(lids)))
                 await s.execute(delete(ClientService)
                                 .where(ClientService.lead_id.in_(lids)))
+                await s.execute(delete(SuppressionEvent)
+                                .where(SuppressionEvent.lead_id.in_(lids)))
                 await s.execute(delete(Lead).where(Lead.id.in_(lids)))
             await s.execute(delete(CommissionChange)
                             .where(CommissionChange.worker_id.in_(wids)))
             await s.execute(delete(Worker).where(Worker.id.in_(wids)))
         await s.execute(delete(CostLedger).where(CostLedger.batch_id.like("pytest%")))
+        await s.execute(delete(SuppressionEvent)
+                        .where(SuppressionEvent.source.like("pytest%")))
         await s.execute(delete(Suppression).where(Suppression.source.like("pytest%")))
         await s.execute(delete(FsmState).where(FsmState.key.like(f"{FSM_BOT_ID}:%")))
 
