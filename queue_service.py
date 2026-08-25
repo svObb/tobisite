@@ -48,6 +48,11 @@ WORDS_PER_MINUTE = 238
 READ_SHARE = 0.5
 
 ACTIVE_STATUSES = ("queued", "claimed")
+# Что снимает закрытие компании: одобренное письмо тоже, хотя в очереди его уже
+# нет. approved — статус, с которого письмо однажды уедет, и оставить его лиду,
+# попросившему не писать, значит оставить письмо в стопке на отправку.
+CANCELLABLE_STATUSES = ACTIVE_STATUSES + ("approved",)
+SUPPRESSED = "лид в стоп-листе: писать нельзя"
 # Статусы лида, на которых цепочка касаний останавливается (решение 5 этапа).
 # Именно список: replied_interested добавился сюда строкой, а не правкой
 # условия в трёх хендлерах.
@@ -162,21 +167,19 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
     остаётся фолбэком на лидов, у которых черновика ещё нет.
     """
     async with Session() as s:
-        # 1.26: экстренный стоп бьёт по всему исходящему разом, до всех
-        # остальных проверок — на то он и экстренный
-        if await outbound.stopped(s):
-            return Queued(False, reason=outbound.REASON)
         lead = await s.get(Lead, lead_id)
         if lead is None or lead.deleted_at or lead.cancelled_at:
             return Queued(False, reason="лид недоступен")
+        # 1.26 и 11.6: экстренный стоп и стоп-лист закрывают вход в очередь
+        # целиком. Стоп-лист проверяется и внутри сборки письма 1, но касания
+        # 2 и 3 её не проходят вовсе — а запрет писать не про то, какое по
+        # счёту письмо
+        refusal = await _send_refusal(s, lead)
+        if refusal:
+            return Queued(False, reason=refusal)
         if lead.status != "verified":
             return Queued(False, reason="письмо собирается только по "
                                         "проверенному лиду")
-        # 11.6: стоп-лист закрывает вход в очередь целиком. Проверка есть и
-        # внутри сборки письма 1, но касания 2 и 3 её не проходят вовсе —
-        # а запрет писать не про то, какое по счёту письмо
-        if await suppression_hit(s, lead):
-            return Queued(False, reason="лид в стоп-листе: писать нельзя")
         if touch_number > config.MAX_TOUCHES_PER_LEAD:
             return Queued(False, reason=f"больше {config.MAX_TOUCHES_PER_LEAD} "
                                         f"касаний одному лиду не пишем")
@@ -206,6 +209,15 @@ async def enqueue(lead_id: int, *, actor_tg_id: int, draft_summary: str = "",
 
 async def _store(lead, result, touch_number, actor_tg_id) -> Queued:
     async with Session() as s, s.begin():
+        # между проверками входа и этой транзакцией лежит сетевой вызов модели —
+        # секунды, за которые успевает прийти негативный ответ или экстренный
+        # стоп. Без повторной проверки карточка встала бы в очередь уже после
+        # запрета, и снимать её было бы некому: закрытие компании прошло раньше
+        fresh = await s.get(Lead, lead.id)
+        refusal = "лид недоступен" if fresh is None else await _send_refusal(
+            s, fresh)
+        if refusal:
+            return Queued(False, reason=refusal)
         draft = await s.scalar(select(MessageDraft).where(
             MessageDraft.lead_id == lead.id,
             MessageDraft.touch_number == touch_number,
@@ -348,14 +360,14 @@ async def approve(draft_id: int, version_id: int, worker_tg_id: int) -> Decision
     проходит по CAN-SPAM (9.8). Кнопку это не блокирует — отправки в конвейере
     всё равно нет, — но факт попадает в историю лида и в ответ дежурному.
 
-    А вот экстренный стоп (1.26) блокирует: «одобрено» — это ровно тот статус,
-    с которого письмо однажды уедет, и набирать такие письма во время стопа
-    значит готовить залп на момент его снятия.
+    А вот экстренный стоп (1.26) и стоп-лист (11.6) блокируют: «одобрено» — это
+    ровно тот статус, с которого письмо однажды уедет, и набирать такие письма
+    во время стопа значит готовить залп на момент его снятия. Проверка идёт
+    внутри транзакции решения, под тем же замком карточки: дежурный жмёт кнопку
+    через минуты после того, как её увидел, и запрет мог прийти как раз в них.
     """
-    if await outbound.stopped():
-        return Decision(False, reason=outbound.REASON)
     return await _decide(draft_id, version_id, worker_tg_id, "approved",
-                         "letter_approved", legal_gap=True)
+                         "letter_approved", legal_gap=True, sendable=True)
 
 
 async def reject(draft_id: int, version_id: int, worker_tg_id: int,
@@ -393,7 +405,11 @@ async def postpone(draft_id: int, version_id: int,
 
 async def cancel_drafts(session, lead_id: int, actor_tg_id: int,
                         note: str = "") -> int:
-    """Автостоп цепочки (решение 5): снять с очереди всё активное по лиду.
+    """Автостоп цепочки (решение 5): снять с очереди всё живое по лиду.
+
+    Зовут её всегда об одном — по этой компании писем больше не будет: стоп-лист,
+    удаление, отмена, продажа, отказ. Поэтому снимается и одобренное письмо: в
+    очереди его уже нет, но именно оно однажды уедет.
 
     Принимает чужую сессию: отмена обязана попасть в ту же транзакцию, что и
     смена статуса лида, иначе между ними карточку успеют одобрить.
@@ -401,7 +417,7 @@ async def cancel_drafts(session, lead_id: int, actor_tg_id: int,
     result = await session.execute(
         update(MessageDraft)
         .where(MessageDraft.lead_id == lead_id,
-               MessageDraft.status.in_(ACTIVE_STATUSES))
+               MessageDraft.status.in_(CANCELLABLE_STATUSES))
         .values(status="cancelled", claimed_by=None, claimed_at=None,
                 expires_at=None)
     )
@@ -493,11 +509,17 @@ def _diff_ratio(before: str, after: str) -> Decimal:
 
 
 async def _decide(draft_id, version_id, worker_tg_id, status, event,
-                  field=None, legal_gap=False) -> Decision:
+                  field=None, legal_gap=False, sendable=False) -> Decision:
     async with Session() as s, s.begin():
         draft = await _claimed(s, draft_id, worker_tg_id)
         if draft is None or draft.shown_version_id != version_id:
             return Decision(False, stale=True, reason="карточка устарела")
+        if sendable:
+            lead = await s.get(Lead, draft.lead_id)
+            refusal = ("лид недоступен" if lead is None
+                       else await _send_refusal(s, lead))
+            if refusal:
+                return Decision(False, reason=refusal)
         version = await s.get(MessageVersion, version_id)
         too_fast = _too_fast(draft, version.body if version else "")
         _unclaim(draft, status)
@@ -519,6 +541,19 @@ async def _decide(draft_id, version_id, worker_tg_id, status, event,
                           new="; ".join(gaps)[:200])
         return Decision(True, lead_id=draft.lead_id, version_id=version_id,
                         too_fast=too_fast, legal_fails=gaps)
+
+
+async def _send_refusal(session, lead) -> str:
+    """Почему этому лиду сейчас нельзя готовить письмо. Пусто — можно.
+
+    Одна проверка на оба конца конвейера: и на входе в очередь, и на одобрении.
+    Разъехавшись, они дали бы карточке пройти хотя бы одним путём.
+    """
+    if await outbound.stopped(session):
+        return outbound.REASON
+    if await suppression_hit(session, lead):
+        return SUPPRESSED
+    return ""
 
 
 async def _claimed(session, draft_id: int, worker_tg_id: int):

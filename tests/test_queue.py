@@ -11,14 +11,14 @@ import re
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 import config
 import handlers_review as hr
 import keyboards as kb
 import queue_service as qs
-from conftest import TEST_TG_BASE
+from conftest import wipe_cards
 from models import (
     Lead, LeadEvent, MessageDraft, MessageVersion, Session, Worker,
 )
@@ -31,24 +31,9 @@ REVIEWER, OTHER = 700_001, 700_002
 @pytest.fixture(autouse=True)
 def clean_queue():
     """Очередь общая на всю базу: карточка соседнего теста досталась бы этому."""
-    asyncio.run(_wipe())
+    asyncio.run(wipe_cards())
     yield
-    asyncio.run(_wipe())
-
-
-async def _wipe():
-    async with Session() as s, s.begin():
-        leads = select(Lead.id).where(Lead.worker_id.in_(
-            select(Worker.id).where(Worker.tg_id >= TEST_TG_BASE)
-        ))
-        drafts = list(await s.scalars(
-            select(MessageDraft.id).where(MessageDraft.lead_id.in_(leads))
-        ))
-        if drafts:
-            await s.execute(delete(MessageVersion)
-                            .where(MessageVersion.draft_id.in_(drafts)))
-            await s.execute(delete(MessageDraft)
-                            .where(MessageDraft.id.in_(drafts)))
+    asyncio.run(wipe_cards())
 
 
 async def _queued(gap_lead, **kw) -> tuple[Lead, int, int]:
@@ -463,16 +448,17 @@ async def test_claimed_card_is_cancelled_too(model, gap_lead):
     assert (await qs.approve(draft_id, version_id, REVIEWER)).stale
 
 
-async def test_approved_card_survives_the_hook(model, gap_lead):
+async def test_approved_card_is_taken_back_as_well(model, gap_lead):
+    """Одобренное письмо — то самое, которое однажды уедет: снимать и его."""
     model(UK_JSON)
     lead, draft_id, version_id = await _queued(gap_lead)
     await qs.claim_next(REVIEWER)
     await qs.approve(draft_id, version_id, REVIEWER)
 
     async with Session() as s, s.begin():
-        assert await qs.cancel_drafts(s, lead.id, REVIEWER) == 0
+        assert await qs.cancel_drafts(s, lead.id, REVIEWER) == 1
 
-    assert (await _draft(draft_id)).status == "approved"
+    assert (await _draft(draft_id)).status == "cancelled"
 
 
 def test_stop_statuses_are_a_list_not_a_condition():

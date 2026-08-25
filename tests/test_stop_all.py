@@ -10,12 +10,13 @@ import pytest
 from sqlalchemy import delete, select
 
 import config
+import email_gen
 import keyboards as kb
 import outbound
 import queue_service as qs
-from conftest import TEST_TG_BASE
+from conftest import wipe_cards
 from handlers_admin import stop_all_cmd, stop_all_set
-from models import Lead, MessageDraft, MessageVersion, Session, Setting, Worker
+from models import MessageDraft, Session, Setting
 from test_email_gen import UK_DRAFT, UK_JSON
 from test_reject_reason import ADMIN, FakeCb, FakeMsg, FakeState
 
@@ -33,17 +34,7 @@ def clean_switch():
 async def _wipe():
     async with Session() as s, s.begin():
         await s.execute(delete(Setting).where(Setting.key == outbound.KEY))
-        leads = select(Lead.id).where(Lead.worker_id.in_(
-            select(Worker.id).where(Worker.tg_id >= TEST_TG_BASE)
-        ))
-        drafts = list(await s.scalars(
-            select(MessageDraft.id).where(MessageDraft.lead_id.in_(leads))
-        ))
-        if drafts:
-            await s.execute(delete(MessageVersion)
-                            .where(MessageVersion.draft_id.in_(drafts)))
-            await s.execute(delete(MessageDraft)
-                            .where(MessageDraft.id.in_(drafts)))
+    await wipe_cards()
 
 
 async def _queued(gap_lead) -> tuple[int, int]:
@@ -105,6 +96,30 @@ async def test_a_stopped_bot_builds_no_letter(model, gap_lead):
     assert not result.ok and result.reason == outbound.REASON
     # отказ стоит до генерации: ни карточки, ни вызова модели
     assert result.draft_id is None and fake.messages.calls == []
+
+
+async def test_a_stop_during_generation_is_still_in_time(model, gap_lead,
+                                                         monkeypatch):
+    """Стоп пришёл, пока модель писала письмо: карточки всё равно не будет."""
+    model(UK_JSON)
+    lead = await gap_lead(status="verified")
+    build = email_gen.build_email
+
+    async def _slow_build(*args, **kw):
+        result = await build(*args, **kw)
+        await outbound.set_stopped(True, ADMIN)
+        return result
+
+    monkeypatch.setattr(email_gen, "build_email", _slow_build)
+
+    result = await qs.enqueue(lead.id, actor_tg_id=REVIEWER,
+                              draft_summary=UK_DRAFT)
+
+    assert not result.ok and result.reason == outbound.REASON
+    async with Session() as s:
+        cards = list(await s.scalars(
+            select(MessageDraft).where(MessageDraft.lead_id == lead.id)))
+    assert cards == []
 
 
 async def test_a_stopped_bot_approves_nothing(model, gap_lead):

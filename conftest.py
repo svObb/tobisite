@@ -111,6 +111,27 @@ async def _cleanup():
         await s.execute(delete(Setting).where(Setting.key == outbound.KEY))
 
 
+async def wipe_cards():
+    """Убрать из очереди карточки тестовых лидов.
+
+    Очередь общая на всю базу, а claim_next выдаёт самую старую карточку какая
+    есть: без чистки тест получал бы соседскую. Зовётся из тестов очереди
+    фикстурой вокруг каждого из них.
+    """
+    async with Session() as s, s.begin():
+        leads = select(Lead.id).where(Lead.worker_id.in_(
+            select(Worker.id).where(Worker.tg_id >= TEST_TG_BASE)
+        ))
+        drafts = list(await s.scalars(
+            select(MessageDraft.id).where(MessageDraft.lead_id.in_(leads))
+        ))
+        if drafts:
+            await s.execute(delete(MessageVersion)
+                            .where(MessageVersion.draft_id.in_(drafts)))
+            await s.execute(delete(MessageDraft)
+                            .where(MessageDraft.id.in_(drafts)))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _schema():
     """Схема до head + чистка мусора прошлых прогонов до и своего — после."""
