@@ -791,7 +791,14 @@ class LeadEvent(Base, TimesMixin):
     new_value: Mapped[str | None] = mapped_column(Text)
     actor_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
-    __table_args__ = (Index("ix_lead_events_lead_id", "lead_id"),)
+    __table_args__ = (
+        Index("ix_lead_events_lead_id", "lead_id"),
+        # метрики недели (13.1) читают журнал пятью запросами «событие такое-то
+        # с такой-то даты», и каждая загрузка экрана панели повторяет их заново.
+        # Индекса по lead_id для этого мало: без составного все пять сходятся
+        # в seq scan, как только журнал перестанет помещаться в память.
+        Index("ix_lead_events_event_created_at", "event", "created_at"),
+    )
 
 
 def log_event(session, lead_id, event, actor_tg_id, field=None, old=None, new=None):
