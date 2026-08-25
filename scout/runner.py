@@ -1,10 +1,10 @@
 """Оркестратор прогона скаута: источник → probe → скоринг → ingest → дайджест.
 
 Запускается фоновой задачей из /scout и /scout_paste (15.22, 15.24).
-Каждый прогон пишет свои вызовы в cost_ledger (15.20): Overpass и probe
-бесплатны, но /costs должен видеть и число вызовов — иначе неоткуда узнать,
-что скаут вообще работал. Платит прогон только за ИИ-гейт, и тот пишется
-отдельным op — своей строкой в /costs.
+Каждый прогон пишет свои вызовы в cost_ledger через costs.log_api (15.20,
+20.3): Overpass и probe бесплатны, но /costs должен видеть и число вызовов —
+иначе неоткуда узнать, что скаут вообще работал. Платит прогон только за
+ИИ-гейт, и тот пишется отдельным op — своей строкой в /costs.
 """
 import asyncio
 import logging
@@ -106,8 +106,8 @@ async def _run_cards(bot, chat_id: int, *, header: str, cards: list[RawBiz],
         for c in cards:
             if c.website:
                 c.probe = probes.get(c.website)
-        await costs.log_cost(
-            op="scout", cost_usd=0, api_calls=len(set(urls)),
+        await costs.log_api(
+            op="scout", calls=len(set(urls)),
             note=f"site_probe {niche} {city}", batch_id=batch_id, bot=bot,
         )
 
@@ -150,8 +150,8 @@ async def _psi_followup(bot, chat_id: int, cards: list[RawBiz], *, niche: str,
         scores = await site_probe.psi_many(
             [c.website for c in top], api_key=config.PAGESPEED_API_KEY,
         )
-        await costs.log_cost(
-            op="scout", cost_usd=0, api_calls=len(scores),
+        await costs.log_api(
+            op="scout", calls=len(scores),
             note=f"pagespeed {niche} {city}", batch_id=batch_id, bot=bot,
         )
         lines = ["<b>📊 PageSpeed (мобильный, performance)</b>"]
@@ -170,8 +170,8 @@ async def run_scout(bot, chat_id: int, country: str, niche: str, city: str):
         batch_id = _batch_id()
         try:
             cards = await overpass.fetch(NICHE_TAGS[niche], city)
-            await costs.log_cost(
-                op="scout", cost_usd=0, api_calls=1,
+            await costs.log_api(
+                op="scout", calls=1,
                 note=f"overpass {niche} {city}", batch_id=batch_id, bot=bot,
             )
             await _run_cards(

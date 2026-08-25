@@ -156,6 +156,19 @@ def _n(v) -> str:
     return f"{int(v):,}".replace(",", " ")
 
 
+def fact_cost_line(unit) -> str:
+    """Строка факт-стоимости (13.5). Пусто — единиц в окне не было, делить не на что."""
+    if not unit.units:
+        return ""
+    line = (f"{unit.label} по факту: ${unit.per_unit:.4f} — {unit.units} шт., "
+            f"{_n(unit.calls)} вызовов")
+    if unit.target is not None:
+        line += f", цель ${unit.target:.2f}"
+        if not unit.within_target:
+            line += " ⚠️ дороже цели"
+    return line
+
+
 @router.message(Command("costs"))
 async def costs_report(message: Message, state: FSMContext, command: CommandObject):
     # /costs [day|week|month], по умолчанию month. Роутер уже отфильтрован
@@ -193,14 +206,10 @@ async def costs_report(message: Message, state: FSMContext, command: CommandObje
                 f"  {esc(op)}{' · ' + esc(model) if model else ''}: ${usd:.4f} — "
                 f"{_n(calls)} выз., in {_n(t_in)}, out {_n(t_out)}, кэш {_n(t_cache)}"
             )
-    letter = await costs.letter_cost(since)
-    if letter.letters:
-        mark = "" if letter.within_target else " ⚠️ дороже цели"
-        lines.append(
-            f"\nПисьмо по факту: ${letter.per_letter:.4f} при цели "
-            f"${costs.LETTER_TARGET_USD:.2f} — {letter.letters} писем, "
-            f"{_n(letter.calls)} вызовов{mark}"
-        )
+    facts = [fact_cost_line(unit) for unit in await costs.unit_costs(since)]
+    if any(facts):
+        lines.append("\n<b>Факт-стоимости</b>")
+        lines += [line for line in facts if line]
     cap = config.AI_MONTHLY_CAP_USD
     if cap > 0:
         pct = float(spent_month) / cap * 100

@@ -80,6 +80,14 @@ SCOUT_GATE_MAX = int(os.getenv("SCOUT_GATE_MAX", "20"))
 # без ключей R2 он и так молча спит.
 PREVIEW_HITS_POLL_SEC = int(os.getenv("PREVIEW_HITS_POLL_SEC", "120"))
 PAGESPEED_API_KEY = (os.getenv("PAGESPEED_API_KEY") or "").strip()
+# Цена одного вызова платного не-ИИ API, $ (20.3): Places считается по SKU,
+# Twilio — по сообщению. Числа берутся из прайса провайдера и живут в .env:
+# выдуманная цена в коде врала бы в юнит-экономике месяцами. Не задана —
+# вызовы всё равно идут в журнал, но с нулевой стоимостью.
+API_PRICES = {
+    "places": float(os.getenv("PLACES_CALL_USD", "0")),
+    "twilio": float(os.getenv("TWILIO_SMS_USD", "0")),
+}
 # Ключ Anthropic для генерации писем и слотов черновиков. Необязательный:
 # без него генерация недоступна и лид уходит в ручную ветку — фолбэка на
 # выдумывание текста нет и не будет.

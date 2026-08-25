@@ -39,9 +39,9 @@ async def test_cost_is_spend_divided_by_letters(make_lead):
 
     cost = await costs.letter_cost(since)
 
-    assert (cost.letters, cost.calls) == (2, 2)
+    assert (cost.units, cost.calls) == (2, 2)
     assert cost.total == Decimal("0.0100")
-    assert cost.per_letter == Decimal("0.0050") and cost.within_target
+    assert cost.per_unit == Decimal("0.0050") and cost.within_target
 
 
 async def test_regeneration_is_the_same_letter(make_lead):
@@ -54,8 +54,8 @@ async def test_regeneration_is_the_same_letter(make_lead):
 
     cost = await costs.letter_cost(since)
 
-    assert (cost.letters, cost.calls) == (1, 2)
-    assert cost.per_letter == Decimal("0.0060")
+    assert (cost.units, cost.calls) == (1, 2)
+    assert cost.per_unit == Decimal("0.0060")
 
 
 async def test_other_operations_do_not_count(make_lead):
@@ -67,12 +67,12 @@ async def test_other_operations_do_not_count(make_lead):
 
     cost = await costs.letter_cost(since)
 
-    assert cost.total == Decimal("0.0010") and cost.letters == 1
+    assert cost.total == Decimal("0.0010") and cost.units == 1
 
 
 async def test_empty_window_counts_nothing():
     cost = await costs.letter_cost(await _db_now())
-    assert (cost.letters, cost.total, cost.per_letter) == (0, 0, 0)
+    assert (cost.units, cost.total, cost.per_unit) == (0, 0, 0)
     assert cost.within_target
 
 
@@ -96,8 +96,8 @@ async def test_generated_letter_stays_within_a_cent(model, gap_lead):
     result = await email_gen.build_email(lead, UK_DRAFT)
 
     cost = await costs.letter_cost(since)
-    assert result.ok and cost.letters == 1
-    assert cost.within_target, f"письмо стоило ${cost.per_letter}"
+    assert result.ok and cost.units == 1
+    assert cost.within_target, f"письмо стоило ${cost.per_unit}"
 
 
 # --- отчёт --------------------------------------------------------------------

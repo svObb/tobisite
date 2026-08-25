@@ -34,7 +34,11 @@ LEAD_STATUS_KEYS = [k for k, _ in config.STATUSES]
 CONTACT_TYPE_KEYS = [k for k, _ in config.CONTACT_TYPES] + ["other"]
 # Типы платных операций в cost_ledger. Новый тип = новая запись здесь + миграция
 # CHECK-констрейнта, как у статусов лида.
-COST_OPS = ["scout", "classify", "draft", "letter", "qa", "other"]
+# Операции в журнале расходов. places и twilio — не ИИ, а платные API (20.3):
+# у них своя строка в /costs, потому что дорожают они от числа вызовов, а не
+# от длины промпта. Новая операция = запись здесь + миграция CHECK-констрейнта.
+COST_OPS = ["scout", "classify", "draft", "letter", "qa", "places", "twilio",
+            "other"]
 # Статусы подписки клиента на доп-услугу (16.13). Новый статус = запись здесь
 # + миграция CHECK-констрейнта, как у статусов лида.
 CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]
