@@ -755,10 +755,14 @@ async def _apply_status(cb: CallbackQuery, state: FSMContext, lead_id: int,
         text += f"\nПричина: {config.LEAD_REJECT_LABELS[reason]}"
     await cb.message.answer(text)
     # 6.14: решение по чужому лиду видит только админ — работнику о нём
-    # сообщает бот, иначе о своей же продаже он узнаёт последним
-    await notify.lead_status(cb.bot, lead, worker, old, new, reason=reason,
-                             actor_tg_id=cb.from_user.id)
-    if new == "sold":
+    # сообщает бот, иначе о своей же продаже он узнаёт последним.
+    # sold — единственный статус, о котором здесь молчим: о продаже работнику
+    # пишет _notify_sale, и уже с суммой и комиссией. Два сообщения об одном
+    # событии превращают уведомления в шум, который перестают читать.
+    if new != "sold":
+        await notify.lead_status(cb.bot, lead, worker, old, new, reason=reason,
+                                 actor_tg_id=cb.from_user.id)
+    else:
         await _ask_sale(cb.message, state, lead_id)
 
 
@@ -857,6 +861,10 @@ async def _notify_sale(target: Message, lead, worker, amount, currency,
                        rate, due, actor_tg_id: int):
     """7.15: работник узнаёт о своей продаже сразу — и сразу же честно о том,
     что деньги считаются начисленными только после оплаты клиентом."""
+    # те же три условия, что и в notify.lead_status: отстранённому работнику
+    # бот не пишет, даже когда его старый лид дошёл до продажи
+    if worker is None or worker.deleted_at or not worker.is_active:
+        return
     if worker.tg_id == actor_tg_id:
         return  # свою же продажу автор только что увидел ответом на ввод
     text = (f"💰 Продажа по #{lead.id} {esc(lead.name)}: "

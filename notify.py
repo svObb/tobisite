@@ -82,7 +82,12 @@ async def lead_status(bot, lead, worker, old: str, new: str, *,
     Молчим о внутренних шагах конвейера (config.WORKER_NOTIFY_STATUSES) и о
     собственных действиях работника: он их только что видел на экране.
     """
-    if worker is None or worker.deleted_at or worker.tg_id == actor_tg_id:
+    # is_active и deleted_at — независимые флаги: отключённый работник строку
+    # не теряет, и без первой проверки бот продолжал бы писать тому, кого от
+    # работы уже отстранили
+    if worker is None or worker.deleted_at or not worker.is_active:
+        return False
+    if worker.tg_id == actor_tg_id:
         return False
     if new not in config.WORKER_NOTIFY_STATUSES:
         return False

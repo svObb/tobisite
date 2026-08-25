@@ -221,6 +221,30 @@ async def test_sold_writes_sale_and_notifies_worker(make_lead, worker_id):
     assert "оплатит" in text
 
 
+async def test_sale_pings_the_worker_once(make_lead):
+    """О продаже приходит ровно одно сообщение — то, в котором есть сумма."""
+    async with Session() as s, s.begin():
+        lid = (await make_lead(s)).id
+
+    cb, msg = await _sell(lid)
+
+    # смена статуса на sold молчит: работник узнаёт о продаже из _notify_sale
+    assert cb.message.notified == []
+    assert len(msg.notified) == 1
+
+
+async def test_switched_off_worker_hears_nothing_about_the_sale(make_lead,
+                                                                worker_id):
+    async with Session() as s, s.begin():
+        lid = (await make_lead(s)).id
+        (await s.get(Worker, worker_id)).is_active = False
+
+    cb, msg = await _sell(lid)
+
+    assert cb.message.notified == [] and msg.notified == []
+    assert (await _sale_of(lid)).amount_due == Decimal("24.00")
+
+
 async def test_second_sold_does_not_create_second_sale(make_lead):
     async with Session() as s, s.begin():
         lid = (await make_lead(s)).id

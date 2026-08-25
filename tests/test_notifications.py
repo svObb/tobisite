@@ -150,3 +150,16 @@ async def test_deleted_worker_is_not_notified(worker_id):
     assert not await notify.lead_status(bot, lead_of(), worker, "new", "sold",
                                         actor_tg_id=config.ADMIN_TG_ID)
     assert bot.sent == []
+
+
+async def test_switched_off_worker_is_not_notified(worker_id):
+    # is_active и deleted_at независимы: отключённый работник строку не теряет
+    async with Session() as s, s.begin():
+        worker = await s.get(Worker, worker_id)
+        worker.is_active = False
+
+    bot = FakeBot()
+    assert not await notify.lead_status(bot, lead_of(), worker, "new",
+                                        "verified",
+                                        actor_tg_id=config.ADMIN_TG_ID)
+    assert bot.sent == []
