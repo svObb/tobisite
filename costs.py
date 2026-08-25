@@ -11,6 +11,7 @@
 переводит сумму месяца через порог, поэтому дублей алертов нет.
 """
 import logging
+from dataclasses import dataclass
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -20,6 +21,11 @@ import notify
 from models import CostLedger, Session, month_start
 
 log = logging.getLogger(__name__)
+
+# Факт-стоимость письма (9.17): цель ≤$0.01. Дороже — значит промпт разросся
+# или кэш перестал попадать, и это видно в /costs раньше, чем в счёте.
+LETTER_OP = "letter"
+LETTER_TARGET_USD = Decimal("0.01")
 
 # порог → текст алерта; 1.0 идёт последним, чтобы при перепрыгивании обоих
 # порогов одной записью админ получил сообщения в логичном порядке
@@ -42,6 +48,43 @@ async def month_spent(session=None) -> Decimal:
         return Decimal(await session.scalar(stmt))
     async with Session() as s:
         return Decimal(await s.scalar(stmt))
+
+
+@dataclass(frozen=True)
+class LetterCost:
+    """Во что письмо обошлось по факту. letters == 0 — писем в окне не было."""
+    letters: int = 0
+    calls: int = 0
+    total: Decimal = Decimal(0)
+    per_letter: Decimal = Decimal(0)
+
+    @property
+    def within_target(self) -> bool:
+        return self.per_letter <= LETTER_TARGET_USD
+
+
+async def letter_cost(since=None, session=None) -> LetterCost:
+    """Стоимость одного письма за окно: расходы op='letter' на число писем.
+
+    Письмо считается по лиду, а не по вызову модели: перегенерация после
+    линтера — второй вызов внутри того же письма, и делить стоимость на неё
+    значит показывать письмо вдвое дешевле, чем оно вышло.
+    """
+    stmt = select(
+        func.coalesce(func.sum(CostLedger.cost_usd), 0),
+        func.coalesce(func.sum(CostLedger.api_calls), 0),
+        func.count(func.distinct(CostLedger.lead_id)),
+    ).where(CostLedger.op == LETTER_OP)
+    if since is not None:
+        stmt = stmt.where(CostLedger.created_at >= since)
+    if session is not None:
+        total, calls, letters = (await session.execute(stmt)).one()
+    else:
+        async with Session() as s:
+            total, calls, letters = (await s.execute(stmt)).one()
+    total = Decimal(total)
+    per = (total / letters).quantize(Decimal("0.0001")) if letters else Decimal(0)
+    return LetterCost(letters=letters, calls=calls, total=total, per_letter=per)
 
 
 async def cap_reached() -> bool:

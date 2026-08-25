@@ -193,6 +193,14 @@ async def costs_report(message: Message, state: FSMContext, command: CommandObje
                 f"  {esc(op)}{' · ' + esc(model) if model else ''}: ${usd:.4f} — "
                 f"{_n(calls)} выз., in {_n(t_in)}, out {_n(t_out)}, кэш {_n(t_cache)}"
             )
+    letter = await costs.letter_cost(since)
+    if letter.letters:
+        mark = "" if letter.within_target else " ⚠️ дороже цели"
+        lines.append(
+            f"\nПисьмо по факту: ${letter.per_letter:.4f} при цели "
+            f"${costs.LETTER_TARGET_USD:.2f} — {letter.letters} писем, "
+            f"{_n(letter.calls)} вызовов{mark}"
+        )
     cap = config.AI_MONTHLY_CAP_USD
     if cap > 0:
         pct = float(spent_month) / cap * 100
