@@ -288,7 +288,7 @@ async def publish_draft(draft_id: int, html: str, slug: str,
     остался бы со ссылкой на страницу, которой нет, или наоборот.
     """
     await asyncio.to_thread(
-        s3_client().put_object, Bucket=_bucket(bucket),
+        s3_client().put_object, Bucket=bucket_name(bucket),
         Key=f"{slug}/index.html", Body=html.encode(),
         ContentType="text/html; charset=utf-8", CacheControl="no-cache",
     )
@@ -420,8 +420,35 @@ def s3_client():
     return _s3
 
 
-def _bucket(name: str | None = None) -> str:
+def bucket_name(name: str | None = None) -> str:
     return name or os.getenv("R2_BUCKET") or DEFAULT_BUCKET
+
+
+async def list_keys(prefix: str, limit: int = 1000) -> list[str]:
+    """Ключи под префиксом. Бакет отдаёт их страницами по 1000."""
+    s3, keys, token = s3_client(), [], None
+    while len(keys) < limit:
+        kw = {"Bucket": bucket_name(), "Prefix": prefix,
+              "MaxKeys": min(1000, limit - len(keys))}
+        if token:
+            kw["ContinuationToken"] = token
+        page = await asyncio.to_thread(s3.list_objects_v2, **kw)
+        keys += [o["Key"] for o in page.get("Contents") or []]
+        token = page.get("NextContinuationToken")
+        if not token:
+            break
+    return keys
+
+
+async def delete_keys(keys) -> int:
+    """Удаление пачками по 1000: столько принимает delete_objects за раз."""
+    s3, keys = s3_client(), list(keys)
+    for start in range(0, len(keys), 1000):
+        await asyncio.to_thread(
+            s3.delete_objects, Bucket=bucket_name(),
+            Delete={"Objects": [{"Key": k} for k in keys[start:start + 1000]]},
+        )
+    return len(keys)
 
 
 async def _publish(lead, draft_id: int, html: str,
@@ -448,24 +475,10 @@ def _expire_reason(draft, lead, deadline: datetime) -> str:
     return ""
 
 
-async def _delete_prefix(slug: str, bucket: str | None = None) -> int:
+async def _delete_prefix(slug: str) -> int:
     """Снести всё под префиксом слага: превью из одного файла бывает не всегда
     (руками через tools/publish_r2.py уезжает вся папка)."""
-    s3, bucket = s3_client(), _bucket(bucket)
-    removed, token = 0, None
-    while True:
-        kw = {"Bucket": bucket, "Prefix": f"{slug}/"}
-        if token:
-            kw["ContinuationToken"] = token
-        page = await asyncio.to_thread(s3.list_objects_v2, **kw)
-        keys = [{"Key": o["Key"]} for o in page.get("Contents") or []]
-        if keys:
-            await asyncio.to_thread(s3.delete_objects, Bucket=bucket,
-                                    Delete={"Objects": keys})
-            removed += len(keys)
-        token = page.get("NextContinuationToken")
-        if not token:
-            return removed
+    return await delete_keys(await list_keys(f"{slug}/", limit=10_000))
 
 
 async def _mark_expired(draft_id: int, lead_id: int, why: str,

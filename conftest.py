@@ -46,8 +46,8 @@ from sqlalchemy import delete, select, tuple_  # noqa: E402
 
 from models import (  # noqa: E402
     ClientService, CommissionChange, Contact, CostLedger, Draft, FsmState,
-    Lead, LeadEvent, MessageDraft, MessageVersion, Sale, Session, Suppression,
-    SuppressionEvent, Worker, suppression_keys,
+    Lead, LeadEvent, MessageDraft, MessageVersion, PreviewHit, Sale, Session,
+    Suppression, SuppressionEvent, Worker, suppression_keys,
 )
 
 TEST_TG_BASE = 9_900_000_000_000
@@ -84,6 +84,8 @@ async def _cleanup():
                     await s.execute(delete(MessageDraft)
                                     .where(MessageDraft.id.in_(dids)))
                 await s.execute(delete(Draft).where(Draft.lead_id.in_(lids)))
+                await s.execute(delete(PreviewHit)
+                                .where(PreviewHit.lead_id.in_(lids)))
                 await s.execute(delete(Sale).where(Sale.lead_id.in_(lids)))
                 await s.execute(delete(LeadEvent).where(LeadEvent.lead_id.in_(lids)))
                 await s.execute(delete(CostLedger).where(CostLedger.lead_id.in_(lids)))
@@ -175,6 +177,48 @@ class FakeMessages:
                                   cache_read_input_tokens=1800,
                                   cache_creation_input_tokens=0),
         )
+
+
+class FakeR2:
+    """Бакет в памяти вместо R2. fail — исключение, которым отвечает вызов."""
+
+    def __init__(self):
+        self.objects = {}
+        self.puts = []
+        self.fail = None
+
+    def put_object(self, **kw):
+        self._check()
+        self.puts.append(kw)
+        self.objects[kw["Key"]] = kw["Body"]
+        return {}
+
+    def list_objects_v2(self, **kw):
+        self._check()
+        keys = sorted(k for k in self.objects if k.startswith(kw["Prefix"]))
+        return {"Contents": [{"Key": k} for k in keys[:kw.get("MaxKeys", 1000)]]}
+
+    def delete_objects(self, **kw):
+        self._check()
+        for obj in kw["Delete"]["Objects"]:
+            self.objects.pop(obj["Key"], None)
+        return {}
+
+    def _check(self):
+        if self.fail:
+            raise self.fail
+
+
+@pytest.fixture
+def r2(monkeypatch):
+    """Ключи R2 в окружении и подменённый клиент: публикация без сети."""
+    import draft_service
+
+    fake = FakeR2()
+    for name in draft_service.R2_ENV:
+        monkeypatch.setenv(name, "pytest")
+    monkeypatch.setattr(draft_service, "_s3", fake)
+    return fake
 
 
 @pytest.fixture(autouse=True)

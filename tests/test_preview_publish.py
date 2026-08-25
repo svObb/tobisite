@@ -1,56 +1,16 @@
 """Публикация превью: слаг, выкладка в R2, адрес у черновика и лида (10.11–10.13).
 
-Сети нет: клиент R2 подменяется фикстурой, PUT'ы складываются в список. Без
-ключей R2 фикстура не ставится, и тогда проверяется обратное — сборка работает
-как раньше, а публикации просто нет.
+Сети нет: клиент R2 подменяет фикстура r2 из conftest, PUT'ы складываются в
+список. Без ключей R2 фикстура не ставится, и тогда проверяется обратное —
+сборка работает как раньше, а публикации просто нет.
 """
 from datetime import datetime, timedelta
 
-import pytest
 from sqlalchemy import select
 
 import config
 import draft_service
 from models import PREVIEW_TTL_DAYS, Draft, Lead, LeadEvent, Session
-
-
-class FakeR2:
-    """Бакет в памяти. fail — исключение, которым отвечает следующий вызов."""
-
-    def __init__(self):
-        self.objects = {}
-        self.puts = []
-        self.fail = None
-
-    def put_object(self, **kw):
-        self._check()
-        self.puts.append(kw)
-        self.objects[kw["Key"]] = kw["Body"]
-        return {}
-
-    def list_objects_v2(self, **kw):
-        self._check()
-        keys = sorted(k for k in self.objects if k.startswith(kw["Prefix"]))
-        return {"Contents": [{"Key": k} for k in keys]}
-
-    def delete_objects(self, **kw):
-        self._check()
-        for obj in kw["Delete"]["Objects"]:
-            self.objects.pop(obj["Key"], None)
-        return {}
-
-    def _check(self):
-        if self.fail:
-            raise self.fail
-
-
-@pytest.fixture
-def r2(monkeypatch):
-    fake = FakeR2()
-    for name in draft_service.R2_ENV:
-        monkeypatch.setenv(name, "pytest")
-    monkeypatch.setattr(draft_service, "_s3", fake)
-    return fake
 
 
 async def _draft(lead_id: int) -> Draft:

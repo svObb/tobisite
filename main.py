@@ -16,10 +16,14 @@ import handlers_admin
 import handlers_review
 import handlers_worker
 import keyboards as kb
+import preview_hits
 from fsm_storage import PgStorage, purge_stale_fsm
 from models import Session, Worker, ensure_admin_worker
 
 log = logging.getLogger("tobisite")
+
+# фоновые задачи процесса: живут, пока живёт бот
+_bg_tasks = set()
 
 
 def setup_logging():
@@ -187,6 +191,9 @@ async def main():
                      len(gone.failed))
     except Exception as e:
         log.warning("уборка превью не прошла: %s", e)
+    if config.PREVIEW_HITS_POLL_SEC > 0:
+        # ссылку держим: задачу без владельца сборщик мусора вправе убить
+        _bg_tasks.add(asyncio.create_task(preview_hits.poll_forever(bot)))
     log.info(
         "bot started: @%s, режим %s",
         me.username, "ТЕСТОВЫЙ" if config.TEST_MODE else "боевой",

@@ -50,6 +50,9 @@ SUPPRESSION_EVENTS = ["unsubscribe", "complaint", "bounce", "manual"]
 # Итог проверки адреса получателя (9.29). NULL — не проверяли; unknown — DNS
 # не ответил, и это не «в порядке»: письмо по такому адресу не собирается.
 VERIFY_STATUSES = ["valid", "invalid", "unknown"]
+# События вовлечённости на превью (10.19–10.20). Список повторяет HIT_EVENTS
+# воркера: разъедутся — бот начнёт выбрасывать хиты как мусорные.
+PREVIEW_EVENTS = ["view", "scroll50", "dwell20", "cta_click"]
 # Состояния карточки в очереди одобрения (Д12 §6.5). Отправки в списке нет и
 # не будет до интеграции Instantly: конвейер v1 кончается на approved.
 # Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
@@ -190,6 +193,11 @@ class Lead(Base, TimesMixin):
     )
     admin_note: Mapped[str | None] = mapped_column(Text)
     draft_url: Mapped[str | None] = mapped_column(Text)
+    # когда лид впервые открыл превью (10.22): по этой дате собирается
+    # 4-е касание, поэтому нужен момент, а не флаг
+    preview_opened_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     # почему лид отклонён (6.17): ключ из config.LEAD_REJECT_REASONS. Живёт
     # ровно столько, сколько сам отказ — со сменой статуса очищается
     reject_reason: Mapped[str | None] = mapped_column(String(32))
@@ -715,6 +723,36 @@ class Draft(Base, TimesMixin):
     def preview_url(self) -> str:
         """Адрес превью или пусто. Отдельной колонки нет: хост — её половина."""
         return f"https://{self.preview_host}/" if self.preview_host else ""
+
+
+class PreviewHit(Base, TimesMixin):
+    """Открытие превью (10.20): чья страница, что произошло и когда.
+
+    Ни кук, ни адреса посетителя здесь нет и быть не может: воркер их не
+    собирает, а всё, что доезжает до бота, лежит в имени объекта в R2.
+
+    object_key — сам этот объект. Он уникален, и повторный разбор той же
+    пачки (удаление из бакета не прошло) не задваивает строки.
+    """
+    __tablename__ = "preview_hits"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("leads.id"), nullable=False
+    )
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    event: Mapped[str] = mapped_column(String(16), nullable=False)
+    happened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(in_list("event", PREVIEW_EVENTS),
+                        name="ck_preview_hits_event"),
+        Index("uq_preview_hits_object_key", "object_key", unique=True),
+        Index("ix_preview_hits_lead_id", "lead_id"),
+    )
 
 
 def draft_fresh(draft) -> bool:

@@ -28,6 +28,12 @@ interface R2Body extends R2Meta {
 interface PreviewBucket {
   get(key: string, options?: { onlyIf?: Headers }): Promise<R2Body | R2Meta | null>;
   head(key: string): Promise<R2Meta | null>;
+  put(key: string, value: string): Promise<unknown>;
+}
+
+/** Только waitUntil: остального из ExecutionContext воркеру не нужно. */
+interface RunContext {
+  waitUntil(promise: Promise<unknown>): void;
 }
 
 interface AssetsFetcher {
@@ -58,6 +64,10 @@ const CSP = [
 
 const SLUG_RE = /^[a-z0-9-]{1,63}$/;
 const HIT_EVENTS = new Set(["view", "scroll50", "dwell20", "cta_click"]);
+// Хиты ждут бота в том же бакете: наружных портов у него нет, позвать его
+// нельзя. Подчёркивание слагом стать не может (SLUG_RE), так что с превью
+// этот префикс не столкнётся.
+const HITS_PREFIX = "_hits/";
 const MAX_BODY = 16 * 1024;
 
 const NOT_FOUND_PAGE = `<!doctype html>
@@ -221,7 +231,12 @@ async function handleLead(request: Request, env: Env, slug: string): Promise<Res
   return sent ? json({ ok: true }) : json({ ok: false, error: "delivery" }, 502);
 }
 
-async function handleHit(request: Request, env: Env, hostSlug: string): Promise<Response> {
+async function handleHit(
+  request: Request,
+  env: Env,
+  ctx: RunContext,
+  hostSlug: string,
+): Promise<Response> {
   if (request.method !== "POST") return new Response(null, { status: 405 });
 
   let event = "";
@@ -240,6 +255,16 @@ async function handleHit(request: Request, env: Env, hostSlug: string): Promise<
   // Ни куки, ни адреса: только слаг и тип события.
   // На аккаунте без Analytics Engine биндинга нет — тогда это тихий no-op.
   env.HITS?.writeDataPoint({ blobs: [slug, event], indexes: [slug] });
+
+  // То же событие пустым объектом в бакет: его заберёт бот. Тела нет,
+  // всё нужное в имени ключа. Промах записи молчит — из-за счётчика
+  // вовлечённости посетитель не должен получить ошибку.
+  if (SLUG_RE.test(slug)) {
+    const key = `${HITS_PREFIX}${slug}/${event}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    ctx.waitUntil(
+      env.PREVIEWS.put(key, "").catch((err) => console.error("hit", key, err)),
+    );
+  }
   return new Response(null, { status: 204 });
 }
 
@@ -294,7 +319,7 @@ async function servePreview(request: Request, env: Env, url: URL, slug: string):
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: RunContext): Promise<Response> {
     const url = new URL(request.url);
     const slug = url.hostname.split(".")[0].toLowerCase();
 
@@ -305,7 +330,7 @@ export default {
       }));
     }
     if (url.pathname === "/api/lead") return secure(await handleLead(request, env, slug));
-    if (url.pathname === "/api/hit") return secure(await handleHit(request, env, slug));
+    if (url.pathname === "/api/hit") return secure(await handleHit(request, env, ctx, slug));
     if (url.pathname === "/assets" || url.pathname.startsWith("/assets/")) {
       return secure(await serveAsset(request, env, url));
     }
