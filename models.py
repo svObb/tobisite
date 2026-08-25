@@ -44,6 +44,9 @@ GAP_TYPE_KEYS = [k for k, _ in config.GAP_TYPES]
 LEAD_REJECT_KEYS = [k for k, _ in config.LEAD_REJECT_REASONS]
 # Что заносится в suppression (7.22): хеш почты, домен, компания «имя+город».
 SUPPRESSION_KINDS = ["email_hash", "domain", "company"]
+# Итог проверки адреса получателя (9.29). NULL — не проверяли; unknown — DNS
+# не ответил, и это не «в порядке»: письмо по такому адресу не собирается.
+VERIFY_STATUSES = ["valid", "invalid", "unknown"]
 # Состояния карточки в очереди одобрения (Д12 §6.5). Отправки в списке нет и
 # не будет до интеграции Instantly: конвейер v1 кончается на approved.
 # Новый статус = запись здесь + миграция CHECK-констрейнта, как у статусов лида.
@@ -66,6 +69,9 @@ DRAFT_TTL_DAYS = 30
 # Наблюдение живёт 14 дней: сайт могли починить, и «8 секунд» превратится
 # в ложное утверждение в коммерческом письме конкретному юрлицу (Д12 §2).
 GAP_TTL_DAYS = 14
+# Проверка почты живёт 30 дней: домены умирают, и «проверено полгода назад»
+# не значит ничего (9.29).
+VERIFY_TTL_DAYS = 30
 
 
 def in_list(col: str, values) -> str:
@@ -247,10 +253,17 @@ class Contact(Base, TimesMixin):
     value_norm: Mapped[str | None] = mapped_column(Text)
     # зеркало leads.cancelled_at: предикат частичного индекса не может смотреть в другую таблицу
     lead_cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # проверка адреса перед письмом (9.29): синтаксис плюс MX домена. Пусто —
+    # не проверяли; проверка живёт VERIFY_TTL_DAYS, дальше снимается заново
+    verify_status: Mapped[str | None] = mapped_column(String(16))
+    verify_note: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(in_list("ctype", CONTACT_TYPE_KEYS), name="ck_contacts_ctype"),
+        CheckConstraint(in_list("verify_status", VERIFY_STATUSES),
+                        name="ck_contacts_verify_status"),
         Index(
             "uq_contacts_phone_norm_active", "value_norm",
             unique=True,

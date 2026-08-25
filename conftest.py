@@ -164,6 +164,23 @@ class FakeMessages:
         )
 
 
+@pytest.fixture(autouse=True)
+def _no_dns(monkeypatch):
+    """Проверка почты (9.29) в тестах в интернет не ходит.
+
+    По умолчанию домен принимает почту: иначе письма зависели бы от того, что
+    видит резолвер машины, на которой идёт прогон. Тесту, которому нужен
+    мёртвый домен или молчащий DNS, подменять эту же функцию своей.
+    """
+    import email_verify
+
+    async def _accepts(domain):
+        return True
+
+    email_verify._domain_cache.clear()
+    monkeypatch.setattr(email_verify, "domain_accepts_mail", _accepts)
+
+
 @pytest.fixture
 def model(monkeypatch):
     """model(ответ, ...) — подменяет клиента и заполняет подпись как на бою."""

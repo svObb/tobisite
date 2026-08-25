@@ -13,3 +13,4 @@ uvicorn>=0.30
 PyJWT>=2.9
 cryptography>=43.0
 anthropic>=1.0
+dnspython>=2.7

@@ -20,6 +20,7 @@ import config
 import costs
 import email_legal
 import email_lint
+import email_verify
 import phrases
 from email_fewshot import FEWSHOT
 from models import Session, gap_stale, suppression_hit
@@ -205,6 +206,11 @@ async def build_email(lead, draft_summary: str) -> EmailResult:
     async with Session() as s:
         if await suppression_hit(s, lead):
             return _manual("лид в стоп-листе: писать нельзя", lang)
+        # 9.29: мёртвый адрес — это баунс, а баунсы бьют по домену целиком.
+        # Проверка стоит до модели: платить за письмо в никуда незачем
+        deliverable, reason = await email_verify.verify_lead(s, lead)
+        if not deliverable:
+            return _manual(reason, lang)
     if not config.ANTHROPIC_API_KEY:
         return _manual("не задан ANTHROPIC_API_KEY", lang)
 

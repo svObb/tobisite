@@ -47,6 +47,8 @@ colorama==0.4.6 ; platform_system == "Windows"
     # via click
 cryptography==50.0.0
     # via -r requirements.txt
+dnspython==2.8.0
+    # via -r requirements.txt
 docstring-parser==0.18.0
     # via anthropic
 fastapi==0.141.1
