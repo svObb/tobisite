@@ -48,6 +48,17 @@ def test_contact_mismatch_splits_the_pair():
 def test_no_phrases_without_gap_or_known_language():
     assert phrases.first_line(lead(gap_type=None)) == ""
     assert phrases.first_line(lead(language="Словацкий")) == ""
+
+
+def test_empty_gap_value_kills_the_phrase_instead_of_a_hole():
+    # «вантажилась  секунд» с дырой на месте числа уходило в письмо
+    assert phrases.first_line(lead(gap_value=None)) == ""
+    assert phrases.first_line(lead(gap_value="  ")) == ""
+    # у пары контактов дыра возможна и в одной половине
+    assert phrases.first_line(lead(gap_type="contact_mismatch",
+                                   gap_value="+380501112233")) == ""
+    assert phrases.first_line(lead(gap_type="contact_mismatch",
+                                   gap_value="+380501112233, ")) == ""
     assert phrases.lang_of(lead(language="Словацкий")) is None
 
 

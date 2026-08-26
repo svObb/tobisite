@@ -163,6 +163,11 @@ def lint(body: str, *, lang: str, slots: dict[str, str], anchors=(),
     if questions != 1:
         fails.append(f"вопросительных предложений {questions}, нужно ровно 1")
 
+    # Двойной пробел — след пустой подстановки («вантажилась  секунд»):
+    # сам текст такого не порождает, а дыра в цифре превращает факт в ложь
+    if "  " in body:
+        fails.append("двойной пробел: похоже на пустую подстановку")
+
     if LINK_RE.search(body):
         fails.append("ссылка в письме 1")
 

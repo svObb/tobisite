@@ -112,6 +112,13 @@ def test_emoji_fails():
     assert any("эмодзи" in f for f in result.fails)
 
 
+def test_double_space_fails():
+    # след пустой подстановки: «вантажилась  секунд» вместо цифры
+    result = check(first_line="Відкрив з телефону — головна "
+                              "вантажилась  секунд.")
+    assert any("двойной пробел" in f for f in result.fails)
+
+
 def test_caps_word_fails():
     result = check(offer="Я зібрав ЧЕРНЕТКУ вашої головної на ваших даних.")
     assert any("заглавными" in f for f in result.fails)

@@ -287,6 +287,8 @@ def first_line(lead) -> str:
         return ""
     tail_index = variant_index(lead.id, len(options))
     tail = _fill(options[tail_index], lead.gap_value)
+    if not tail:
+        return ""
     if not niche:
         # Ниши нет в таблице форм — зачин собрать не из чего, и письмо
         # начинается хвостом, как до появления зачинов.
@@ -323,10 +325,16 @@ def _place(template: str, lead, lang: str, niche: str) -> str:
 
 
 def _fill(template: str, value: str | None) -> str:
+    """Хвост наблюдения. Пусто — значение не снято, фразы с дырой не бывает."""
     value = (value or "").strip()
     if "{v1}" in template:
         first, _, second = value.partition(",")
-        return template.format(v1=first.strip(), v2=second.strip())
+        first, second = first.strip(), second.strip()
+        if not (first and second):
+            return ""
+        return template.format(v1=first, v2=second)
     if "{v}" in template:
+        if not value:
+            return ""
         return template.format(v=value)
     return template
