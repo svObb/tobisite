@@ -313,14 +313,30 @@ async def _ask(profile, specs, lang, lead_id):
 
     await _log_cost(response.usage, lead_id)
     text = "".join(b.text for b in response.content if b.type == "text").strip()
+    data = parse_model_json(text)
+    if data is None:
+        log.warning("черновик лида %s: ответ не JSON: %.200s", lead_id, text)
+        return {}, "модель ответила не JSON"
+    return {k: v for k, v in data.items() if isinstance(v, str)}, ""
+
+
+def parse_model_json(text: str) -> dict | None:
+    """JSON-объект из ответа модели. None — разобрать нечего.
+
+    Модели заворачивают JSON в markdown-фенс вопреки промпту; фенс — это
+    упаковка, а не содержимое, поэтому срезается до разбора. Всё, что не
+    словарь, отвергается: списку и строке в слотах взяться неоткуда.
+    """
+    text = (text or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1:-3].strip()
     try:
         data = json.loads(text)
     except (ValueError, TypeError):
-        log.warning("черновик лида %s: ответ не JSON: %.200s", lead_id, text)
-        return {}, "модель ответила не JSON"
-    if not isinstance(data, dict):
-        return {}, "модель ответила не JSON"
-    return {k: v for k, v in data.items() if isinstance(v, str)}, ""
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _fits(spec, value) -> bool:

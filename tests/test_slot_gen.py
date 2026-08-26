@@ -146,6 +146,24 @@ async def test_unknown_language_refuses(slot_answer, draft_lead):
     assert state.fake.messages.calls == []
 
 
+def test_model_json_survives_markdown_fence():
+    fenced = '```json\n{"hero.headline": "Запчастини та ремонт"}\n```'
+    assert slot_gen.parse_model_json(fenced) == {
+        "hero.headline": "Запчастини та ремонт"}
+    # фенс без языка — модели пишут и так
+    assert slot_gen.parse_model_json('```\n{"a": "б"}\n```') == {"a": "б"}
+    assert slot_gen.parse_model_json('{"a": "б"}') == {"a": "б"}
+
+
+def test_model_json_rejects_junk():
+    assert slot_gen.parse_model_json("почти json") is None
+    assert slot_gen.parse_model_json('```json\nне json\n```') is None
+    assert slot_gen.parse_model_json('["список"]') is None
+    assert slot_gen.parse_model_json("") is None
+    # фенс не закрыт — содержимое не восстанавливаем, честный отказ
+    assert slot_gen.parse_model_json('```json\n{"a": "б"}') is None
+
+
 def _spec(plan, kind: str) -> dict:
     return next(spec for spec in plan.specs if spec["kind"] == kind)
 

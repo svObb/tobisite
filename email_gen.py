@@ -22,6 +22,7 @@ import email_legal
 import email_lint
 import email_verify
 import phrases
+import slot_gen
 from draft_service import PREVIEW_HOST_SUFFIX
 from email_fewshot import FEWSHOT
 from models import Session, gap_stale, suppression_hit
@@ -409,12 +410,9 @@ async def _bridge_and_offer(lead, lang, first_line, draft_summary):
 
     await _log_cost(lead, response.usage)
     text = "".join(b.text for b in response.content if b.type == "text").strip()
-    try:
-        data = json.loads(text)
-    except (ValueError, TypeError):
+    data = slot_gen.parse_model_json(text)
+    if data is None:
         log.warning("письмо лида %s: ответ не JSON: %.200s", lead.id, text)
-        return {}, "модель ответила не JSON"
-    if not isinstance(data, dict):
         return {}, "модель ответила не JSON"
     bridge, offer = data.get("bridge"), data.get("offer")
     if not (isinstance(bridge, str) and isinstance(offer, str)
