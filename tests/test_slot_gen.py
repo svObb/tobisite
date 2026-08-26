@@ -146,6 +146,24 @@ async def test_unknown_language_refuses(slot_answer, draft_lead):
     assert state.fake.messages.calls == []
 
 
+async def test_regeneration_offers_a_tighter_budget(slot_plan, slot_answer,
+                                                    draft_lead):
+    lead = await draft_lead()
+    victim = _spec(await slot_plan(lead), "headline")
+    state = await slot_answer(lead, {victim["slot"]: "я" * (victim["max_chars"] + 1)},
+                              {})
+
+    await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                              lead_id=lead.id)
+
+    # модель промахивается в счёте символов на два-три знака, поэтому на
+    # повторе ей показывают меньший предел; настоящий лимит проверяет код
+    sent = _sent_specs(state.fake, 1)
+    limit = victim["max_chars"]
+    assert [spec["slot"] for spec in sent] == [victim["slot"]]
+    assert sent[0]["max_chars"] == limit - max(2, limit // 5)
+
+
 def test_model_json_survives_markdown_fence():
     fenced = '```json\n{"hero.headline": "Запчастини та ремонт"}\n```'
     assert slot_gen.parse_model_json(fenced) == {
@@ -170,9 +188,14 @@ def _spec(plan, kind: str) -> dict:
 
 def _asked(fake, index: int) -> list[str]:
     """Какие слоты ушли в модель на этом вызове."""
+    return [spec["slot"] for spec in _sent_specs(fake, index)]
+
+
+def _sent_specs(fake, index: int) -> list[dict]:
+    """Спеки слотов, как их увидела модель на этом вызове."""
     content = fake.messages.calls[index]["messages"][0]["content"]
     payload = content.split("<slots>")[1].split("</slots>")[0]
-    return [spec["slot"] for spec in json.loads(payload)]
+    return json.loads(payload)
 
 
 def _always(value):

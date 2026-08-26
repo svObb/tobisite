@@ -227,7 +227,7 @@ async def fill_slots(profile, sections, lang: str, *,
     if bad:
         log.info("черновик лида %s: перегенерация слотов %s", lead_id,
                  ", ".join(spec["slot"] for spec in bad))
-        again, reason = await _ask(profile, bad, lang, lead_id)
+        again, reason = await _ask(profile, _tighter(bad), lang, lead_id)
         if reason:
             return SlotResult(False, reason=reason)
         texts.update(again)
@@ -243,6 +243,22 @@ async def fill_slots(profile, sections, lang: str, *,
             final[spec["slot"]] = ""
             empty.append(spec["slot"])
     return SlotResult(True, texts=final, empty=empty)
+
+
+def _tighter(specs) -> list[dict]:
+    """Спеки перегенерации: показать модели предел на пятую часть меньше.
+
+    Модель считает символы неточно и на повторе промахивается на те же
+    два-три знака. Проверка остаётся по настоящему лимиту — ужимается только
+    цель, чтобы запас покрыл ошибку счёта; третьего вызова всё равно нет.
+    """
+    out = []
+    for spec in specs:
+        limit = spec.get("max_chars")
+        if limit:
+            spec = {**spec, "max_chars": max(1, limit - max(2, limit // 5))}
+        out.append(spec)
+    return out
 
 
 def slot_specs(sections) -> list[dict]:
