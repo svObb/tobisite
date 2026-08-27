@@ -177,8 +177,88 @@ def test_the_dictionary_names_every_free_slot_of_the_library():
         if dash and not line.startswith(" "):
             listed |= {name.strip() for name in head.split(",")}
 
-    assert kinds and kinds <= listed, sorted(kinds - listed)
-    assert slot_gen.PROMPT_VERSION == "s2"
+    grouped = {spec["name"]
+               for contract in render.load_library().values()
+               for spec in sf_slots.group_free_specs(contract)
+               if spec["name"] not in slot_gen.FACT_BOUND_GROUP_SLOTS}
+    assert kinds and (kinds | grouped) <= listed, sorted((kinds | grouped) - listed)
+    assert slot_gen.PROMPT_VERSION == "s3"
+
+
+async def test_the_label_of_a_google_figure_is_never_asked_of_the_model(
+        slot_plan, draft_lead):
+    """Какая цифра стоит рядом, знает профиль: подпись к ней модель не пишет."""
+    lead = await draft_lead()
+    plan = await slot_plan(lead)
+    proof = next(part for part in plan.sections if part["role"] == "proof")
+
+    assert proof["slots"]["stats"]
+    assert not any(spec["kind"] == "stat_label" for spec in plan.specs)
+    # руками подпись написать можно: цифру рядом человек видит, модель — нет
+    dev = slot_gen.slot_specs(plan.sections, include_fact_bound=True)
+    assert [spec["slot"] for spec in dev
+            if spec["kind"] == "stat_label"] == \
+        [f"{proof['variant']}.stat_label[{i}]"
+         for i in range(len(proof["slots"]["stats"]))]
+
+
+async def test_an_honestly_empty_blurb_is_not_asked_again(slot_plan,
+                                                          slot_answer,
+                                                          draft_lead):
+    """Правило 6 промпта: нечего сказать — верни "". Для блёрба это рутина.
+
+    Названий услуг модель не видит вовсе, и второй вызов лечил бы длину,
+    которой нет: платный заход ради того же пустого места.
+    """
+    lead = await draft_lead()
+    blurb = _spec(await slot_plan(lead), "service_blurb")
+    state = await slot_answer(lead, {blurb["slot"]: ""})
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                                       lead_id=lead.id)
+
+    assert result.ok and len(state.fake.messages.calls) == 1
+    # ключ есть, значение пустое: услуга останется без строки, а не с
+    # заготовкой рецепта, и секцию это не валит
+    assert result.texts[blurb["slot"]] == ""
+    assert blurb["slot"] not in result.empty
+
+
+async def test_an_empty_scalar_slot_is_asked_again(slot_plan, slot_answer,
+                                                   draft_lead):
+    """Пустой заголовок секции уводит секцию со страницы — тут повтор уместен."""
+    lead = await draft_lead()
+    victim = _spec(await slot_plan(lead), "section_title")
+    state = await slot_answer(lead, {victim["slot"]: ""}, {})
+
+    result = await slot_gen.fill_slots(state.profile, state.sections, "uk",
+                                       lead_id=lead.id)
+
+    assert result.ok and result.empty == []
+    assert len(state.fake.messages.calls) == 2
+    assert _asked(state.fake, 1) == [victim["slot"]]
+    assert result.texts[victim["slot"]]
+
+
+async def test_every_service_gets_its_own_blurb_slot(slot_plan, draft_lead):
+    """Блёрб пишется на каждую услугу отдельно: одной строкой их не закрыть."""
+    lead = await draft_lead()
+    plan = await slot_plan(lead)
+    section = next(part for part in plan.sections if part["role"] == "services")
+    count = len(section["slots"]["services"])
+
+    blurbs = [spec for spec in plan.specs if spec["kind"] == "service_blurb"]
+
+    assert count >= 2
+    assert [spec["slot"] for spec in blurbs] == \
+        [f"{section['variant']}.service_blurb[{i}]" for i in range(count)]
+    limit = next(spec["max_chars"]
+                 for spec in section["contract"]["slots"]
+                 if spec["name"] == "service_blurb")
+    assert all(spec["grouped"] and spec["max_chars"] == limit for spec in blurbs)
+    # у скалярных слотов признака группы нет: их ключ без индекса
+    assert not any(spec.get("grouped") for spec in plan.specs
+                   if spec["slot"].endswith(".section_title"))
 
 
 def test_model_json_survives_markdown_fence():

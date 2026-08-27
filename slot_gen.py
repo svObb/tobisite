@@ -30,10 +30,19 @@ from site_factory.engine import slots as sf_slots
 log = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-PROMPT_VERSION = "s2"
-# Два десятка коротких строк JSON'ом; больше здесь означает, что модель
-# начала сочинять абзацы вместо подписей.
-MAX_TOKENS = 1200
+PROMPT_VERSION = "s3"
+# Три десятка коротких строк JSON'ом: к слотам страницы добавились блёрбы
+# услуг, по одному на позицию. Больше здесь означает, что модель начала
+# сочинять абзацы вместо подписей.
+MAX_TOKENS = 2000
+# Повторяющийся free-слот, чья заготовка привязана к личности элемента, модели
+# не показывается. stat_label — подпись под цифрой из Google: какая именно
+# цифра стоит рядом, знает профиль, а модель видит один индекс, и «Відгуків у
+# Google» над рейтингом — выдуманный факт. Такие слоты закрывают заготовки
+# рецепта; человек может написать свой текст ключом с индексом — дев-дорожка
+# зовёт slot_specs с include_fact_bound=True, дорожка модели — никогда.
+FACT_BOUND_GROUP_SLOTS = ("stat_label",)
+
 # Прайс Haiku 4.5, $/1M токенов. Кэш: чтение ~0,1×, запись ~1,25× от входа.
 PRICE_IN, PRICE_OUT = Decimal("1"), Decimal("5")
 CACHE_READ_RATE, CACHE_WRITE_RATE = Decimal("0.1"), Decimal("1.25")
@@ -81,6 +90,9 @@ address_label, hours_label, contacts_title, hours_title — подписи бл�
 company_label — подпись над названием компании в блоке о ней
 section_title — заголовок секции: услуг, товаров, часов работы, блока о
   компании или формы — смотри по роли секции
+service_blurb — строка под названием услуги: что она включает. Само название
+  услуги ставит код, ты его не видишь, — поэтому не начинай строку с него и
+  не пересказывай его другими словами
 about_text — абзац о компании: чем она занимается и для кого. Это единственный
   слот длиннее строки; два-три предложения, без оценок и без обещаний
 source_note — строка под показателями: откуда взяты цифры
@@ -227,7 +239,9 @@ async def fill_slots(profile, sections, lang: str, *,
     if reason:
         return SlotResult(False, reason=reason)
 
-    bad = [spec for spec in specs if not _fits(spec, texts.get(spec["slot"]))]
+    bad = [spec for spec in specs
+           if not _fits(spec, texts.get(spec["slot"]))
+           and not _blank_ok(spec, texts.get(spec["slot"]))]
     if bad:
         log.info("черновик лида %s: перегенерация слотов %s", lead_id,
                  ", ".join(spec["slot"] for spec in bad))
@@ -241,12 +255,26 @@ async def fill_slots(profile, sections, lang: str, *,
         value = texts.get(spec["slot"])
         if _fits(spec, value):
             final[spec["slot"]] = value.strip()
-        else:
+            continue
+        final[spec["slot"]] = ""
+        if not _blank_ok(spec, value):
             # второе нарушение подряд: слот пуст, судьбу секции решает
             # лестница деградации site_factory (8.31)
-            final[spec["slot"]] = ""
             empty.append(spec["slot"])
     return SlotResult(True, texts=final, empty=empty)
+
+
+def _blank_ok(spec, value) -> bool:
+    """Пустая строка на слот элемента — честный ответ, а не промах.
+
+    Правило 6 промпта велит вернуть "", когда сказать нечего, а названий услуг
+    модель не видит вовсе, — для блёрба это рутина. Перегенерация тут лечила бы
+    длину, которой нет, вторым платным вызовом, а в empty пустой блёрб не
+    значит ничего: карточка услуги без пояснения — карточка. Ключ при этом
+    остаётся: apply_free_texts по нему оставит элемент без строки, а не
+    подставит заготовку рецепта.
+    """
+    return bool(spec.get("grouped")) and isinstance(value, str) and not value.strip()
 
 
 def _tighter(specs) -> list[dict]:
@@ -265,11 +293,20 @@ def _tighter(specs) -> list[dict]:
     return out
 
 
-def slot_specs(sections) -> list[dict]:
+def slot_specs(sections, include_fact_bound: bool = False) -> list[dict]:
     """Что показать модели: только free-слоты, только имя, роль и лимит.
 
     Fact-слоты сюда не попадают ни именем, ни значением — телефон и адрес
     модель не видит вовсе.
+
+    Слоты группы идут по одному на элемент, ключом «вариант.слот[индекс]»:
+    у трёх услуг три разных блёрба, и одной строкой на всех их не закрыть.
+    Сколько элементов в группе, решил уже состав секции, — поэтому индексы
+    берутся из готовой композиции, а не из repeat контракта.
+
+    include_fact_bound добавляет к ним FACT_BOUND_GROUP_SLOTS. Это дорожка
+    готовых текстов: их пишет человек, который цифру рядом видит. Дорожка
+    модели зовёт без флага — она цифры не видит и подписать их не может.
     """
     specs = []
     for section in sections:
@@ -277,6 +314,14 @@ def slot_specs(sections) -> list[dict]:
             specs.append({"slot": f"{section['variant']}.{spec['name']}",
                           "kind": spec["name"], "role": section["role"],
                           "max_chars": spec.get("max_chars")})
+        for spec in sf_slots.group_free_specs(section["contract"]):
+            if spec["name"] in FACT_BOUND_GROUP_SLOTS and not include_fact_bound:
+                continue
+            rows = section["slots"].get(spec["group"]) or []
+            for index in range(len(rows)):
+                specs.append({"slot": f"{section['variant']}.{spec['name']}[{index}]",
+                              "kind": spec["name"], "role": section["role"],
+                              "max_chars": spec.get("max_chars"), "grouped": True})
     return specs
 
 

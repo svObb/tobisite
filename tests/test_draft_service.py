@@ -235,6 +235,52 @@ async def test_half_written_pictures_do_not_reach_the_page(slot_answer,
     assert "/img/portrait.webp" not in row.image_ids
 
 
+# --- часы, вписанные в карточку одной строкой ---------------------------------
+
+HOURS_LINE = "Пн-Пт 9:00-19:00, Сб 10:00-17:00"
+
+
+async def test_hours_written_as_one_line_become_a_list(draft_lead):
+    lead = await draft_lead(enrichment=dict(DRAFT_ENRICHMENT, hours=HOURS_LINE))
+    async with Session() as s:
+        profile = await draft_service.build_profile(s, lead)
+
+    assert profile.hours.value == ["Пн-Пт 9:00-19:00", "Сб 10:00-17:00"]
+
+
+async def test_hours_line_reaches_the_page_as_days_and_not_letters(slot_answer,
+                                                                   draft_lead,
+                                                                   r2):
+    lead = await draft_lead(enrichment=dict(DRAFT_ENRICHMENT, hours=HOURS_LINE))
+    await slot_answer(lead)
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    html = r2.puts[-1]["Body"].decode()
+    info = html[html.index('id="info"'):]
+    info = info[:info.index("</section>")]
+
+    assert ">Пн-Пт</th>" in info and ">9:00-19:00<" in info
+    # строк в таблице столько, сколько дней в расписании, а не сколько букв
+    assert info.count("<tr") == 2
+
+
+def test_a_comma_between_two_days_without_time_keeps_the_line_whole():
+    """«Сб, Нд: вихідний» — один выходной на два дня, а не день без времени."""
+    assert draft_service._clean_hours("Сб, Нд: вихідний") == ["Сб, Нд: вихідний"]
+
+
+def test_a_lunch_break_stays_inside_the_day_it_belongs_to():
+    """Второй кусок обеда собственного дня не называет — резать его нечем."""
+    assert draft_service._clean_hours("Пн-Пт: 09:00-13:00, 14:00-18:00") == [
+        "Пн-Пт: 09:00-13:00, 14:00-18:00"]
+
+
+def test_a_semicolon_splits_the_line_whatever_stands_around_it():
+    """Точка с запятой в расписании только одно и значит — конец дня."""
+    assert draft_service._clean_hours("Пн-Пт: 9:00-19:00; Сб: вихідний") == [
+        "Пн-Пт: 9:00-19:00", "Сб: вихідний"]
+
+
 # --- готовые тексты слотов вместо модели (дельта 27.08) -----------------------
 
 async def _ready(lead, texts: dict):
@@ -305,6 +351,67 @@ async def test_a_ready_text_over_the_limit_is_treated_as_empty(slot_answer,
     # молча резать текст нельзя — тот же запрет, что и для ответов модели
     assert row.recipe_json["empty_slots"] == [victim["slot"]]
     assert "about_note" not in row.section_variants
+
+
+async def test_ready_blurbs_reach_every_service_of_the_page(slot_answer,
+                                                            draft_lead, r2):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    blurbs = [spec for spec in state.specs if spec["kind"] == "service_blurb"]
+    assert blurbs
+    texts = _texts(state.specs)
+    texts[blurbs[0]["slot"]] = "Розкажемо, з чого почати, ще до візиту."
+    texts[blurbs[1]["slot"]] = ""
+    await _ready(lead, texts)
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    html = r2.puts[-1]["Body"].decode()
+
+    assert "Розкажемо, з чого почати, ще до візиту." in html
+    # пустой блёрб — услуга без пояснения, а не выбывшая секция и не «None»
+    assert ">None<" not in html
+    row = await _row(lead.id)
+    assert blurbs[1]["slot"] not in row.recipe_json["empty_slots"]
+
+
+async def test_a_ready_label_for_a_google_figure_reaches_the_page(slot_answer,
+                                                                  draft_lead,
+                                                                  r2):
+    """Подпись под цифрой модель не пишет, а человек — пишет: он цифру видит."""
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    proof = next(part for part in state.sections if part["role"] == "proof")
+    label = f"{proof['variant']}.stat_label[0]"
+    assert label not in {spec["slot"] for spec in state.specs}
+    await _ready(lead, dict(_texts(state.specs), **{label: "Оцінка клієнтів"}))
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    row = await _row(lead.id)
+
+    assert proof["variant"] in row.section_variants
+    assert row.slots_json[label] == "Оцінка клієнтів"
+    assert "Оцінка клієнтів" in r2.puts[-1]["Body"].decode()
+
+
+async def test_a_draft_without_blurbs_keeps_the_recipe_lines(slot_answer,
+                                                             draft_lead, r2):
+    """Тексты старого черновика блёрбов не знают — страница всё равно собирается."""
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    plain = {spec["slot"]: SLOT_LINES.get(spec["kind"], "Рядок")
+             for spec in state.specs if not spec.get("grouped")}
+    await _ready(lead, plain)
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    row = await _row(lead.id)
+    html = r2.puts[-1]["Body"].decode()
+
+    assert row.recipe_json["empty_slots"] == []
+    assert row.slots_json == plain
+    assert any(v.startswith("svc_") for v in row.section_variants)
+    defaults = render.load_recipe(
+        row.recipe_id)["free_defaults"]["uk"]["_common"]["service_blurb"]
+    assert defaults[0] in html
 
 
 async def test_a_ready_text_that_is_not_a_string_is_treated_as_empty(

@@ -265,9 +265,10 @@ async def build_profile(session, lead) -> Profile:
     # обогащение идёт последним: работник заполнял его уже под черновик
     data |= {k: v for k, v in (lead.enrichment or {}).items()
              if k in ENRICHMENT_FIELDS}
-    # картинки и товары приходят и от скрейпа, и из формы дозаполнения, а
-    # шаблон секции ставит их поля в разметку без проверок
-    for key, clean in (("images", _clean_images), ("products", _clean_products)):
+    # картинки, товары и часы приходят и от скрейпа, и из формы дозаполнения,
+    # а шаблон секции ставит их поля в разметку без проверок
+    for key, clean in (("images", _clean_images), ("products", _clean_products),
+                       ("hours", _clean_hours)):
         if key in data:
             data[key] = clean(data[key])
     return Profile.from_dict(data)
@@ -874,17 +875,26 @@ def _ready_slots(texts, sections) -> slot_gen.SlotResult:
 
     Не-строку тут именно выбрасывают, а не приводят к строке: словарь, попавший
     в карточку вместо текста, уехал бы на страницу клиента питоновским repr.
+
+    Групповые слоты (блёрб услуги, подпись показателя) необязательны: ключа
+    нет — элемент остаётся с заготовкой рецепта, и в empty_slots такой слот не
+    пишется. Пустой он там ни о чём не говорит: секцию он всё равно не валит.
+    Сюда они берутся все, включая привязанные к цифре: подпись под цифрой из
+    Google пишет человек, который эту цифру видит, — модель её не видит и в
+    свой список слотов не получает.
     """
     texts = texts if isinstance(texts, dict) else {}
     final, empty = {}, []
-    for spec in slot_gen.slot_specs(sections):
+    for spec in slot_gen.slot_specs(sections, include_fact_bound=True):
         raw = texts.get(spec["slot"])
+        if spec.get("grouped") and raw is None:
+            continue
         value = raw.strip() if isinstance(raw, str) else ""
         limit = spec.get("max_chars")
         if limit and len(value) > limit:
             value = ""
         final[spec["slot"]] = value
-        if not value:
+        if not value and not spec.get("grouped"):
             empty.append(spec["slot"])
     return slot_gen.SlotResult(True, texts=final, empty=empty,
                                model="", prompt_version="")
@@ -962,6 +972,47 @@ def _clean_products(value) -> list[dict]:
             row["image"] = image
         out.append(row)
     return out
+
+
+# Кусок расписания стоит отдельной строкой, если сам называет свой день:
+# «Пн-Пт: 09:00-19:00» через «: » или «Сб 10:00-17:00» через пробел перед
+# временем. Ровно то же деление потом делает движковый _split_hours.
+_HOURS_DAY_TIME = re.compile(r"\S\s+\d{1,2}[:.]\d{2}")
+
+
+def _clean_hours(value) -> list[str]:
+    """Часы в форме движка: список строк, по строке на день.
+
+    Ручную строку из карточки работник пишет одной строкой, поэтому «;» режет
+    её всегда. Запятая режет только тогда, когда каждый кусок сам называет
+    свой день: «Пн-Пт 9:00-19:00, Сб 10:00-17:00» — два дня, а «Сб, Нд:
+    вихідний» и «Пн-Пт: 09:00-13:00, 14:00-18:00» (обед) — по одной строке,
+    и резать их значит выбросить половину расписания.
+
+    Авто-скрейп уже отдаёт list[str] и пересплиту не подлежит вовсе.
+    """
+    if isinstance(value, str):
+        parts = _split_hours_line(value)
+    elif isinstance(value, (list, tuple)):
+        parts = list(value)
+    else:
+        return []
+    return [str(part).strip() for part in parts if str(part).strip()]
+
+
+def _split_hours_line(value: str) -> list[str]:
+    out = []
+    for chunk in value.split(";"):
+        pieces = chunk.split(",")
+        if len(pieces) > 1 and all(_names_its_day(piece) for piece in pieces):
+            out.extend(pieces)
+        else:
+            out.append(chunk)
+    return out
+
+
+def _names_its_day(piece: str) -> bool:
+    return ": " in piece or bool(_HOURS_DAY_TIME.search(piece))
 
 
 def _size(value) -> int | None:
