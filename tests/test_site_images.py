@@ -261,12 +261,23 @@ def test_product_shots_do_not_take_the_hero():
     assert roles["photo-2"]["url"] == "box.jpg"
 
 
-def test_products_can_still_be_the_only_pictures():
-    roles = si.assign_roles([photo(1200, 1200, "box.jpg", product=True),
+def test_a_shop_with_only_product_shots_gets_no_hero_and_no_portrait():
+    """Шапка и портрет из витрины — то, из-за чего превью выглядит каталогом."""
+    roles = si.assign_roles([photo(2400, 1000, "box.jpg", product=True),
                              photo(1000, 1000, "case.jpg", product=True)])
 
-    assert roles["portrait"]["url"] == "box.jpg"
-    assert roles["photo-2"]["url"] == "case.jpg"
+    # товары при этом не пропадают: их разберут товарные секции
+    assert list(roles) == ["photo-2", "photo-3"]
+    assert roles["photo-2"]["url"] == "box.jpg"
+    assert roles["photo-3"]["url"] == "case.jpg"
+
+
+def test_the_portrait_comes_only_from_a_non_product_photo():
+    roles = si.assign_roles([photo(2000, 2000, "box.jpg", product=True),
+                             photo(600, 800, "team.jpg")])
+
+    assert roles["portrait"]["url"] == "team.jpg"
+    assert roles["photo-2"]["url"] == "box.jpg"
 
 
 def test_the_staging_budget_is_a_hard_ceiling():

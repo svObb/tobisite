@@ -233,13 +233,15 @@ def assign_roles(candidates: list[dict]) -> dict[str, dict]:
     единственной фотографии полезнее портрет, он подходит большему числу
     секций, а фон без второго фото оставил бы страницу без иллюстрации.
 
-    Снимок товара на фон и на портрет не берётся, пока есть хоть одно
-    обычное фото: крупный план коробки в шапке — это витрина, а не компания.
+    Снимок товара на фон и на портрет не берётся вовсе: крупный план коробки
+    в шапке — это витрина, а не компания. Магазин, у которого нетоварных фото
+    нет, остаётся без шапки-картинки и без портрета — товары уедут в товарные
+    секции под именами photo-N, а шапку движок соберёт без фотографии.
     """
     logos = [c for c in candidates if c.get("kind") == "logo"]
     photos = sorted((c for c in candidates if c.get("kind") != "logo"),
                     key=_photo_rank)
-    scene = [c for c in photos if not c.get("product")] or photos
+    scene = [c for c in photos if not c.get("product")]
     roles: dict[str, dict] = {}
     if logos:
         roles["logo"] = logos[0]
