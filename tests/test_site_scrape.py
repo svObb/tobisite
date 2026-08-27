@@ -38,6 +38,11 @@ def bakery():
     return ss.soup_of(page("svg_logo.html"))
 
 
+@pytest.fixture(scope="module")
+def prom():
+    return ss.soup_of(page("prom_shop.html"))
+
+
 # --- кодировки ----------------------------------------------------------------
 
 def test_windows_1251_is_decoded_by_its_meta():
@@ -222,6 +227,24 @@ def test_inline_svg_logo_is_its_own_kind(bakery):
 
     assert logos[0]["kind"] == "svg"
     assert "<script" in logos[0]["markup"]     # чистит его site_images
+
+
+def test_logo_is_found_by_the_wrapper_class_in_the_header(prom):
+    """У конструктора «logo» стоит на ссылке-обёртке, а у самой картинки нет."""
+    logos = ss.logo_candidates(prom, BASE)
+    urls = [item["url"] for item in logos]
+
+    assert logos[0]["url"] == f"{BASE}images/6773692817_w200_h100_vysokyi-servis.jpg"
+    assert logos[0]["kind"] == "img"
+    # остальные картинки шапки логотипом от этого не стали
+    assert not any("cart" in url for url in urls)
+
+
+def test_a_logo_class_outside_the_header_is_not_a_logo(prom):
+    urls = [item["url"] for item in ss.logo_candidates(prom, BASE)]
+
+    # div.logo-partners в подвале — это чужие лого, а не наше
+    assert not any("partners" in url for url in urls)
 
 
 def test_theme_color_wins_over_css_variables(shop):

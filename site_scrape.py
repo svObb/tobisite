@@ -234,7 +234,7 @@ def logo_candidates(soup, base: str) -> list[dict]:
             tag.get("src") or "", tag.get("alt") or "", tag.get("title") or "",
             " ".join(tag.get("class") or []), tag.get("id") or "",
         ])
-        if not _LOGO_HINT.search(haystack):
+        if not _LOGO_HINT.search(haystack) and not _logo_wrapper_in_header(tag):
             continue
         found.append({"url": url, "kind": "img",
                       "weight": 40 if _in_header(tag) else 20})
@@ -987,6 +987,23 @@ def _from_srcset(value: str, base: str) -> str:
 
 def _in_header(tag) -> bool:
     return any(parent.name in ("header", "nav") for parent in tag.parents)
+
+
+def _logo_wrapper_in_header(tag) -> bool:
+    """Слово «логотип» стоит на обёртке картинки внутри шапки.
+
+    Конструкторы (prom.ua и его родня) вешают его на ссылку вокруг <img>, а у
+    самой картинки не остаётся ни класса, ни говорящего адреса, ни alt. Выше
+    header/nav не поднимаемся: снаружи шапки такой класс — это уже блок партнёров.
+    """
+    hit = False
+    for parent in tag.parents:
+        names = (parent.get("class") or []) + [parent.get("id") or ""]
+        if _LOGO_HINT.search(" ".join(names)):
+            hit = True
+        if parent.name in ("header", "nav"):
+            return hit
+    return False
 
 
 def _parent_classes(tag) -> list[str]:
