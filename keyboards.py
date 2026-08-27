@@ -168,10 +168,14 @@ def my_card_kb(lead_id, can_edit, can_cancel):
     return b.as_markup()
 
 
-def admin_card_kb(lead_id, can_build=False):
+def admin_card_kb(lead_id, can_build=False, has_site=False):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Редактировать", callback_data=f"led:{lead_id}")
     b.button(text=BTN_REGAP, callback_data=f"rgp:{lead_id}")
+    # обогащение с сайта проверки лида не требует: оно ничего не отправляет и
+    # никому не показывается, а до черновика данные всё равно нужны
+    if has_site:
+        b.button(text="🌐 Обогатить с сайта", callback_data=f"enr:{lead_id}")
     # письмо и черновик собираются только по проверенному лиду: у остальных
     # наблюдение либо не снято, либо ещё не подтверждено
     if can_build:

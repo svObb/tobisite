@@ -36,9 +36,11 @@ CONTACT_TYPE_KEYS = [k for k, _ in config.CONTACT_TYPES] + ["other"]
 # CHECK-констрейнта, как у статусов лида.
 # Операции в журнале расходов. places и twilio — не ИИ, а платные API (20.3):
 # у них своя строка в /costs, потому что дорожают они от числа вызовов, а не
-# от длины промпта. Новая операция = запись здесь + миграция CHECK-констрейнта.
-COST_OPS = ["scout", "classify", "draft", "letter", "qa", "places", "twilio",
-            "other"]
+# от длины промпта. scrape — обход сайта лида: бесплатный, но без своей строки
+# неоткуда узнать, сколько сайтов бот обошёл. Новая операция = запись здесь +
+# миграция CHECK-констрейнта.
+COST_OPS = ["scout", "classify", "draft", "letter", "qa", "enrich", "places",
+            "twilio", "scrape", "other"]
 # Статусы подписки клиента на доп-услугу (16.13). Новый статус = запись здесь
 # + миграция CHECK-констрейнта, как у статусов лида.
 CLIENT_SERVICE_STATUSES = ["active", "paused", "canceled"]

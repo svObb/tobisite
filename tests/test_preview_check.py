@@ -5,7 +5,7 @@
 """
 from scout.site_probe import parse_psi_metrics
 from site_factory.engine.checks import form_e2e
-from tools.preview_check import SPEED_BUDGET_MS, speed_problems
+from tools.preview_check import SPEED_BUDGET_MS, assets_of, speed_problems
 
 URL = "https://pravo-i-dilo.tobisitepreview.com"
 
@@ -74,6 +74,38 @@ def test_answer_shapes():
     assert form_e2e.check_answer(200, {"ok": True, "test": True}) == []
     assert form_e2e.check_answer(200, "ok") == ["/api/lead: ответ не JSON"]
     assert form_e2e.check_answer(502, {}) == ["/api/lead: HTTP 502"]
+
+
+# --- что страница дотягивает сама ---------------------------------------------
+
+SCRIPTS = ('<script defer src="/assets/lenis.js"></script>'
+           '<script defer src="/assets/preview.js"></script>')
+
+
+def test_scripts_come_first_and_in_the_order_of_the_page():
+    html = SCRIPTS + '<img src="/img/logo.webp" alt="">'
+    assert list(assets_of(html)) == [
+        ("javascript", "/assets/lenis.js"),
+        ("javascript", "/assets/preview.js"),
+        ("image", "/img/logo.webp"),
+    ]
+
+
+def test_only_the_first_frame_is_checked():
+    html = ('<img src="/img/logo.webp" alt="">'
+            '<img src="/img/hero_bg.webp" alt="">'
+            '<img src="/img/photo-2.webp" alt="">')
+    # остальные картинки грузятся лениво и на открытие превью не влияют
+    assert list(assets_of(html)) == [("image", "/img/logo.webp")]
+
+
+def test_inline_picture_is_not_a_request():
+    html = '<img src="data:image/svg+xml;base64,PHN2Zz4=" alt="">'
+    assert list(assets_of(html)) == []
+
+
+def test_page_without_assets_asks_for_nothing():
+    assert list(assets_of("<p>тільки текст</p>")) == []
 
 
 # --- 10.17: бюджет скорости ---------------------------------------------------

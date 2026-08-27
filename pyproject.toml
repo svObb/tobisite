@@ -19,3 +19,4 @@ ignore = ["E741"]
 # а промпт правится только вместе с PROMPT_VERSION.
 "slot_gen.py" = ["E501"]
 "scout/gate.py" = ["E501"]
+"enrich_service.py" = ["E501"]

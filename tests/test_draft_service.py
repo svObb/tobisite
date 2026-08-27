@@ -4,15 +4,40 @@
 окружении нет, поэтому здесь конвейер заканчивается строкой в базе; публикация
 превью проверяется в test_preview_publish.py.
 """
+import json
+
 from sqlalchemy import select
 
 import config
 import draft_service
 import queue_service as qs
-from conftest import TEST_TG_BASE
-from models import Draft, Lead, Session
+from conftest import DRAFT_ENRICHMENT, SLOT_LINES, TEST_TG_BASE
+from models import CostLedger, Draft, Lead, Session
 from site_factory.engine import render
 from test_email_gen import UK_JSON
+
+# Товары и картинки, снятые с сайта лида (дорожка III). Компания выдумана,
+# цены — входные данные теста: их пишет бизнес, а не модель.
+SHOP_IMAGES = {
+    "portrait": {"src": "/img/portrait.webp", "width": 1200, "height": 900},
+    "photo-2": {"src": "/img/photo-2.webp", "width": 800, "height": 800},
+    "photo-3": {"src": "/img/photo-3.webp", "width": 800, "height": 800},
+    "photo-4": {"src": "/img/photo-4.webp", "width": 800, "height": 800},
+}
+SHOP_PRODUCTS = [
+    {"name": "Ноутбук Alpha 14", "price": "24 900 грн",
+     "image": dict(SHOP_IMAGES["portrait"])},
+    {"name": "Ноутбук Beta 15", "price": "31 400 грн",
+     "image": dict(SHOP_IMAGES["photo-2"])},
+    {"name": "Док-станція Gamma",
+     "image": dict(SHOP_IMAGES["photo-3"])},
+]
+
+
+def shop_enrichment(**kw) -> dict:
+    """Обогащение магазина: товары с фотографиями и трек rich."""
+    return DRAFT_ENRICHMENT | {"photo_count": 4, "images": dict(SHOP_IMAGES),
+                               "products": [dict(p) for p in SHOP_PRODUCTS]} | kw
 
 
 async def test_build_writes_the_row(slot_answer, draft_lead):
@@ -127,6 +152,187 @@ async def test_queue_takes_the_summary_from_the_draft(slot_answer, model,
 
     assert queued.ok, queued.reason
     assert f"<draft>{built.summary}</draft>" in _prompt(fake)
+
+
+async def test_photos_from_the_site_bring_the_photo_hero(slot_answer,
+                                                         draft_lead, r2):
+    """Картинки, снятые с сайта лида, доходят до страницы (дорожка III)."""
+    lead = await draft_lead(enrichment=dict(
+        DRAFT_ENRICHMENT, photo_count=3,
+        images={"portrait": {"src": "/img/portrait.webp",
+                             "width": 1000, "height": 1200}},
+    ))
+    await slot_answer(lead)
+
+    result = await draft_service.build_draft(lead.id)
+
+    assert result.ok, result.reason
+    row = await _row(lead.id)
+    assert "hero_photo_left" in row.section_variants
+    assert row.image_ids == ["/img/portrait.webp"]
+    html = r2.puts[-1]["Body"].decode()
+    # размеры в разметке — иначе страница дёргается, пока грузится фото
+    assert 'src="/img/portrait.webp"' in html
+    assert 'width="1000"' in html and 'height="1200"' in html
+
+
+# --- товары с сайта лида (сшивка дорожек II и III) ----------------------------
+
+async def test_products_from_the_site_reach_the_page(slot_answer, draft_lead, r2):
+    lead = await draft_lead(enrichment=shop_enrichment())
+    await slot_answer(lead)
+
+    result = await draft_service.build_draft(lead.id)
+
+    assert result.ok, result.reason
+    row = await _row(lead.id)
+    assert "products_grid" in row.section_variants
+    html = r2.puts[-1]["Body"].decode()
+    for product in SHOP_PRODUCTS:
+        assert product["name"] in html
+    # цену на страницу ставит код строкой ровно из карточки, а не модель
+    assert "24 900 грн" in html
+    assert 'src="/img/photo-2.webp"' in html
+
+
+async def test_a_product_without_a_picture_stays_out_of_the_grid(slot_answer,
+                                                                 draft_lead, r2):
+    products = [dict(p) for p in SHOP_PRODUCTS] + [{"name": "Кабель без фото"}]
+    lead = await draft_lead(enrichment=shop_enrichment(products=products))
+    await slot_answer(lead)
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    html = r2.puts[-1]["Body"].decode()
+
+    # пустая рамка в сетке хуже отсутствующего товара (group_filter has_image)
+    assert "Кабель без фото" not in html
+    assert "Ноутбук Alpha 14" in html
+
+
+async def test_half_written_pictures_do_not_reach_the_page(slot_answer,
+                                                            draft_lead, r2):
+    """Запись без размеров — не картинка: разметка ставит width/height как есть."""
+    lead = await draft_lead(enrichment=shop_enrichment(
+        images=dict(SHOP_IMAGES, portrait={"src": "/img/portrait.webp"}),
+        products=[{"name": "Товар без назви ціни", "price": "  "},
+                  {"name": "", "price": "10 грн"},
+                  *[dict(p) for p in SHOP_PRODUCTS]],
+    ))
+    async with Session() as s:
+        profile = await draft_service.build_profile(s, lead)
+
+    assert "portrait" not in profile.images.value
+    names = [item["name"] for item in profile.products.value]
+    assert names == ["Товар без назви ціни", "Ноутбук Alpha 14",
+                     "Ноутбук Beta 15", "Док-станція Gamma"]
+    assert "price" not in profile.products.value[0]
+
+    await slot_answer(lead)
+    assert (await draft_service.build_draft(lead.id)).ok
+    row = await _row(lead.id)
+    # картинки без размеров нет в белом списке — секция с ней и не выигрывает
+    assert "hero_photo_left" not in row.section_variants
+    assert "/img/portrait.webp" not in row.image_ids
+
+
+# --- готовые тексты слотов вместо модели (дельта 27.08) -----------------------
+
+async def _ready(lead, texts: dict):
+    async with Session() as s, s.begin():
+        fresh = await s.get(Lead, lead.id)
+        fresh.enrichment = dict(fresh.enrichment or {},
+                                **{draft_service.DEV_TEXTS_KEY: texts})
+
+
+def _texts(specs, drop=()) -> dict:
+    return {spec["slot"]: SLOT_LINES.get(spec["kind"], "Рядок")
+            for spec in specs if spec["slot"] not in drop}
+
+
+async def test_ready_texts_build_the_draft_without_the_model(slot_answer,
+                                                             draft_lead, r2):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    await _ready(lead, _texts(state.specs))
+
+    result = await draft_service.build_draft(lead.id)
+
+    assert result.ok and result.preview_url, result.reason
+    assert state.fake.messages.calls == []
+    row = await _row(lead.id)
+    assert row.recipe_json["empty_slots"] == []
+    assert row.slots_json == _texts(state.specs)
+    # служебный ключ обогащения в профиль не просачивается
+    assert draft_service.DEV_TEXTS_KEY not in row.recipe_json["profile"]
+    async with Session() as s:
+        spent = list(await s.scalars(
+            select(CostLedger).where(CostLedger.lead_id == lead.id)
+        ))
+    assert spent == []
+
+
+async def test_a_missing_ready_text_drops_its_section(slot_answer, draft_lead,
+                                                      r2):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    lost = next(spec["slot"] for spec in state.specs
+                if spec["slot"].startswith("about_note."))
+    await _ready(lead, _texts(state.specs, drop=(lost,)))
+
+    result = await draft_service.build_draft(lead.id)
+
+    # пропущенный ключ — то же, что пустой ответ модели: работает лестница
+    assert result.ok, result.reason
+    row = await _row(lead.id)
+    assert row.recipe_json["empty_slots"] == [lost]
+    assert "about" in row.recipe_json["dropped_sections"]
+    assert "about_note" not in row.section_variants
+
+
+async def test_a_ready_text_over_the_limit_is_treated_as_empty(slot_answer,
+                                                               draft_lead, r2):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    victim = next(spec for spec in state.specs
+                  if spec["slot"].startswith("about_note."))
+    texts = _texts(state.specs)
+    texts[victim["slot"]] = "я" * (victim["max_chars"] + 1)
+    await _ready(lead, texts)
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    row = await _row(lead.id)
+
+    # молча резать текст нельзя — тот же запрет, что и для ответов модели
+    assert row.recipe_json["empty_slots"] == [victim["slot"]]
+    assert "about_note" not in row.section_variants
+
+
+async def test_a_ready_text_that_is_not_a_string_is_treated_as_empty(
+        slot_answer, draft_lead, r2):
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    victim = next(spec for spec in state.specs
+                  if spec["slot"].startswith("about_note."))
+    texts = _texts(state.specs)
+    texts[victim["slot"]] = {"reason": ["агент положил сюда разбор, а не текст"]}
+    await _ready(lead, texts)
+
+    assert (await draft_service.build_draft(lead.id)).ok
+    row = await _row(lead.id)
+
+    # str() от словаря — это питоновский repr, и уехал бы он на страницу клиента
+    assert row.recipe_json["empty_slots"] == [victim["slot"]]
+    assert "about_note" not in row.section_variants
+    assert "reason" not in json.dumps(row.slots_json, ensure_ascii=False)
+
+
+def test_every_section_of_the_library_has_a_summary():
+    """Вариант без формулы — секция, о которой письмо промолчит."""
+    assert set(draft_service.SUMMARY_PARTS) == set(render.load_library())
+    for variant, parts in draft_service.SUMMARY_PARTS.items():
+        assert set(parts) == {"uk", "en"}, variant
+        for lang, text in parts.items():
+            assert text and not any(ch.isdigit() for ch in text), variant
 
 
 async def test_lead_without_a_draft_waits_for_hands(model, gap_lead):

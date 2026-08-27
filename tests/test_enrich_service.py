@@ -1,0 +1,696 @@
+"""Обогащение карточки с сайта лида: слияние, стейджинг, ИИ-ветка.
+
+Сети нет ни одной: обход сайта подменяет фикстура `scraped`, байты картинок
+рисует Pillow, бакет — FakeR2 из conftest. Проверяется то, ради чего модуль и
+написан: перескрейп не затирает работу человека, а телефон из подвала чужого
+шаблона не подменяет телефон карточки.
+"""
+import asyncio
+import io
+import itertools
+import json
+from dataclasses import replace
+
+import pytest
+from PIL import Image
+from sqlalchemy import select
+
+import config
+import costs
+import draft_service
+import enrich_service as es
+import preview_hits
+import site_images
+import site_scrape
+from email_gen import LOSS_KEY
+from models import Contact, CostLedger, Lead, LeadEvent, Session
+
+SITE = "https://lihtaryk.example/"
+LOGO_URL = f"{SITE}logo.png"
+WIDE_URL = f"{SITE}vitryna.jpg"
+TEAM_URL = f"{SITE}team.jpg"
+BOX_URL = f"{SITE}box.jpg"
+_domains = itertools.count(1)
+
+
+def png(width, height, color=(194, 98, 26)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+BLOBS = {LOGO_URL: png(400, 120), WIDE_URL: png(2400, 1200),
+         TEAM_URL: png(1000, 1200), BOX_URL: png(900, 900)}
+
+
+def result(**kw) -> site_scrape.ScrapeResult:
+    """Полный улов с выдуманного сайта: всё, что скрейп умеет находить."""
+    data = {
+        "ok": True, "url": SITE, "pages": [SITE, f"{SITE}contacts/"],
+        "name": "Ліхтарик",
+        "phones": ["+380440000011"], "emails": ["shop@lihtaryk.example"],
+        "address": {"display": "вулиця Вигадана, 4, Вигаданськ",
+                    "parts": {"street": "вулиця Вигадана, 4",
+                              "locality": "Вигаданськ"}},
+        "hours": ["Пн–Пт: 09:00–19:00"],
+        "services": ["Продаж ноутбуків", "Заміна екрана"],
+        "products": [{"name": "Промінь 14", "price": "24 990 грн",
+                      "image": BOX_URL}],
+        "logos": [{"url": LOGO_URL, "kind": "img", "weight": 40}],
+        "images": [{"url": WIDE_URL, "weight": 60, "og": True,
+                    "width": 2400, "height": 1200},
+                   {"url": TEAM_URL, "weight": 20, "og": False,
+                    "width": 1000, "height": 1200}],
+        "brand_colors": {"primary": "#1f6f4a", "source": "meta"},
+        "text_volume": "medium", "old_site_state": "outdated",
+        "excerpts": ["Ноутбуки з гарантією", "Ремонт материнських плат"],
+    }
+    return site_scrape.ScrapeResult(**(data | kw))
+
+
+@pytest.fixture(autouse=True)
+def _no_ai(monkeypatch):
+    """Как на бою: ветка выключена флагом. Кому она нужна — берёт enrich_model."""
+    monkeypatch.setattr(config, "ENRICH_AI", False)
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+
+
+@pytest.fixture
+def scraped(monkeypatch):
+    """scraped(улов) — обход сайта и скачивание картинок без единого сокета."""
+    def _install(found, blobs=None):
+        store = BLOBS if blobs is None else blobs
+
+        async def fake_scrape(url, *, region=None, session=None):
+            return found
+
+        async def fake_download(session, urls):
+            wanted = list(dict.fromkeys(urls))[:site_scrape.MAX_IMAGES]
+            return [(url, store[url]) for url in wanted if url in store]
+
+        monkeypatch.setattr(site_scrape, "scrape_site", fake_scrape)
+        monkeypatch.setattr(site_scrape, "download_images", fake_download)
+        return found
+
+    return _install
+
+
+@pytest.fixture
+def site_lead(make_lead):
+    """Лид с сайтом; контакты и уже написанное обогащение задаются вызовом."""
+    async def _make(*, phone=None, email=None, enrichment=None, **kw):
+        async with Session() as s, s.begin():
+            # домен уникален среди живых лидов — отсюда счётчик
+            lead = await make_lead(
+                s, website_url=SITE, enrichment=enrichment or {},
+                domain_norm=f"lihtaryk-{next(_domains)}.example", **kw,
+            )
+            for ctype, value in (("phone", phone), ("email", email)):
+                if value:
+                    s.add(Contact(lead_id=lead.id, ctype=ctype, value=value))
+        return lead
+
+    return _make
+
+
+async def enrichment_of(lead_id: int) -> dict:
+    async with Session() as s:
+        return dict((await s.get(Lead, lead_id)).enrichment or {})
+
+
+async def write_by_hand(lead_id: int, **values):
+    """Правка карточки человеком: _scrape.written при этом не трогается."""
+    async with Session() as s, s.begin():
+        lead = await s.get(Lead, lead_id)
+        lead.enrichment = dict(lead.enrichment or {}) | values
+
+
+async def events_of(lead_id: int, name: str) -> list:
+    async with Session() as s:
+        return list(await s.scalars(
+            select(LeadEvent).where(LeadEvent.lead_id == lead_id,
+                                    LeadEvent.event == name)
+        ))
+
+
+# --- слияние: чистая функция --------------------------------------------------
+
+def test_scraper_owned_keys_are_overwritten():
+    current = {"images": {"logo": {"src": "/img/logo.webp"}}, "photo_count": 3,
+               "_scrape": {"written": ["images", "photo_count"]}}
+
+    merged = es.merge_enrichment(current, {"images": {}, "photo_count": 0})
+
+    assert merged.enrichment["images"] == {}
+    assert merged.enrichment["photo_count"] == 0
+    assert merged.written == ["images", "photo_count"]
+
+
+def test_a_key_the_site_lost_is_dropped_not_kept():
+    current = {"brand_colors": {"primary": "#111111"},
+               "_scrape": {"written": ["brand_colors"]}}
+
+    merged = es.merge_enrichment(current, {"photo_count": 0})
+
+    assert "brand_colors" not in merged.enrichment
+
+
+def test_a_value_the_scraper_never_wrote_is_never_overwritten():
+    current = {"services": ["Написано руками"], "hours": ["Пн: 09:00"]}
+
+    merged = es.merge_enrichment(current, {"services": ["С сайта"],
+                                           "hours": ["Вт: 10:00"]})
+
+    assert merged.enrichment["services"] == ["Написано руками"]
+    assert merged.kept == ["hours", "services"] and merged.written == []
+
+
+def test_what_the_scraper_wrote_last_time_it_may_rewrite():
+    current = {"services": ["Старое с сайта"],
+               "_scrape": {"written": ["services"]}}
+
+    merged = es.merge_enrichment(current, {"services": ["Новое с сайта"]})
+
+    assert merged.enrichment["services"] == ["Новое с сайта"]
+    assert merged.written == ["services"] and merged.kept == []
+
+
+def test_the_phone_of_a_card_with_contacts_is_not_touched():
+    merged = es.merge_enrichment({}, {"phone": "+380440000011"},
+                                 contact_types={"phone"})
+
+    assert "phone" not in merged.enrichment and merged.kept == ["phone"]
+
+
+def test_the_phone_of_a_card_without_contacts_is_promoted():
+    merged = es.merge_enrichment({}, {"phone": "+380440000011"},
+                                 contact_types=set())
+
+    assert merged.enrichment["phone"] == "+380440000011"
+
+
+def test_the_name_is_never_promoted():
+    merged = es.merge_enrichment({}, {"name": "Совсем другое"})
+
+    assert "name" not in merged.enrichment
+
+
+def test_keys_of_other_owners_are_left_alone():
+    current = {LOSS_KEY: {"lost": 4}, "review_count": 24}
+
+    merged = es.merge_enrichment(current, {"services": ["С сайта"]})
+
+    assert merged.enrichment[LOSS_KEY] == {"lost": 4}
+    assert merged.enrichment["review_count"] == 24
+
+
+# --- прогон целиком -----------------------------------------------------------
+
+async def test_an_empty_card_gets_everything(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and got.pages == 2, got.reason
+    data = await enrichment_of(lead.id)
+    assert data["services"] == ["Продаж ноутбуків", "Заміна екрана"]
+    assert data["service_count"] == 2 and data["has_hours"] is True
+    assert data["address"] == "вулиця Вигадана, 4, Вигаданськ"
+    assert data["address_parts"]["locality"] == "Вигаданськ"
+    assert data["brand_colors"] == {"primary": "#1f6f4a", "source": "meta"}
+    assert data["old_site_state"] == "outdated"
+    assert data["_scrape"]["written"] == got.written
+    assert data["_scrape"]["found"]["name"] == "Ліхтарик"
+    assert len(await events_of(lead.id, "site_scraped")) == 1
+
+
+async def test_images_are_staged_under_the_lead_prefix(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    names = ["hero_bg", "logo", "photo-2", "portrait"]
+    assert got.staged == names
+    assert sorted(r2.objects) == [f"_enrich/{lead.id}/img/{n}.webp"
+                                  for n in names]
+    data = await enrichment_of(lead.id)
+    assert data["images"]["logo"] == {"src": "/img/logo.webp", "width": 400,
+                                      "height": 120}
+    assert (data["images"]["hero_bg"]["width"]
+            == site_images.ROLE_MAX_SIDE["background"])
+    # инвариант сшивки: photo_count — контентные фото, логотип в них не входит
+    assert data["photo_count"] == 3 == len(data["images"]) - 1
+    assert all(set(item) == {"src", "width", "height"}
+               for item in data["images"].values())
+
+
+async def test_products_point_at_staged_files(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result())
+
+    await es.enrich_from_site(lead.id)
+
+    product, = (await enrichment_of(lead.id))["products"]
+    assert product["name"] == "Промінь 14"
+    assert product["price"] == "24 990 грн"
+    assert product["image"] == {"src": "/img/photo-2.webp", "width": 900,
+                                "height": 900}
+
+
+async def test_a_product_whose_picture_did_not_make_it_has_none(site_lead,
+                                                                scraped, r2):
+    lead = await site_lead()
+    scraped(result(products=[{"name": "Промінь 14", "price": "24 990 грн",
+                              "image": f"{SITE}gone.jpg"}]))
+
+    await es.enrich_from_site(lead.id)
+
+    product, = (await enrichment_of(lead.id))["products"]
+    # ссылка на чужой хост в превью не поедет: секцию отсеет гейт has_image
+    assert "image" not in product
+
+
+async def test_the_card_phone_wins_and_the_difference_is_reported(site_lead,
+                                                                  scraped, r2):
+    lead = await site_lead(phone="+380 44 111 22 33")
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert "phone" not in await enrichment_of(lead.id)
+    assert got.phone_diff == "+380440000011" and "phone" in got.kept
+
+
+async def test_a_second_scrape_keeps_what_a_person_wrote(site_lead, scraped,
+                                                         r2):
+    lead = await site_lead()
+    scraped(result(hours=[]))                     # часов на сайте не нашли
+    assert (await es.enrich_from_site(lead.id)).ok
+    await write_by_hand(lead.id, hours=["Пн–Сб: по домовленості"])
+    scraped(result())                             # а на этот раз нашли
+
+    got = await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    assert data["hours"] == ["Пн–Сб: по домовленості"] and "hours" in got.kept
+    # а картинки скрейп по-прежнему ведёт сам
+    assert data["images"] and "images" in got.written
+
+
+async def test_a_repeat_scrape_changes_nothing_but_the_timestamp(site_lead,
+                                                                 scraped, r2):
+    lead = await site_lead()
+    scraped(result())
+    assert (await es.enrich_from_site(lead.id)).ok
+    before = await enrichment_of(lead.id)
+
+    assert (await es.enrich_from_site(lead.id)).ok
+
+    after = await enrichment_of(lead.id)
+    before["_scrape"].pop("at")
+    after["_scrape"].pop("at")
+    assert after == before
+
+
+async def test_a_dead_site_leaves_the_card_byte_for_byte(site_lead, scraped,
+                                                         r2):
+    lead = await site_lead(enrichment={"services": ["Своё"]})
+    scraped(site_scrape.ScrapeResult(ok=False, old_site_state="broken",
+                                     reason="https: ClientConnectorError"))
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert not got.ok and "ClientConnector" in got.reason
+    assert await enrichment_of(lead.id) == {"services": ["Своё"]}
+    assert not r2.objects and not await events_of(lead.id, "site_scraped")
+
+
+async def test_a_blocked_site_is_reported_honestly(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(site_scrape.ScrapeResult(ok=False,
+                                     reason="сайт закрыт защитой от ботов"))
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert not got.ok and got.reason == "сайт закрыт защитой от ботов"
+
+
+async def test_a_lead_without_a_site_is_refused(make_lead, scraped):
+    async with Session() as s, s.begin():
+        lead = await make_lead(s)
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert not got.ok and got.reason == "у лида нет сайта"
+
+
+async def test_without_r2_the_text_still_arrives(site_lead, scraped,
+                                                 monkeypatch):
+    for name in draft_service.R2_ENV:
+        monkeypatch.delenv(name, raising=False)
+    lead = await site_lead()
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and got.staged == []
+    assert "ключи R2" in got.images_reason
+    data = await enrichment_of(lead.id)
+    assert data["services"] and data["address"]
+    # «фотографий ноль» — утверждение, которого мы не делали
+    assert "images" not in data and "photo_count" not in data
+
+
+async def test_a_site_without_usable_pictures_says_so(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result(logos=[], images=[], products=[]), blobs={})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and got.staged == []
+    assert "не нашлось" in got.images_reason
+    data = await enrichment_of(lead.id)
+    assert data["images"] == {} and data["photo_count"] == 0
+
+
+async def test_stale_staging_is_swept_before_the_new_one(site_lead, scraped,
+                                                         r2):
+    lead = await site_lead()
+    scraped(result())
+    assert (await es.enrich_from_site(lead.id)).ok
+    ghost = f"_enrich/{lead.id}/img/photo-9.webp"
+    r2.objects[ghost] = "c прошлого обхода".encode()
+
+    assert (await es.enrich_from_site(lead.id)).ok
+
+    # иначе призрак уехал бы в публикацию вместе с настоящими файлами
+    assert ghost not in r2.objects
+
+
+async def test_the_walk_is_logged_as_a_free_call(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result())
+
+    await es.enrich_from_site(lead.id)
+
+    async with Session() as s:
+        rows = list(await s.scalars(
+            select(CostLedger).where(CostLedger.lead_id == lead.id)
+        ))
+    assert [row.op for row in rows] == [es.SCRAPE_OP]
+    assert rows[0].cost_usd == 0 and rows[0].api_calls == 1
+
+
+async def test_one_lead_is_enriched_once_at_a_time(site_lead, monkeypatch, r2):
+    lead = await site_lead()
+    gate = asyncio.Event()
+
+    async def slow_scrape(url, *, region=None, session=None):
+        await gate.wait()
+        return result()
+
+    async def no_images(session, urls):
+        return []
+
+    monkeypatch.setattr(site_scrape, "scrape_site", slow_scrape)
+    monkeypatch.setattr(site_scrape, "download_images", no_images)
+
+    first = asyncio.create_task(es.enrich_from_site(lead.id))
+    for _ in range(200):
+        if es.enrich_busy(lead.id):
+            break
+        await asyncio.sleep(0.01)
+    second = await es.enrich_from_site(lead.id)
+    gate.set()
+
+    assert (await first).ok
+    assert not second.ok and second.reason == "этот лид уже обогащается"
+    assert not es.enrich_busy(lead.id)
+
+
+async def test_two_taps_at_once_start_only_one_walk(site_lead, monkeypatch, r2):
+    """Два нажатия кнопки подряд: между проверкой и захватом лида нет щели."""
+    lead = await site_lead()
+    walks = []
+
+    async def slow_scrape(url, *, region=None, session=None):
+        walks.append(url)
+        await asyncio.sleep(0)     # обход уступает управление, как настоящий
+        return result()
+
+    async def only_the_logo(session, urls):
+        return [(LOGO_URL, BLOBS[LOGO_URL])]
+
+    monkeypatch.setattr(site_scrape, "scrape_site", slow_scrape)
+    monkeypatch.setattr(site_scrape, "download_images", only_the_logo)
+
+    first, second = await asyncio.gather(es.enrich_from_site(lead.id),
+                                         es.enrich_from_site(lead.id))
+
+    assert first.ok and not second.ok
+    assert second.reason == "этот лид уже обогащается"
+    # оба прогона снесли бы стейджинг друг друга на полпути
+    assert walks == [SITE]
+    assert sorted(r2.objects) == [es.image_key(lead.id, "logo.webp")]
+    assert list((await enrichment_of(lead.id))["images"]) == ["logo"]
+    assert not es.enrich_busy(lead.id)
+
+
+# --- логотип, нарисованный прямо в HTML ---------------------------------------
+
+def svg_logo(markup: str) -> dict:
+    return {"url": "", "kind": "svg", "markup": markup, "weight": 35}
+
+
+async def test_an_inline_svg_logo_takes_its_size_from_the_view_box(site_lead,
+                                                                   scraped, r2):
+    lead = await site_lead()
+    scraped(result(logos=[svg_logo(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64.4">'
+        '<path d="M0 0h240v64H0z"/></svg>')], images=[], products=[]),
+        blobs={})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == ["logo"] and got.logo_note == ""
+    logo = (await enrichment_of(lead.id))["images"]["logo"]
+    assert (logo["width"], logo["height"]) == (240, 64)
+    # сквозь стык дорожек: запись без размеров движок выбрасывает молча
+    assert draft_service._clean_image(logo) == {"src": logo["src"],
+                                                "width": 240, "height": 64}
+
+
+async def test_an_inline_svg_logo_prefers_its_own_width_and_height(site_lead,
+                                                                   scraped, r2):
+    lead = await site_lead()
+    scraped(result(logos=[svg_logo(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="180px" height="48px" '
+        'viewBox="0 0 999 999"><path d="M0 0h180v48H0z"/></svg>')],
+        images=[], products=[]), blobs={})
+
+    await es.enrich_from_site(lead.id)
+
+    logo = (await enrichment_of(lead.id))["images"]["logo"]
+    assert (logo["width"], logo["height"]) == (180, 48)
+
+
+async def test_an_inline_svg_without_a_size_is_left_to_hands(site_lead,
+                                                             scraped, r2):
+    lead = await site_lead()
+    scraped(result(logos=[svg_logo(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="auto">'
+        '<path d="M0 0h10v10H0z"/></svg>')], images=[], products=[]), blobs={})
+
+    got = await es.enrich_from_site(lead.id)
+
+    # «логотип есть» при пустой шапке превью — ровно то, чего быть не должно
+    assert got.staged == [] and not r2.objects
+    assert got.logo_note == "SVG-логотип без размеров — взять руками"
+    assert (await enrichment_of(lead.id))["images"] == {}
+
+
+async def test_the_card_line_says_what_came_from_the_site(site_lead, scraped,
+                                                          r2):
+    lead = await site_lead()
+    scraped(result())
+    await es.enrich_from_site(lead.id)
+
+    async with Session() as s:
+        line = es.enrich_line(await s.get(Lead, lead.id))
+
+    assert "страниц 2" in line and "логотип есть" in line
+    assert "фото 3" in line and "услуг 2" in line and "товаров 1" in line
+
+
+def test_a_card_nobody_scraped_has_no_line():
+    assert es.enrich_line(None) == ""
+
+
+# --- ИИ-ветка -----------------------------------------------------------------
+
+THIN = {"services": [], "hours": [], "text_volume": "long"}
+ANSWER = ('{"services": ["Ремонт даху", "Утеплення фасаду"], '
+          '"hours": ["Пн–Пт: 08:00–17:00"]}')
+
+
+async def test_the_model_is_not_asked_when_the_dom_did_its_job(site_lead,
+                                                               scraped, r2,
+                                                               enrich_model):
+    lead = await site_lead()
+    scraped(result())
+    fake = enrich_model(ANSWER)
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ai_note == "" and fake.messages.calls == []
+
+
+async def test_the_model_fills_what_the_dom_could_not(site_lead, scraped, r2,
+                                                      enrich_model):
+    lead = await site_lead()
+    scraped(result(**THIN))
+    fake = enrich_model(ANSWER)
+
+    got = await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    assert data["services"] == ["Ремонт даху", "Утеплення фасаду"]
+    assert data["hours"] == ["Пн–Пт: 08:00–17:00"]
+    assert got.ai_note.startswith("дополнила: ")
+    call = fake.messages.calls[0]
+    prompt = call["messages"][0]["content"]
+    assert prompt.startswith("<site>") and "Ноутбуки з гарантією" in prompt
+    # системный промпт строкой, без блоков с cache_control: вызов на лида один
+    assert isinstance(call["system"], str)
+
+
+async def test_the_model_call_is_its_own_line_in_costs(site_lead, scraped, r2,
+                                                       enrich_model):
+    lead = await site_lead()
+    scraped(result(**THIN))
+    enrich_model(ANSWER)
+
+    await es.enrich_from_site(lead.id)
+
+    async with Session() as s:
+        ops = list(await s.scalars(
+            select(CostLedger.op).where(CostLedger.lead_id == lead.id)
+        ))
+    assert sorted(ops) == sorted([es.SCRAPE_OP, es.COST_OP])
+
+
+async def test_the_cap_stops_the_model_before_the_call(site_lead, scraped, r2,
+                                                       enrich_model,
+                                                       monkeypatch):
+    lead = await site_lead()
+    scraped(result(**THIN))
+    fake = enrich_model(ANSWER)
+
+    async def reached():
+        return True
+
+    monkeypatch.setattr(costs, "cap_reached", reached)
+    got = await es.enrich_from_site(lead.id)
+
+    assert fake.messages.calls == [] and "кэп" in got.ai_note
+    # деградация на результат DOM: обогащение всё равно состоялось
+    assert got.ok and (await enrichment_of(lead.id))["images"]
+
+
+async def test_the_flag_is_off_and_the_model_is_not_asked(site_lead, scraped,
+                                                          r2, enrich_model,
+                                                          monkeypatch):
+    lead = await site_lead()
+    scraped(result(**THIN))                       # ровно то, что зовёт модель
+    fake = enrich_model(ANSWER)
+    monkeypatch.setattr(config, "ENRICH_AI", False)
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert fake.messages.calls == [] and "ENRICH_AI" in got.ai_note
+    # обогащение состоялось: услуги и часы просто остались теми, что нашёл DOM
+    assert got.ok and (await enrichment_of(lead.id))["images"]
+
+
+async def test_without_a_key_the_branch_simply_is_not_there(site_lead, scraped,
+                                                            r2, monkeypatch):
+    monkeypatch.setattr(config, "ENRICH_AI", True)
+    lead = await site_lead()
+    scraped(result(**THIN))
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and "ANTHROPIC_API_KEY" in got.ai_note
+
+
+async def test_a_broken_answer_degrades_to_the_dom(site_lead, scraped, r2,
+                                                   enrich_model):
+    lead = await site_lead()
+    scraped(result(services=["Одна послуга"], hours=[], text_volume="long"))
+    enrich_model("не json вовсе")
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and got.ai_note == "ответила не по формату"
+    assert (await enrichment_of(lead.id))["services"] == ["Одна послуга"]
+
+
+async def test_junk_inside_the_answer_is_filtered(site_lead, scraped, r2,
+                                                  enrich_model):
+    lead = await site_lead()
+    scraped(result(**THIN))
+    enrich_model('{"services": ["Ремонт даху", 12, "", "  ", null], '
+                 '"hours": "не список"}')
+
+    await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    assert data["services"] == ["Ремонт даху"] and "hours" not in data
+
+
+async def test_a_long_answer_is_capped(site_lead, scraped, r2, enrich_model):
+    lead = await site_lead()
+    scraped(result(**THIN))
+    enrich_model(json.dumps({"services": [f"Послуга {n}" for n in range(30)],
+                             "hours": [f"День {n}: 09:00" for n in range(20)]}))
+
+    await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    assert len(data["services"]) == site_scrape.MAX_SERVICES
+    assert len(data["hours"]) == site_scrape.MAX_HOURS
+
+
+# --- контракты ----------------------------------------------------------------
+
+def test_prompt_version_and_op_are_pinned():
+    """Версия промпта и строки в /costs — контракт: правятся вместе с промптом."""
+    assert es.PROMPT_VERSION == "e1" and es.COST_OP == "enrich"
+    assert es.SCRAPE_OP == "scrape" and es.SCRAPE_OP not in config.API_PRICES
+
+
+def test_the_report_names_every_key_it_may_write():
+    """Ключ без подписи уехал бы в отчёт админу схемным именем."""
+    touched = set(es.SCRAPER_OWNED) | set(es.PROMOTED) | set(es.CONTACT_PROMOTED)
+    derived = {"service_count", "has_hours", "has_address"}
+
+    assert touched - derived <= set(es.FIELD_LABELS)
+
+
+def test_the_staging_prefix_cannot_be_a_slug():
+    """Подчёркивание не проходит проверку слага — снаружи стейджинга не видно."""
+    assert es.staging_prefix(7) == f"{draft_service.ENRICH_PREFIX}/7/"
+    assert not preview_hits.SLUG_RE.fullmatch(draft_service.ENRICH_PREFIX)
+
+
+def test_the_scrape_result_stays_frozen():
+    """ИИ-ветка правит улов не на месте: он frozen, и это нарочно."""
+    found = result()
+
+    patched = replace(found, services=["Другое"])
+
+    assert found.services == ["Продаж ноутбуків", "Заміна екрана"]
+    assert patched.services == ["Другое"]

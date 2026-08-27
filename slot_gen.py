@@ -30,7 +30,7 @@ from site_factory.engine import slots as sf_slots
 log = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-PROMPT_VERSION = "s1"
+PROMPT_VERSION = "s2"
 # Два десятка коротких строк JSON'ом; больше здесь означает, что модель
 # начала сочинять абзацы вместо подписей.
 MAX_TOKENS = 1200
@@ -78,7 +78,11 @@ portrait_alt — alt фотографии компании: что на ней �
 map_alt — alt карты: что на ней видно
 address_label, hours_label, contacts_title, hours_title — подписи блоков
   адреса, часов и контактов
-section_title — заголовок секции
+company_label — подпись над названием компании в блоке о ней
+section_title — заголовок секции: услуг, товаров, часов работы, блока о
+  компании или формы — смотри по роли секции
+about_text — абзац о компании: чем она занимается и для кого. Это единственный
+  слот длиннее строки; два-три предложения, без оценок и без обещаний
 source_note — строка под показателями: откуда взяты цифры
 name_label, phone_label, message_label, submit_label — подписи полей формы и
   кнопки отправки

@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 import config
 import email_verify
+import enrich_service
 import gap_validation as gv
 import keyboards as kb
 import notify
@@ -158,6 +159,9 @@ def fmt_lead(lead: Lead, contacts, *, author=None, edits=0, admin=False) -> str:
             lines.append(f"Работник: {esc(author.name)} (id {author.tg_id})")
             lines.append(f'<a href="tg://user?id={author.tg_id}">Открыть в Telegram</a>')
         lines.append(f"Редактировалось: {edits} раз")
+        scraped = enrich_service.enrich_line(lead)
+        if scraped:
+            lines.append(f"🌐 С сайта: {esc(scraped)}")
         if lead.draft_url:
             lines.append(f"Черновик: {esc(lead.draft_url)}")
         if lead.admin_note:

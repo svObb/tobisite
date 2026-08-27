@@ -20,6 +20,7 @@ import config
 import costs
 import draft_service
 import email_gen
+import enrich_service
 import keyboards as kb
 import metrics
 import notify
@@ -1060,7 +1061,8 @@ async def show_card(target: Message, lead_id: int):
     shown = await send_screenshot(target, lead.screenshot_file_id)
     markup = (
         kb.cancelled_card_kb(lead_id) if lead.cancelled_at
-        else kb.admin_card_kb(lead_id, can_build=lead.status == "verified")
+        else kb.admin_card_kb(lead_id, can_build=lead.status == "verified",
+                              has_site=bool(lead.website_url or lead.domain_norm))
     )
     text = fmt_lead(lead, contacts, author=author, edits=edits, admin=True)
     if not shown:
@@ -1373,6 +1375,71 @@ async def draft_save(message: Message, state: FSMContext):
     await message.answer("Ссылка сохранена.")
 
 
+# --- обогащение с сайта лида (дорожка III) ------------------------------------
+#
+# Обход сайта — это до четырёх страниц с паузами плюс скачивание картинок, то
+# есть десятки секунд. Ждём их так же, как ждём сборку: фоновая задача стоила
+# бы таск-реестра, а вторую кнопку на том же лиде не даст нажать busy-guard.
+
+@router.callback_query(F.data.startswith("enr:"))
+async def enrich_run(cb: CallbackQuery):
+    lead_id = await cb_id(cb)
+    if lead_id is None:
+        return
+    async with Session() as s:
+        lead = await s.get(Lead, lead_id)
+    if not lead or lead.deleted_at or lead.cancelled_at:
+        await cb.answer(STALE, show_alert=True)
+        return
+    # проверенности не требуем: обогащение ничего не отправляет и никому не
+    # показывается, а нужно оно как раз до того, как лид одобрен
+    if not (lead.website_url or lead.domain_norm):
+        await cb.answer("У компании нет сайта — читать нечего", show_alert=True)
+        return
+    if enrich_service.enrich_busy(lead_id):
+        await cb.answer("Этот лид уже обогащается", show_alert=True)
+        return
+    await cb.answer()
+    note = await cb.message.answer("Читаю сайт компании…")
+    result = await enrich_service.enrich_from_site(lead_id,
+                                                   actor_tg_id=cb.from_user.id)
+    await safe_edit(note, enrich_report(result))
+
+
+def enrich_report(result) -> str:
+    """Отчёт по обогащению: что записали, чего не тронули и чего не нашли."""
+    if not result.ok:
+        return f"Не обогатилось: {esc(result.reason)}"
+    lines = [f"🌐 Сайт прочитан, страниц: {result.pages}"]
+    written = _enrich_labels(result.written)
+    lines.append(f"Записано: {esc(', '.join(written))}" if written
+                 else "Нового ничего не записано")
+    if result.staged:
+        lines.append(f"Картинки ({len(result.staged)}): "
+                     f"{esc(', '.join(result.staged))}")
+    if result.images_reason:
+        lines.append(f"⚠️ Картинок нет: {esc(result.images_reason)}")
+    if result.logo_note:
+        lines.append(f"⚠️ {esc(result.logo_note)}")
+    kept = _enrich_labels(result.kept)
+    if kept:
+        lines.append(f"Не тронуто, заполнено руками: {esc(', '.join(kept))}")
+    if result.phone_diff:
+        lines.append(f"На сайте телефон {esc(result.phone_diff)} — в карточке "
+                     f"свой, он не переписан")
+    if result.empty:
+        lines.append(f"Не нашли: {esc(', '.join(result.empty))}")
+    if result.ai_note:
+        lines.append(f"Модель: {esc(result.ai_note)}")
+    return "\n".join(lines)
+
+
+def _enrich_labels(keys) -> list[str]:
+    """Ключи схемы — словами. Производные признаки в отчёт не идут."""
+    return [enrich_service.FIELD_LABELS[key] for key in keys
+            if key in enrich_service.FIELD_LABELS]
+
+
 # --- сборка черновика сайта ---------------------------------------------------
 #
 # Сборка идёт обычным await: она занимает секунды (один вызов модели на все
@@ -1450,6 +1517,9 @@ def previews_report(result) -> str:
               for lead_id, slug, why in result.deleted[:20]]
     if result.kept_sold:
         lines.append(f"Превью проданных не тронуты: {result.kept_sold}")
+    if result.swept:
+        lines.append("Снят стейджинг обогащения: "
+                     + ", ".join(f"#{lead_id}" for lead_id in result.swept[:20]))
     if result.failed:
         lines.append("⚠️ Не вышло: " + esc("; ".join(result.failed[:5])))
     return "\n".join(lines)

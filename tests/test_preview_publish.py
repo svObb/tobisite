@@ -13,6 +13,7 @@ import config
 import draft_service
 from models import PREVIEW_TTL_DAYS, Draft, Lead, LeadEvent, Session
 from site_factory.engine import render
+from test_draft_service import shop_enrichment
 
 
 async def _draft(lead_id: int) -> Draft:
@@ -329,6 +330,226 @@ async def test_slug_of_a_removed_preview_is_not_given_away(slot_answer,
 
     # сохранённая клиентом ссылка не должна однажды открыть чужой сайт
     assert (await _draft(second.id)).r2_prefix == "movna-shkola-2"
+
+
+# --- картинки с сайта лида (дорожка III) --------------------------------------
+
+def _stage(r2, lead_id: int, *names: str) -> list[str]:
+    """Стейджинг обогащения: файлы лежат там, куда их кладёт enrich_service."""
+    prefix = f"{draft_service.enrich_prefix(lead_id)}{draft_service.IMG_DIR}/"
+    keys = [prefix + name for name in names]
+    for key, name in zip(keys, names):
+        r2.objects[key] = f"байты {name}".encode()
+        r2.ops.append(("put", key))
+    return keys
+
+
+async def test_staged_images_reach_the_preview_before_the_page(slot_answer,
+                                                               draft_lead, r2):
+    lead = await draft_lead()
+    _stage(r2, lead.id, "logo.webp", "portrait.webp")
+    await slot_answer(lead)
+
+    result = await draft_service.build_draft(lead.id)
+
+    assert result.ok and result.preview_url, result.publish_reason
+    slug = (await _draft(lead.id)).r2_prefix
+    assert f"{slug}/img/logo.webp" in r2.objects
+    assert (r2.objects[f"{slug}/img/portrait.webp"]
+            == "байты portrait.webp".encode())
+    # иначе первый открывший превью увидит страницу с дырами вместо фотографий
+    copies = [i for i, (kind, _) in enumerate(r2.ops) if kind == "copy"]
+    page = r2.ops.index(("put", f"{slug}/index.html"))
+    assert copies and max(copies) < page
+    # стейджинг остаётся на месте: пересборка копирует те же файлы заново
+    assert f"{draft_service.enrich_prefix(lead.id)}img/logo.webp" in r2.objects
+
+
+async def test_a_picture_that_did_not_copy_cancels_the_publication(
+        slot_answer, draft_lead, r2):
+    lead = await draft_lead()
+    staged = _stage(r2, lead.id, "logo.webp", "hero_bg.webp")
+    r2.refuse_copy.add(staged[1])
+    await slot_answer(lead)
+
+    result = await draft_service.build_draft(lead.id)
+
+    # страница со ссылками на несуществующие файлы хуже отсутствия страницы
+    assert result.ok and not result.preview_url
+    assert "картинки не скопированы" in result.publish_reason
+    row = await _draft(lead.id)
+    assert row.status == "generated" and row.r2_prefix
+    assert f"{row.r2_prefix}/index.html" not in r2.objects
+    assert (await _lead(lead.id)).draft_url is None
+
+
+async def test_republishing_wipes_the_pictures_of_the_previous_scrape(
+        slot_answer, draft_lead, r2):
+    lead = await draft_lead()
+    _stage(r2, lead.id, "logo.webp")
+    await slot_answer(lead)
+    assert (await draft_service.build_draft(lead.id)).preview_url
+    slug = (await _draft(lead.id)).r2_prefix
+    r2.objects[f"{slug}/img/photo-5.webp"] = "c прошлого обхода".encode()
+    mark = len(r2.ops)
+
+    assert (await draft_service.publish_preview(lead.id)).ok
+
+    # прошлый скрейп нашёл больше фото, чем нынешний, — лишнее уехало бы призраком
+    assert f"{slug}/img/photo-5.webp" not in r2.objects
+    assert f"{slug}/img/logo.webp" in r2.objects
+    # и убрано оно ПОСЛЕ копий: пока они идут, старая страница ещё живая
+    kinds = [kind for kind, _ in r2.ops[mark:]]
+    assert kinds.index("delete") > max(i for i, k in enumerate(kinds)
+                                       if k == "copy")
+
+
+async def test_a_failed_recopy_leaves_the_live_pictures_alone(slot_answer,
+                                                              draft_lead, r2):
+    lead = await draft_lead()
+    _stage(r2, lead.id, "logo.webp", "portrait.webp")
+    await slot_answer(lead)
+    assert (await draft_service.build_draft(lead.id)).preview_url
+    slug = (await _draft(lead.id)).r2_prefix
+    # файл прошлой публикации, которого в новом манифесте нет: снеси мы папку
+    # первой, он исчез бы вместе с ней ещё до неудачной копии
+    r2.objects[f"{slug}/img/photo-5.webp"] = "c прошлого обхода".encode()
+    live = {key: value for key, value in r2.objects.items()
+            if key.startswith(f"{slug}/{draft_service.IMG_DIR}/")}
+    r2.refuse_copy.add(f"{draft_service.enrich_prefix(lead.id)}img/portrait.webp")
+    mark = len(r2.ops)
+
+    result = await draft_service.publish_preview(lead.id)
+
+    # ссылку на превью клиент уже получил: страницы без фотографий он не увидит
+    assert not result.ok and "картинки не скопированы" in result.reason
+    # копия оборвалась не на первом же файле — и всё равно ничего не потеряно
+    assert ("copy", f"{slug}/img/logo.webp") in r2.ops[mark:]
+    assert not [key for kind, key in r2.ops[mark:] if kind == "delete"]
+    assert {key: value for key, value in r2.objects.items()
+            if key.startswith(f"{slug}/{draft_service.IMG_DIR}/")} == live
+    # прежняя публикация цела целиком: страница на месте и ссылается на файлы,
+    # которые в бакете есть. Слаг за черновиком остаётся — по нему и повторим
+    assert f"{slug}/index.html" in r2.objects
+    row = await _draft(lead.id)
+    assert row.status == "published" and row.r2_prefix == slug
+
+
+async def test_closing_a_lead_takes_down_the_staging_too(slot_answer,
+                                                         draft_lead, r2):
+    lead = await _published(slot_answer, draft_lead)
+    slug = (await _draft(lead.id)).r2_prefix
+    _stage(r2, lead.id, "logo.webp", "portrait.webp")
+    await _set_status(lead.id, "refused")
+
+    result = await draft_service.expire_previews()
+
+    assert (lead.id, slug, "лид закрыт") in result.deleted
+    assert lead.id in result.swept
+    assert not [k for k in r2.objects if k.startswith(f"{slug}/")]
+    assert not [k for k in r2.objects
+                if k.startswith(draft_service.enrich_prefix(lead.id))]
+
+
+async def test_staging_of_a_live_lead_is_not_swept(slot_answer, draft_lead, r2):
+    lead = await _published(slot_answer, draft_lead)
+    _stage(r2, lead.id, "logo.webp")
+
+    result = await draft_service.expire_previews()
+
+    assert lead.id not in result.swept
+    assert f"{draft_service.enrich_prefix(lead.id)}img/logo.webp" in r2.objects
+
+
+async def test_staging_without_a_preview_is_swept_all_the_same(make_lead, r2):
+    async with Session() as s, s.begin():
+        lead = await make_lead(s, status="rejected")
+    _stage(r2, lead.id, "logo.webp")
+
+    result = await draft_service.expire_previews()
+
+    # черновика у лида нет и не будет, а картинки в бакете остались бы навсегда
+    assert lead.id in result.swept and not r2.objects
+
+
+# --- бюджет картинок превью (дорожка II, media_manifest) ----------------------
+
+def _img(name: str) -> str:
+    return f'<img src="/img/{name}" alt="" width="8" height="8">'
+
+
+def test_manifest_starts_with_the_pictures_of_the_page():
+    staged = [f"_enrich/7/img/{name}" for name in
+              ("hero_bg.webp", "logo.webp", "photo-2.webp", "portrait.webp")]
+    page = _img("portrait.webp") + _img("photo-2.webp")
+
+    manifest = draft_service.media_manifest(staged, page)
+
+    # сначала то, на что ссылается страница, и в порядке появления в разметке
+    assert [key.rsplit("/", 1)[-1] for key in manifest] == [
+        "portrait.webp", "photo-2.webp", "logo.webp", "hero_bg.webp"]
+
+
+def test_manifest_holds_the_budget_of_one_logo_and_seven_pictures():
+    staged = [f"_enrich/7/img/{name}" for name in
+              ["logo.webp"] + [f"photo-{n}.webp" for n in range(2, 14)]]
+
+    manifest = draft_service.media_manifest(staged)
+
+    assert len(manifest) == draft_service.MEDIA_BUDGET == 8
+    names = [key.rsplit("/", 1)[-1] for key in manifest]
+    # логотип вперёд, дальше галерея по номерам: лишнее остаётся в стейджинге
+    assert names[0] == "logo.webp" and names[1] == "photo-2.webp"
+    assert "photo-13.webp" not in names
+
+
+def test_manifest_refuses_a_page_that_asks_for_more_than_the_budget():
+    names = [f"photo-{n}.webp" for n in range(2, 12)]
+    staged = [f"_enrich/7/img/{name}" for name in names]
+    page = "".join(_img(name) for name in names)
+
+    try:
+        draft_service.media_manifest(staged, page)
+    except ValueError as e:
+        assert "бюджете" in str(e)
+    else:
+        raise AssertionError("страница без части своих картинок не публикуется")
+
+
+def test_manifest_ignores_pictures_the_staging_does_not_have():
+    manifest = draft_service.media_manifest(["_enrich/7/img/logo.webp"],
+                                            _img("portrait.webp"))
+
+    # ссылку вписали руками, файла нет: страница выкладывается как есть
+    assert manifest == ["_enrich/7/img/logo.webp"]
+
+
+def test_page_images_are_read_in_order_and_once():
+    html = _img("logo.webp") + _img("photo-2.webp") + _img("logo.webp")
+    assert draft_service.page_images(html) == ["logo.webp", "photo-2.webp"]
+    assert draft_service.page_images("") == []
+
+
+async def test_publication_copies_the_pictures_the_page_needs(slot_answer,
+                                                              draft_lead, r2):
+    lead = await draft_lead(enrichment=shop_enrichment())
+    _stage(r2, lead.id, "logo.webp", "portrait.webp",
+           *[f"photo-{n}.webp" for n in range(2, 12)])
+    await slot_answer(lead)
+
+    result = await draft_service.build_draft(lead.id)
+
+    assert result.ok and result.preview_url, result.publish_reason
+    slug = (await _draft(lead.id)).r2_prefix
+    copied = {key.rsplit("/", 1)[-1] for key in r2.objects
+              if key.startswith(f"{slug}/{draft_service.IMG_DIR}/")}
+    assert len(copied) == draft_service.MEDIA_BUDGET
+    # ни одной ссылки на файл, которого в папке превью нет
+    html = r2.objects[f"{slug}/index.html"].decode()
+    assert draft_service.page_images(html)
+    assert set(draft_service.page_images(html)) <= copied
+    # логотип идёт раньше галереи, а хвост стейджинга в бюджет не влез
+    assert "logo.webp" in copied and "photo-11.webp" not in copied
 
 
 async def test_without_r2_keys_the_pipeline_works_as_before(slot_answer,

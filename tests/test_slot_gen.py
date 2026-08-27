@@ -12,6 +12,8 @@ import costs
 import draft_service
 import slot_gen
 from models import CostLedger, Session
+from site_factory.engine import render
+from site_factory.engine import slots as sf_slots
 
 
 async def test_too_long_slot_is_asked_again_alone(slot_plan, slot_answer,
@@ -162,6 +164,21 @@ async def test_regeneration_offers_a_tighter_budget(slot_plan, slot_answer,
     limit = victim["max_chars"]
     assert [spec["slot"] for spec in sent] == [victim["slot"]]
     assert sent[0]["max_chars"] == limit - max(2, limit // 5)
+
+
+def test_the_dictionary_names_every_free_slot_of_the_library():
+    """Слот без строки в словаре — слот, о смысле которого модель гадает."""
+    kinds = {spec["name"]
+             for contract in render.load_library().values()
+             for spec in sf_slots.free_specs(contract)}
+    listed = set()
+    for line in slot_gen.SYSTEM_PROMPT.split("СЛОВАРЬ СЛОТОВ")[1].splitlines():
+        head, dash, _ = line.partition(" — ")
+        if dash and not line.startswith(" "):
+            listed |= {name.strip() for name in head.split(",")}
+
+    assert kinds and kinds <= listed, sorted(kinds - listed)
+    assert slot_gen.PROMPT_VERSION == "s2"
 
 
 def test_model_json_survives_markdown_fence():

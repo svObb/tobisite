@@ -211,18 +211,39 @@ class FakeR2:
 
     refuse — ключи, которые бакет отказывается удалять: delete_objects отвечает
     на них 200 с Errors внутри, ровно как настоящий R2.
+
+    ops — журнал операций по порядку (put, copy, delete): по нему тесты
+    проверяют, что картинки легли в бакет РАНЬШЕ index.html, а прежняя папка
+    подметается ПОЗЖЕ копий, а не просто что в бакете нужный набор ключей.
     """
 
     def __init__(self):
         self.objects = {}
         self.puts = []
+        self.copies = []
+        self.ops = []
         self.fail = None
         self.refuse = set()
+        self.refuse_copy = set()
 
     def put_object(self, **kw):
         self._check()
         self.puts.append(kw)
+        self.ops.append(("put", kw["Key"]))
         self.objects[kw["Key"]] = kw["Body"]
+        return {}
+
+    def copy_object(self, **kw):
+        """Копия на стороне бакета: байты через бота не проходят."""
+        self._check()
+        source = kw["CopySource"]["Key"]
+        if source in self.refuse_copy:
+            raise RuntimeError(f"pytest не даёт скопировать {source}")
+        if source not in self.objects:
+            raise RuntimeError(f"нет объекта {source}")
+        self.copies.append(kw)
+        self.ops.append(("copy", kw["Key"]))
+        self.objects[kw["Key"]] = self.objects[source]
         return {}
 
     def list_objects_v2(self, **kw):
@@ -239,6 +260,7 @@ class FakeR2:
                                "Message": "pytest не даёт удалить"})
                 continue
             self.objects.pop(obj["Key"], None)
+            self.ops.append(("delete", obj["Key"]))
         return {"Errors": errors} if errors else {}
 
     def _check(self):
@@ -326,6 +348,27 @@ def gate_model(monkeypatch):
     return _install
 
 
+@pytest.fixture
+def enrich_model(monkeypatch):
+    """enrich_model(ответ, ...) — тот же приём для ИИ-ветки обогащения.
+
+    Заодно поднимает ENRICH_AI: на бою ветка выключена, и без флага фальшивую
+    модель просто не спросили бы.
+    """
+    import config
+    import enrich_service
+
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "pytest-key")
+    monkeypatch.setattr(config, "ENRICH_AI", True)
+
+    def _install(*replies):
+        fake = SimpleNamespace(messages=FakeMessages(replies))
+        monkeypatch.setattr(enrich_service, "_client", fake)
+        return fake
+
+    return _install
+
+
 # Обогащение карточки под черновик (Д13 §3 шаг 1). Компания выдумана целиком,
 # телефон несуществующий; цифры — входные данные теста, а не текст страницы.
 DRAFT_ENRICHMENT = {
@@ -398,6 +441,8 @@ SLOT_LINES = {
     "privacy_note": "Пишемо у відповідь.",
     "contacts_title": "Контакти",
     "hours_title": "Години",
+    "company_label": "Компанія",
+    "about_text": "Приймаємо замовлення телефоном і у формі на цій сторінці.",
     "legal_line": "Чернетка сторінки.",
 }
 

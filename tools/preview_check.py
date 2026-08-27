@@ -16,8 +16,10 @@ import argparse
 import asyncio
 import os
 import pathlib
+import re
 import sys
 import time
+import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -32,6 +34,9 @@ from site_factory.engine.checks.form_e2e import check_live  # noqa: E402
 # Меряет это Lighthouse mobile, он же дросселирует сеть до 4G.
 SPEED_BUDGET_MS = 3000
 PAGE_TIMEOUT = aiohttp.ClientTimeout(total=30)
+
+SCRIPT_SRC = re.compile(r'<script[^>]+\bsrc="([^"]+)"')
+IMG_SRC = re.compile(r'<img[^>]+\bsrc="([^"]+)"')
 
 
 def speed_problems(metrics: dict) -> list[str]:
@@ -48,14 +53,14 @@ def secs(ms) -> str:
     return "—" if ms is None else f"{ms / 1000:.1f} с"
 
 
-async def check_page(session, url: str) -> list[str]:
+async def check_page(session, url: str) -> tuple[list[str], str]:
     started = time.monotonic()
     try:
         async with session.get(url) as resp:
             body = await resp.read()
             status, ctype = resp.status, resp.headers.get("content-type", "")
     except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
-        return [f"страница не открылась: {e.__class__.__name__}"]
+        return [f"страница не открылась: {e.__class__.__name__}"], ""
     print(f"  страница: HTTP {status}, {len(body) / 1024:.0f} КБ, "
           f"{time.monotonic() - started:.2f} с")
     problems = []
@@ -63,6 +68,41 @@ async def check_page(session, url: str) -> list[str]:
         problems.append(f"страница отдала HTTP {status}")
     if "text/html" not in ctype:
         problems.append(f"страница не HTML: {ctype!r}")
+    return problems, body.decode("utf-8", "replace")
+
+
+def assets_of(html: str):
+    """Что страница дотягивает сама: скрипты и первый кадр.
+
+    Первая картинка — она же LCP-кадр первого экрана: страница откроется и без
+    неё, а мерить будет нечего. Остальные картинки грузятся лениво и на
+    открытие превью не влияют. data-URI пропускаем: это уже в разметке.
+    """
+    for src in SCRIPT_SRC.findall(html):
+        yield "javascript", src
+    for src in IMG_SRC.findall(html):
+        if not src.startswith("data:"):
+            yield "image", src
+            return
+
+
+async def check_assets(session, url: str, html: str) -> list[str]:
+    problems = []
+    for kind, src in assets_of(html):
+        target = urllib.parse.urljoin(url, src)
+        try:
+            async with session.get(target) as resp:
+                body = await resp.read()
+                status = resp.status
+                ctype = resp.headers.get("content-type", "")
+        except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
+            problems.append(f"{src}: не открылся ({e.__class__.__name__})")
+            continue
+        print(f"  {src}: HTTP {status}, {len(body) / 1024:.0f} КБ, {ctype}")
+        if status != 200:
+            problems.append(f"{src}: HTTP {status}")
+        elif kind not in ctype:
+            problems.append(f"{src}: content-type {ctype!r}, ожидался {kind}")
     return problems
 
 
@@ -79,7 +119,9 @@ async def run(url: str, skip_speed: bool) -> int:
     print(f"Превью: {url}")
     problems = []
     async with aiohttp.ClientSession(timeout=PAGE_TIMEOUT) as session:
-        problems += await check_page(session, url)
+        page, html = await check_page(session, url)
+        problems += page
+        problems += await check_assets(session, url, html)
         form = await check_live(url, session)
         print("  форма: " + ("заявка принята, в чат не ушла" if not form
                              else "; ".join(form)))

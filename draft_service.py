@@ -19,6 +19,10 @@
   пустые после перегенерации или автопроверки нашли брак. Работника такое не
   касается — чинить это нам.
 
+Единственный недетерминированный шаг выключается: лежат в enrichment готовые
+тексты слотов под ключом `_dev_free_texts` — модель не зовётся вовсе, и вся
+сборка становится чистой функцией от карточки лида.
+
 Неудачная пересборка не затирает уже собранный черновик: у опубликованного
 превью в строке лежит r2_prefix, и потерять его из-за упавшего API нельзя.
 
@@ -30,6 +34,7 @@
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
@@ -56,35 +61,74 @@ UA_LANG, DEFAULT_LANG = "uk", "en"
 
 # Признаки, которые обогащение вправе принести в профиль. Всё, чего нет в
 # этом списке, движок не понимает, а чего нет в enrichment — неизвестно
-# (unknown != false, Д13 §3 шаг 1).
+# (unknown != false, Д13 §3 шаг 1). Служебные ключи обогащения начинаются с
+# подчёркивания (`_scrape`, `_dev_free_texts`) и в профиль не проходят именно
+# потому, что их здесь нет.
 ENRICHMENT_FIELDS = (
     "services", "service_count", "has_prices", "has_hours", "hours",
     "has_booking_url", "booking_url", "review_count", "google_rating",
     "has_address", "address", "address_parts", "photo_count", "text_volume",
-    "old_site_state", "brand_colors", "images", "phone", "email", "name",
-    "city", "niche",
+    "old_site_state", "brand_colors", "images", "products", "phone", "email",
+    "name", "city", "niche",
 )
+
+# Готовые тексты free-слотов прямо в карточке лида: {«вариант.слот»: строка}.
+# Ключ есть — модель за черновиком не зовётся вовсе (режим экономии API).
+DEV_TEXTS_KEY = "_dev_free_texts"
 
 # Описание черновика для <draft> письма: по одной формуле на вариант секции.
 # Модель здесь не участвует — письмо должно называть то, что на странице
-# действительно есть, а не то, что складно звучит.
+# действительно есть, а не то, что складно звучит. Порядок — как на странице;
+# вариант без формулы означал бы секцию, о которой письмо промолчит, поэтому
+# полноту таблицы держит тест против load_library().
 SUMMARY_PARTS = {
+    "header_logo": {"uk": "шапка з логотипом",
+                    "en": "a header with the logo"},
+    "header_wordmark": {"uk": "шапка з назвою",
+                        "en": "a header with the name"},
+    "hero_bg_photo": {"uk": "головна з фото на весь екран",
+                      "en": "homepage with a full-width photo"},
     "hero_split_map": {"uk": "головна з картою і телефоном",
                        "en": "homepage with a map and phone"},
     "hero_photo_left": {"uk": "головна з фото і телефоном",
                         "en": "homepage with a photo and phone"},
     "hero_type_only": {"uk": "головна з телефоном угорі",
                        "en": "homepage with the phone on top"},
+    "products_grid": {"uk": "товари з фото", "en": "products with photos"},
+    "products_list": {"uk": "перелік товарів", "en": "a list of products"},
     "svc_cards_3": {"uk": "картки послуг", "en": "service cards"},
     "svc_list_icons": {"uk": "перелік послуг", "en": "a list of services"},
+    "svc_two_col_rule": {"uk": "послуги рядками",
+                         "en": "services line by line"},
+    "gallery_strip": {"uk": "смуга фотографій", "en": "a strip of photos"},
     "proof_stats_bar": {"uk": "оцінка і відгуки з Google",
                         "en": "the Google rating and reviews"},
+    "about_note": {"uk": "абзац про компанію",
+                   "en": "a note about the company"},
+    "info_hours_card": {"uk": "години роботи таблицею",
+                        "en": "opening hours in a table"},
     "cta_form_short": {"uk": "форма звернення", "en": "an enquiry form"},
     "footer_nap": {"uk": "контакти і години", "en": "contacts and hours"},
 }
 SUMMARY_MIN_WORDS, SUMMARY_MAX_WORDS = 5, 12
 
 PREVIEW_HOST_SUFFIX = ".tobisitepreview.com"
+# Стейджинг картинок обогащения (дорожка III). Подчёркивание не проходит
+# проверку слага в воркере, поэтому снаружи этих файлов не видно — до тех пор,
+# пока публикация не скопирует их в `<slug>/img/` уже на стороне бакета.
+ENRICH_PREFIX = "_enrich"
+IMG_DIR = "img"
+# Сколько картинок уезжает в папку превью: логотип и ещё семь. Столько же
+# кладёт в стейджинг скрейп (site_images.MAX_STAGED), но потолок стоит и здесь:
+# в бакете может лежать стейджинг, снятый по прежним правилам, а платит за
+# лишние килобайты LCP превью.
+MEDIA_BUDGET = 8
+# Порядок копирования картинок, на которые страница не ссылается: сначала то,
+# что видно раньше всего, если секция с ним однажды выиграет пересборку.
+MEDIA_ORDER = ("logo", "hero_bg", "portrait")
+# Всё, что страница дотягивает из собственной папки. Других путей у картинок
+# превью не бывает: на чужой хост движок не ссылается.
+PAGE_IMG = re.compile(rf'<img[^>]+\bsrc="/{IMG_DIR}/([^"/]+)"')
 # Ключи бакета живут в окружении, а не в config: бот стартует и без них,
 # и тогда публикации просто нет.
 R2_ENV = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
@@ -136,6 +180,8 @@ class GcResult:
     deleted: list[tuple[int, str, str]] = field(default_factory=list)
     kept_sold: int = 0
     failed: list[str] = field(default_factory=list)
+    # стейджинг обогащения лидов, у которых превью уже не будет
+    swept: list[int] = field(default_factory=list)
 
 
 async def build_draft(lead_id: int, *,
@@ -147,6 +193,7 @@ async def build_draft(lead_id: int, *,
             return BuildResult(False, reason="лид недоступен")
         profile = await build_profile(s, lead)
         author = await s.get(Worker, lead.worker_id)
+        ready_texts = (lead.enrichment or {}).get(DEV_TEXTS_KEY)
 
     composition = compose_for(profile)
     if not composition.ok:
@@ -157,8 +204,11 @@ async def build_draft(lead_id: int, *,
                            reason="данных не хватает на страницу")
 
     lang = str(profile.lang.value)
-    slots = await slot_gen.fill_slots(profile, composition.sections, lang,
-                                      lead_id=lead.id)
+    if ready_texts is None:
+        slots = await slot_gen.fill_slots(profile, composition.sections, lang,
+                                          lead_id=lead.id)
+    else:
+        slots = _ready_slots(ready_texts, composition.sections)
     if not slots.ok:
         return await _save(lead, "failed", actor_tg_id, reason=slots.reason)
 
@@ -215,6 +265,11 @@ async def build_profile(session, lead) -> Profile:
     # обогащение идёт последним: работник заполнял его уже под черновик
     data |= {k: v for k, v in (lead.enrichment or {}).items()
              if k in ENRICHMENT_FIELDS}
+    # картинки и товары приходят и от скрейпа, и из формы дозаполнения, а
+    # шаблон секции ставит их поля в разметку без проверок
+    for key, clean in (("images", _clean_images), ("products", _clean_products)):
+        if key in data:
+            data[key] = clean(data[key])
     return Profile.from_dict(data)
 
 
@@ -321,8 +376,10 @@ async def publish_draft(draft_id: int, html: str, slug: str,
                         actor_tg_id: int = config.ADMIN_TG_ID) -> str:
     """Выложить страницу в R2 и записать адрес превью в базу (10.11, 10.13).
 
-    Файл ровно один: bundle.css, шрифты и картинки отдаёт сам Worker из своих
-    [assets], в бакете лежит только index.html черновика.
+    Здесь выкладывается только index.html: bundle.css и шрифты отдаёт сам
+    Worker из своих [assets], а картинки лида уже лежат в `<slug>/img/` —
+    их положил copy_staged_images ДО этого вызова, чтобы страница не успела
+    открыться раньше собственных картинок.
 
     Запись в базу — одной транзакцией с адресом на лиде: разойдись они, лид
     остался бы со ссылкой на страницу, которой нет, или наоборот.
@@ -432,7 +489,42 @@ async def expire_previews(*,
             failed.append(f"#{lead.id}: {e}")
             continue
         deleted.append((lead.id, draft.r2_prefix, why))
-    return GcResult(deleted=deleted, kept_sold=sold, failed=failed)
+    try:
+        swept = await sweep_staging()
+    except Exception as e:
+        log.exception("стейджинг обогащения не подметён")
+        failed.append(f"стейджинг: {e}")
+        swept = []
+    return GcResult(deleted=deleted, kept_sold=sold, failed=failed, swept=swept)
+
+
+async def sweep_staging() -> list[int]:
+    """Снести стейджинг обогащения у лидов, которым превью уже не показывать.
+
+    Ходит по всему префиксу, а не по строкам черновиков: обогащение бывает и у
+    лида, черновик которого так и не собрали, и его картинки иначе остались бы
+    в бакете навсегда. Второй эшелон — 180-дневное lifecycle-правило бакета.
+    """
+    keys = await list_keys(f"{ENRICH_PREFIX}/", limit=10_000)
+    staged: dict[int, list[str]] = {}
+    for key in keys:
+        parts = key.split("/")
+        if len(parts) > 2 and parts[1].isdigit():
+            staged.setdefault(int(parts[1]), []).append(key)
+    if not staged:
+        return []
+    async with Session() as s:
+        alive = set(await s.scalars(
+            select(Lead.id).where(Lead.id.in_(staged),
+                                  Lead.deleted_at.is_(None),
+                                  Lead.cancelled_at.is_(None),
+                                  Lead.status.not_in(CLOSED_STATUSES))
+        ))
+    gone = []
+    for lead_id in sorted(set(staged) - alive):
+        await delete_keys(staged[lead_id])
+        gone.append(lead_id)
+    return gone
 
 
 # --- внутреннее ---------------------------------------------------------------
@@ -475,6 +567,94 @@ def bucket_name(name: str | None = None) -> str:
     return name or os.getenv("R2_BUCKET") or DEFAULT_BUCKET
 
 
+def enrich_prefix(lead_id: int) -> str:
+    """Где лежат картинки, снятые с сайта лида, до публикации превью."""
+    return f"{ENRICH_PREFIX}/{lead_id}/"
+
+
+def page_images(html: str) -> list[str]:
+    """Имена файлов, на которые ссылается страница, в порядке появления."""
+    names = []
+    for name in PAGE_IMG.findall(html or ""):
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def media_manifest(staged, html: str = "",
+                   budget: int = MEDIA_BUDGET) -> list[str]:
+    """Какие ключи стейджинга едут в папку превью и в каком порядке.
+
+    Первыми идут те, на которые ссылается сама страница: превью с дырой на
+    месте фотографии хуже превью без лишнего файла, и порядок появления в
+    разметке — это порядок логотип, фон первого экрана, товары, галерея.
+    Остаток бюджета добирают прочие картинки стейджинга — их подхватит
+    пересборка, если состав страницы изменится.
+
+    Страница просит больше картинок, чем помещается в бюджет, — это не повод
+    выложить её без части файлов: публикация обрывается тут же.
+    """
+    by_name = {key.rsplit("/", 1)[-1]: key for key in staged}
+    wanted = page_images(html)
+    manifest = [by_name[name] for name in wanted if name in by_name]
+    if len(manifest) > budget:
+        raise ValueError(f"страница ссылается на {len(manifest)} картинок "
+                         f"при бюджете {budget}")
+    missing = [name for name in wanted if name not in by_name]
+    if missing:
+        # картинку вписали в карточку руками, а файла в стейджинге нет:
+        # страница соберётся, но на её месте останется пусто
+        log.warning("в стейджинге нет картинок страницы: %s", ", ".join(missing))
+    for name in sorted(set(by_name) - set(wanted), key=_media_rank):
+        if len(manifest) >= budget:
+            break
+        manifest.append(by_name[name])
+    return manifest
+
+
+async def copy_staged_images(lead_id: int, slug: str,
+                             html: str = "") -> list[str]:
+    """Перенести картинки лида из стейджинга в папку превью (дорожка III).
+
+    Копирует бакет сам (CopyObject): байты через бота не проходят вовсе.
+    Что именно копировать, решает media_manifest по самой странице. Не
+    скопировалось — исключение: публиковать страницу, которая ссылается на
+    картинки, которых в бакете нет, хуже, чем не публиковать вовсе.
+
+    Порядок «сначала копии, потом уборка» — не вкусовщина. Слаг у повторной
+    публикации тот же, и по нему уже ходит клиент, которому мы отправили
+    ссылку. Снеси мы папку первой — оборвавшаяся на середине копия оставила бы
+    живую страницу с дырами вместо фотографий насовсем: старых файлов уже нет,
+    новые не доехали, а index.html так и остался прежним. Копия поверх
+    одноимённого файла безопасна: пока новая страница не выложена, старая
+    ссылается на те же имена.
+
+    Хвост прошлой публикации (файлы, которых в нынешнем манифесте нет)
+    сносится последним и сбоем публикации не считается: после нового
+    index.html на него уже ничто не ссылается, а не убранное доберёт
+    expire_previews.
+    """
+    staged = await list_keys(f"{enrich_prefix(lead_id)}{IMG_DIR}/", limit=100)
+    manifest = media_manifest(staged, html)
+    old = await list_keys(f"{slug}/{IMG_DIR}/", limit=1000)
+    s3, bucket, copied = s3_client(), bucket_name(), []
+    for key in manifest:
+        target = f"{slug}/{IMG_DIR}/{key.rsplit('/', 1)[-1]}"
+        await asyncio.to_thread(
+            s3.copy_object, Bucket=bucket,
+            CopySource={"Bucket": bucket, "Key": key}, Key=target,
+        )
+        copied.append(target)
+    stale = [key for key in old if key not in copied]
+    if stale:
+        try:
+            await delete_keys(stale)
+        except Exception:
+            log.warning("лид %s: хвост прошлой публикации не убран под %s/%s/",
+                        lead_id, slug, IMG_DIR, exc_info=True)
+    return copied
+
+
 async def list_keys(prefix: str, limit: int = 1000) -> list[str]:
     """Ключи под префиксом. Бакет отдаёт их страницами по 1000."""
     s3, keys, token = s3_client(), [], None
@@ -515,16 +695,28 @@ async def delete_keys(keys) -> int:
 
 async def _publish(lead, draft_id: int, html: str,
                    actor_tg_id: int) -> PublishResult:
-    """Резерв слага -> выкладка -> запись адреса. Сбой R2 черновик не отменяет.
+    """Резерв слага -> картинки -> страница -> запись адреса.
 
     Порядок именно такой: слаг в базе появляется раньше объекта в бакете, и
-    объекта без строки о нём не остаётся даже при упавшей транзакции.
+    объекта без строки о нём не остаётся даже при упавшей транзакции. Картинки
+    идут раньше index.html — иначе первый же открывший превью увидит страницу
+    с дырами на месте фотографий.
+
+    Сбой R2 черновик не отменяет: он остаётся в базе, а выкладку повторит
+    /publish по тому же слагу.
     """
     try:
         slug = await reserve_slug(draft_id, lead)
     except Exception as e:
         log.exception("лид %s: слаг не закреплён", lead.id)
         return PublishResult(False, reason=f"слаг не закреплён: {e}")
+    try:
+        await copy_staged_images(lead.id, slug, html)
+    except Exception as e:
+        log.exception("лид %s: картинки превью не скопированы", lead.id)
+        await _release_slug(draft_id)
+        return PublishResult(False, slug=slug,
+                             reason=f"картинки не скопированы: {e}")
     try:
         host = await publish_draft(draft_id, html, slug, actor_tg_id=actor_tg_id)
     except Exception as e:
@@ -671,6 +863,42 @@ def _request_text(missing) -> str:
     return "\n".join(f"• {hint}" for hint in missing)
 
 
+def _ready_slots(texts, sections) -> slot_gen.SlotResult:
+    """Готовые тексты слотов вместо вызова модели (дельта 27.08, экономия API).
+
+    Тексты пишет подписочный агент и кладёт их в карточку лида ключом
+    DEV_TEXTS_KEY; бот их только расставляет по композиции. Пропущенный,
+    слишком длинный или вообще не строковый ключ — ровно то же, что пустой
+    ответ модели: слот остаётся пустым, и дальше судьбу секции решает лестница
+    деградации site_factory.
+
+    Не-строку тут именно выбрасывают, а не приводят к строке: словарь, попавший
+    в карточку вместо текста, уехал бы на страницу клиента питоновским repr.
+    """
+    texts = texts if isinstance(texts, dict) else {}
+    final, empty = {}, []
+    for spec in slot_gen.slot_specs(sections):
+        raw = texts.get(spec["slot"])
+        value = raw.strip() if isinstance(raw, str) else ""
+        limit = spec.get("max_chars")
+        if limit and len(value) > limit:
+            value = ""
+        final[spec["slot"]] = value
+        if not value:
+            empty.append(spec["slot"])
+    return slot_gen.SlotResult(True, texts=final, empty=empty,
+                               model="", prompt_version="")
+
+
+def _media_rank(name: str) -> tuple:
+    """Порядок картинок вне страницы: роли по MEDIA_ORDER, потом photo-2, -3…"""
+    stem = name.rsplit(".", 1)[0]
+    if stem in MEDIA_ORDER:
+        return (MEDIA_ORDER.index(stem), 0, name)
+    number = stem.rpartition("-")[2]
+    return (len(MEDIA_ORDER), int(number) if number.isdigit() else 99, name)
+
+
 def _image_ids(composition) -> list[str]:
     return sorted({image["src"]
                    for section in composition.sections
@@ -684,11 +912,64 @@ def _trace_lang(trace: dict) -> str:
 
 
 def _palette(profile: Profile) -> dict:
-    tokens = render.load_tokens()
-    preset = render.resolve_preset(
-        render.preset_for(profile.domain_norm, tokens), tokens
-    )
-    return preset["palette"]
+    return render.palette_for(profile)
+
+
+def _clean_images(value) -> dict:
+    """Белый список картинок в форме, которую ждёт движок: {имя: {src,w,h}}.
+
+    Размеры обязательны наравне со ссылкой: они держат место под фото, пока оно
+    грузится, и без них страница дёргается на глазах у клиента. Запись, где нет
+    хотя бы одного из трёх полей, — не картинка, и до разметки она не доходит.
+    """
+    out = {}
+    for name, item in (value or {}).items():
+        image = _clean_image(item)
+        if image:
+            out[str(name)] = image
+    return out
+
+
+def _clean_image(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    src = str(item.get("src") or "").strip()
+    width, height = _size(item.get("width")), _size(item.get("height"))
+    if not (src and width and height):
+        return None
+    return {"src": src, "width": width, "height": height}
+
+
+def _clean_products(value) -> list[dict]:
+    """Товары в форме движка: [{name, price?, image?}].
+
+    Товар без названия показать нечем; цена — строка ровно та, что пишет сам
+    бизнес; картинка проходит те же три поля, что и остальные снимки.
+    """
+    out = []
+    for item in value or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"name": name}
+        price = str(item.get("price") or "").strip()
+        if price:
+            row["price"] = price
+        image = _clean_image(item.get("image"))
+        if image:
+            row["image"] = image
+        out.append(row)
+    return out
+
+
+def _size(value) -> int | None:
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
 
 
 def _rating(value) -> float | None:
