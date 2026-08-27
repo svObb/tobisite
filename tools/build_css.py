@@ -1,4 +1,4 @@
-"""Сборка общего бандла site_factory через standalone-CLI Tailwind v4.
+"""Сборка общей статики site_factory: бандл Tailwind v4 плюс скрипты превью.
 
 Standalone-бинарник выбран, чтобы в проекте не появился Node (13-шаблоны §2):
 бандл собирается здесь один раз на всю библиотеку, а генерация черновика
@@ -14,6 +14,7 @@ Standalone-бинарник выбран, чтобы в проекте не по
 import argparse
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -23,6 +24,11 @@ SOURCE = ROOT / "site_factory" / "css" / "source.css"
 FONTS = ROOT / "site_factory" / "build" / "fonts" / "fonts.css"
 OUT = ROOT / "site_factory" / "build" / "bundle.css"
 CLI = ROOT / "tools" / "tailwindcss.exe"
+
+# Скрипты превью лежат рядом с исходником CSS и уезжают в build/ как есть:
+# минифицировать нечего (lenis.js уже минифицирован, свои файлы — полсотни
+# строк), а воркер отдаёт всю папку build/ по префиксу /assets.
+SCRIPTS_DIR = ROOT / "site_factory" / "js"
 
 RELEASE_API = "https://api.github.com/repos/tailwindlabs/tailwindcss/releases/latest"
 ASSET = "tailwindcss-windows-x64.exe"
@@ -72,7 +78,19 @@ def main():
         return result.returncode
 
     print(f"bundle.css: {OUT.stat().st_size / 1024:.1f} КБ")
+    for script in copy_scripts():
+        print(f"{script.name}: {script.stat().st_size / 1024:.1f} КБ")
     return 0
+
+
+def copy_scripts() -> list[pathlib.Path]:
+    """site_factory/js/*.js -> site_factory/build/. Отдаёт скопированное."""
+    copied = []
+    for source in sorted(SCRIPTS_DIR.glob("*.js")):
+        target = OUT.parent / source.name
+        shutil.copyfile(source, target)
+        copied.append(target)
+    return copied
 
 
 if __name__ == "__main__":

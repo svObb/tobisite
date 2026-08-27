@@ -1,0 +1,19 @@
+# Товары с картинками. Название, цена и фотография приходят с сайта лида
+# одним элементом (source: item), поэтому цену движок не форматирует и валюту
+# не подставляет — строка ровно та, которую пишет сам магазин.
+# group_filter снимает товары без картинки до проверки repeat: пустых рамок
+# в сетке не бывает, лучше уйти на ступень ниже (products_list).
+id: products_grid
+role: products
+requires: {products_with_images: ">=3"}
+prefers: {products_with_images: "3..", has_prices: true}
+image_slots: 1
+slots:
+  - {name: section_title, type: free, max_chars: 42, lang: from_lead}
+  - {name: product_name, type: fact, source: whitelist, group: products, repeat: 3..6, max_chars: 34, group_filter: has_image}
+  - {name: product_image, type: fact, source: item, group: products, repeat: same_as_group}
+  - {name: product_price, type: fact, source: item, group: products, repeat: same_as_group, max_chars: 24, optional: true}
+# images: 1 на секцию, а не на товар. Иначе perf_cost растёт вместе с числом
+# карточек, и товарная сетка не выигрывает у списка никогда (engine/score.py).
+perf: {est_dom_nodes: 40, images: 1}
+a11y: {heading_level: 2}

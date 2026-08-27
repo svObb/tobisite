@@ -41,6 +41,19 @@ def fetch(url, binary=False):
     return data if binary else json.loads(data)
 
 
+def check_subsets(meta, subsets):
+    """Сабсеты обязаны быть в ответе, а не в нашей надежде.
+
+    google-webfonts-helper на неизвестный сабсет не ругается — он молча отдаёт
+    шрифт без него. Для кириллицы это значит превью украинского лида, набранное
+    системным запасным шрифтом: вёрстка та же, а буквы чужие. Проверяем meta.
+    """
+    missing = [name for name in subsets if name not in (meta.get("subsets") or [])]
+    if missing:
+        raise SystemExit(f"{meta['id']}: нет сабсетов {', '.join(missing)} — "
+                         f"есть {', '.join(meta.get('subsets') or ['ничего'])}")
+
+
 def variant_url(meta, weight):
     """Ссылка на woff2 нужного начертания в ответе google-webfonts-helper."""
     for variant in meta["variants"]:
@@ -77,6 +90,7 @@ def main():
 
     for family, spec in tokens["fonts"].items():
         meta = fetch(API.format(id=spec["gwfh_id"], subsets=subsets))
+        check_subsets(meta, tokens["subsets"])
         for weight in weights:
             filename = f"{spec['gwfh_id']}-{weight}.woff2"
             path = OUT_DIR / filename

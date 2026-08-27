@@ -1,13 +1,13 @@
 {%- set s = section.slots -%}
 <section id="{{ section.id }}" class="border-b border-line bg-paper py-section">
-  <div class="mx-auto w-full max-w-6xl px-5 sm:px-8">
-    <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm">{{ s.eyebrow }}</p>
-    <h1 class="mt-4 max-w-[16ch] font-title text-4xl leading-[1.08] tracking-tight text-balance break-words sm:text-6xl lg:text-7xl">{{ s.headline }}</h1>
+  <div class="align-hero w-full px-gutter">
+    <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm" data-reveal>{{ s.eyebrow }}</p>
+    <h1 class="mt-4 max-w-[16ch] font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
     <div class="mt-6 h-px w-24 bg-accent" aria-hidden="true"></div>
-    <p class="mt-6 max-w-[var(--measure)] text-base leading-relaxed text-muted sm:text-lg">{{ s.lede }}</p>
-    <div class="mt-flow flex flex-col gap-3 sm:flex-row sm:items-center">
-      <a href="{{ s.phone_href }}" class="rounded-preset bg-accent-ink px-6 py-3 text-center font-medium text-accent-on">{{ s.call_label }}</a>
-      <a href="#{{ s.secondary_target }}" class="rounded-preset border border-line px-6 py-3 text-center font-medium text-ink">{{ s.secondary_label }}</a>
+    <p class="mt-6 max-w-[var(--measure)] text-lede text-muted" data-reveal="after">{{ s.lede }}</p>
+    <div class="btn-row mt-flow" data-reveal="after">
+      <a href="{{ s.phone_href }}" class="btn" data-hit="cta_click">{{ s.call_label }}</a>
+      <a href="#{{ s.secondary_target }}" class="btn btn-quiet">{{ s.secondary_label }}</a>
     </div>
   </div>
 </section>

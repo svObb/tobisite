@@ -50,10 +50,38 @@ def test_downgrade_inside_role(lawyer_light):
     _, trace = render(lawyer_light)
     hero = role_record(trace, "hero")
     ladder_top = {r["variant"] for r in hero["rejected"]}
-    assert ladder_top == {"hero_split_map", "hero_photo_left"}
+    assert ladder_top == {"hero_split_map", "hero_bg_photo", "hero_photo_left"}
     assert hero["chosen"] == "hero_type_only"
     assert {r["kind"] for r in rejected_reasons(hero, "hero_split_map")} == \
         {gates.MISSING_IMAGE}
+
+
+def test_header_falls_back_to_the_wordmark(lawyer_rich, brand_shop):
+    """Логотипа нет — шапка остаётся: название набирается display-шрифтом."""
+    _, plain = render(lawyer_rich)
+    assert role_record(plain, "header")["chosen"] == "header_wordmark"
+    _, branded = render(brand_shop)
+    assert role_record(branded, "header")["chosen"] == "header_logo"
+    assert {(r["field"], r["kind"]) for r in
+            rejected_reasons(role_record(plain, "header"), "header_logo")} == \
+        {("has_logo", gates.MISMATCH), ("images", gates.MISSING_IMAGE)}
+
+
+def test_products_grid_beats_the_list_when_there_are_pictures(products_lead):
+    """Картинка стоит perf_cost — вес товарной сетки обязан его перекрывать."""
+    _, trace = render(products_lead)
+    products = role_record(trace, "products")
+    assert products["chosen"] == "products_grid"
+    totals = {c["variant"]: c["total"] for c in products["candidates"]}
+    assert totals["products_grid"] > totals["products_list"]
+
+
+def test_products_without_pictures_fall_to_the_list(generic_light):
+    _, trace = render(generic_light)
+    products = role_record(trace, "products")
+    assert products["chosen"] == "products_list"
+    assert {r["kind"] for r in rejected_reasons(products, "products_grid")} == \
+        {gates.MISMATCH}
 
 
 def test_optional_role_is_dropped(lawyer_light):

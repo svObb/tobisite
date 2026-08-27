@@ -4,12 +4,18 @@ import re
 
 import pytest
 
+from site_factory.engine import slots
 from site_factory.engine.render import ROOT, load_library, load_recipe
 
 RECIPES = sorted(path.stem for path in (ROOT / "recipes").glob("*.yaml"))
 LANGS = ("uk", "en")
 COMMENT = re.compile(r"\{#.*?#\}", re.S)
 CYRILLIC = re.compile(r"[Ѐ-ӿ]")
+
+# Порядок ролей на странице один на все рецепты: рецепт решает, какой вариант
+# роли взять, но не в каком месте страницы роль стоит.
+PAGE_ORDER = ("header", "hero", "products", "services", "gallery", "proof",
+              "about", "info", "cta", "footer")
 
 
 @pytest.fixture(params=RECIPES)
@@ -37,8 +43,17 @@ def test_affinity_falls_along_the_ladder(recipe):
         assert weights == sorted(weights, reverse=True), f"{recipe['id']}: {role}"
 
 
+def test_every_variant_is_reachable_from_some_ladder():
+    """Вариант, которого нет ни в одной лестнице, — мёртвый вес библиотеки."""
+    used = {variant for name in RECIPES
+            for ladder in load_recipe(name)["downgrade_ladder"].values()
+            for variant in ladder}
+    assert used == set(load_library())
+
+
 def test_roles_and_thresholds_agree(recipe):
     order = recipe["roles_order"]
+    assert tuple(order) == PAGE_ORDER
     assert set(recipe["downgrade_ladder"]) == set(order)
     assert set(recipe.get("optional_roles") or []) <= set(order)
     assert 0 < recipe["min_sections"] <= len(order)
@@ -47,11 +62,52 @@ def test_roles_and_thresholds_agree(recipe):
         assert set(substitutes) <= set(order)
 
 
+def test_page_frame_roles_are_never_optional(recipe):
+    """Шапка, первый экран, форма и футер — каркас: они не выбывают."""
+    assert not set(recipe.get("optional_roles") or []) & \
+        {"header", "hero", "cta", "footer"}
+
+
 def test_free_defaults_cover_both_languages(recipe):
     for lang in LANGS:
         page = recipe["free_defaults"][lang]["_page"]
         assert page["skip_to_content"] and page["description"]
         assert recipe["free_defaults"][lang]["_common"]
+
+
+def test_free_defaults_cover_every_slot_of_every_ladder(recipe):
+    """Заготовки закрывают каждый обязательный free-слот каждой ступени.
+
+    Не закрыли — вариант выбывает по NO_DEFAULT на живом лиде, а не здесь.
+    """
+    library = load_library()
+    for lang in LANGS:
+        for ladder in recipe["downgrade_ladder"].values():
+            for variant in ladder:
+                for spec in library[variant].get("slots") or []:
+                    if spec["type"] != "free" or spec.get("optional"):
+                        continue
+                    if spec.get("source") == "composer":
+                        continue
+                    value = slots._default(recipe, lang, variant, spec["name"])
+                    assert value is not slots._MISSING, \
+                        f"{recipe['id']}/{lang}: нет {variant}.{spec['name']}"
+
+
+def test_free_defaults_fit_the_slot_limits(recipe):
+    """Заготовка длиннее max_chars — это тихо выбывающая секция."""
+    library = load_library()
+    for lang in LANGS:
+        for ladder in recipe["downgrade_ladder"].values():
+            for variant in ladder:
+                for spec in library[variant].get("slots") or []:
+                    limit = spec.get("max_chars")
+                    if spec["type"] != "free" or not limit:
+                        continue
+                    value = slots._default(recipe, lang, variant, spec["name"])
+                    for text in _texts(value if value is not slots._MISSING else ""):
+                        assert len(text) <= limit, \
+                            f"{recipe['id']}/{lang}: {variant}.{spec['name']}"
 
 
 def test_free_defaults_have_no_numbers(recipe):

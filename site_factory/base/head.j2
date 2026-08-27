@@ -4,7 +4,11 @@
     - шрифты только самохостные: @font-face живёт в bundle.css (его собирает
       tools/build_css.py из build/fonts/fonts.css), ссылок на fonts.googleapis.com
       здесь нет и быть не может — Landgericht München I, 3 O 17493/20;
-    - preload только двух начертаний 400, которыми набран первый экран.
+    - preload только двух начертаний 400, которыми набран первый экран;
+    - скрипты только defer: без них страница обязана работать целиком, JS
+      добавляет движение и счётчик, а не смысл. Общие для всех превью
+      перечислены в engine/render.BASE_SCRIPTS, свои секция просит флагом js
+      своего контракта.
 -#}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,4 +28,7 @@
 <link rel="preload" as="font" type="font/woff2" crossorigin href="{{ site.assets_base }}/fonts/{{ preset.fonts.display.gwfh_id }}-400.woff2">
 {%- endif %}
 <link rel="stylesheet" href="{{ site.assets_base }}/bundle.css">
+{%- for script in site.scripts %}
+<script defer src="{{ script }}"></script>
+{%- endfor %}
 {% include 'base/schema_localbusiness.j2' -%}

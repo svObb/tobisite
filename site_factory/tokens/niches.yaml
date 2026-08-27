@@ -1,0 +1,83 @@
+# Ниша лида -> ключ рецепта и пул пресетов. Загружает engine/niches.py.
+#
+# aliases: слово, которым нишу называет работник (или карточка лида), в нижнем
+# регистре -> ключ. Слова вне таблицы остаются собой: рецепта под них нет, их
+# обслуживает generic, а пресет берётся из всего списка presets.yaml.
+#
+# pools: ключ ниши -> пресеты, которыми эта ниша вообще может быть собрана.
+# Составлены из matches архетипов дизайн-библиотеки
+# (tobisite-launch/design-library/archetypes/arch-01..08): сначала архетипы,
+# где ниша primary, затем alt, внутри — по номеру архетипа.
+#
+# ПОРЯДОК ПУЛА — ЧАСТЬ КОНТРАКТА. Внутри пула пресет выбирается как
+# sha256(domain_norm) % len(pool), поэтому перестановка меняет дизайн лидам,
+# с которыми уже идёт переписка. Дописывать — только в конец пула.
+#
+# Пулы намеренно узкие: ниша решает, каким сайт вообще может быть, домен —
+# каким он будет. Расширятся вместе с архетипами arch-09..16 (дорожка I, W6).
+
+aliases:
+  юрист: lawyer
+  юристы: lawyer
+  адвокат: lawyer
+  адвокати: lawyer
+  юридические услуги: lawyer
+  юридичні послуги: lawyer
+  lawyer: lawyer
+  law firm: lawyer
+  attorney: lawyer
+
+  стоматология: dental
+  стоматологія: dental
+  стоматолог: dental
+  зубной врач: dental
+  dentist: dental
+  dental: dental
+
+  автосервис: auto_service
+  автосервіс: auto_service
+  сто: auto_service
+  автомастерская: auto_service
+  автомайстерня: auto_service
+  auto service: auto_service
+  car service: auto_service
+  car repair: auto_service
+
+  кафе/ресторан: cafe
+  кафе: cafe
+  ресторан: cafe
+  кав'ярня: cafe
+  кофейня: cafe
+  cafe: cafe
+  restaurant: cafe
+  coffee shop: cafe
+
+  салон красоты: beauty
+  салон краси: beauty
+  парикмахерская: beauty
+  перукарня: beauty
+  барбершоп: beauty
+  beauty salon: beauty
+  hair salon: beauty
+  barbershop: beauty
+
+  гостиница: hotel
+  готель: hotel
+  отель: hotel
+  hotel: hotel
+  guest house: hotel
+
+  строительство: construction
+  будівництво: construction
+  строительная компания: construction
+  будівельна компанія: construction
+  construction: construction
+
+pools:
+  lawyer: [corporate-trust]
+  dental: [clinical-light, editorial-warm, warm-table, friendly-pop]
+  auto_service: [bold-trade, friendly-pop, clinical-light, corporate-trust]
+  cafe: [deep-premium, warm-table, editorial-warm, friendly-pop]
+  beauty: [editorial-warm, salon-monochrome, deep-premium]
+  hotel: [editorial-warm, deep-premium, warm-table, salon-monochrome]
+  construction: [editorial-warm, bold-trade, corporate-trust]

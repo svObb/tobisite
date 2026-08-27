@@ -4,7 +4,7 @@ import re
 import pytest
 
 from site_factory.engine.checks import a11y, form_e2e, nap, placeholders, run_all, scroll
-from site_factory.engine.render import load_tokens, preset_for, render
+from site_factory.engine.render import load_tokens, palette_for, render
 
 
 @pytest.fixture
@@ -13,15 +13,13 @@ def page(lawyer_rich):
     return html
 
 
-@pytest.fixture
-def palette(lawyer_rich):
-    return preset_for(lawyer_rich.domain_norm, load_tokens())["palette"]
-
-
 def test_every_draft_passes_every_check(buildable_profile):
-    html, trace = render(buildable_profile)
-    preset = next(p for p in load_tokens()["presets"] if p["id"] == trace["preset"])
-    assert run_all(html, buildable_profile, preset["palette"]) == {}
+    """Контраст считается по палитре страницы, а не по палитре пресета.
+
+    Они расходятся у лида с бренд-цветами — и проверять надо ту, что в HTML.
+    """
+    html, _ = render(buildable_profile)
+    assert run_all(html, buildable_profile, palette_for(buildable_profile)) == {}
 
 
 def test_all_presets_pass_contrast():

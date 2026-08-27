@@ -6,14 +6,20 @@
                id, archetype, mood, radius_px, density,
                palette{paper, ink, accent, accent_ink, accent_on},
                fonts{display{family, gwfh_id, stack}, body{...}},
-               space{section_py, flow, measure}
-    site     — lang, title, description, assets_base, ui{skip_to_content}
+               space{section_py, flow, measure}, scale{h1, h2, lede},
+               shadow, button, align
+    site     — lang, title, description, assets_base, scripts[], ui{skip_to_content}
     facts    — белый список фактов лида (NAP, часы, рейтинг) для JSON-LD и футера
     sections — [{id, role, template, slots{}, images{}}] в порядке рецепта
 
   Пресет применяется инлайн-переменными на <html>; css/source.css маппит их
   в @theme. Один bundle.css обслуживает все превью — переменные единственное,
-  что отличает пресеты друг от друга.
+  что отличает пресеты друг от друга. Три токена (button, align, elevation)
+  переменными не выразить — они выбирают правило, а не значение, и приходят
+  data-атрибутами.
+
+  Роль header идёт до <main>: шапка с логотипом не часть содержимого страницы,
+  и заголовков она не несёт — h1 остаётся у hero.
 -#}
 {%- set css_vars = [
   '--paper:' ~ preset.palette.paper,
@@ -27,16 +33,23 @@
   '--section-py:' ~ preset.space.section_py,
   '--flow:' ~ preset.space.flow,
   '--measure:' ~ preset.space.measure,
+  '--h1:' ~ preset.scale.h1,
+  '--h2:' ~ preset.scale.h2,
+  '--lede:' ~ preset.scale.lede,
+  '--shadow:' ~ preset.shadow,
 ] | join(';') -%}
 <!doctype html>
-<html lang="{{ site.lang }}" style="{{ css_vars }}" data-preset="{{ preset.id }}">
+<html lang="{{ site.lang }}" style="{{ css_vars }}" data-preset="{{ preset.id }}" data-btn="{{ preset.button }}" data-align="{{ preset.align }}" data-elev="{{ preset.elevation }}">
 <head>
 {% include 'base/head.j2' -%}
 </head>
 <body class="min-h-screen bg-paper font-body text-ink antialiased">
 <a href="#main" class="sr-only rounded-preset focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:bg-accent-ink focus:px-4 focus:py-2 focus:text-accent-on">{{ site.ui.skip_to_content }}</a>
+{%- for section in sections if section.role == 'header' %}
+{% include section.template %}
+{%- endfor %}
 <main id="main">
-{%- for section in sections if section.role != 'footer' %}
+{%- for section in sections if section.role not in ('header', 'footer') %}
 {% include section.template %}
 {%- endfor %}
 </main>

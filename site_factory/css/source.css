@@ -35,6 +35,23 @@
 
   --spacing-section: var(--section-py);
   --spacing-flow: var(--flow);
+
+  /* Единственное боковое поле страницы — технический отступ, чтобы текст не
+     прилипал к кромке экрана. Полноценных полей у секций нет: содержимое идёт
+     во всю ширину, а длину строки держит --measure на самих абзацах. */
+  --spacing-gutter: clamp(1.15rem, 3.5vw, 4rem);
+
+  /* Кегли заголовков приходят от type_scale пресета: одна шкала на страницу,
+     а не набор произвольных sm:text-5xl в каждом шаблоне. */
+  --text-h1: var(--h1);
+  --text-h1--line-height: 1.08;
+  --text-h2: var(--h2);
+  --text-h2--line-height: 1.16;
+  --text-lede: var(--lede);
+  --text-lede--line-height: 1.6;
+
+  /* Одна кривая на все появления: разнобой в easing читается как случайность. */
+  --ease-reveal: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 @layer base {
@@ -45,5 +62,158 @@
   :focus-visible {
     outline: 2px solid var(--color-accent-ink);
     outline-offset: 2px;
+  }
+
+  /* Требуемая разметка Lenis (dist/lenis.css 1.3.26, MIT, © Studio Freight):
+     плавный скролл отменяет высоту 100% у документа и глушит перехват колеса
+     внутри iframe. Файл целиком не подключаем — это все его правила, которые
+     нужны странице превью. */
+  html.lenis,
+  html.lenis body {
+    height: auto;
+  }
+
+  .lenis.lenis-smooth iframe {
+    pointer-events: none;
+  }
+
+  .lenis [data-lenis-prevent] {
+    overscroll-behavior: contain;
+  }
+}
+
+@layer components {
+  /* Кнопка. Форма у всех пресетов одна, заливку выбирает токен button
+     атрибутом data-btn на <html> — одна точка стиля вместо трёх наборов
+     классов в шаблонах (решение F). */
+  .btn {
+    display: inline-block;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 0.8rem 1.6rem;
+    font-weight: 500;
+    line-height: 1.3;
+    text-align: center;
+  }
+
+  [data-btn="fill"] .btn {
+    background-color: var(--accent-ink);
+    color: var(--accent-on);
+  }
+
+  [data-btn="outline"] .btn {
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
+  }
+
+  /* Приглушённая заливка: акцент подмешан в бумагу, текст остаётся основным.
+     Контраст ink по такой подложке проверяет checks/a11y.py (BUTTON_SOFT_MIX);
+     процент здесь и там обязан совпадать. */
+  [data-btn="soft"] .btn {
+    background-color: color-mix(in oklab, var(--accent) 14%, var(--paper));
+    color: var(--ink);
+  }
+
+  /* Второе действие рядом с первым: рамка по линейке, без акцента. */
+  .btn-quiet,
+  [data-btn="fill"] .btn-quiet,
+  [data-btn="outline"] .btn-quiet,
+  [data-btn="soft"] .btn-quiet {
+    background-color: transparent;
+    border-color: var(--color-line);
+    color: var(--ink);
+  }
+
+  /* Кнопка поверх фотографии. accent_ink доведён до контраста с бумагой, а не
+     с чужим снимком, — поэтому здесь работает единственная пара, контрастная
+     в любом пресете: бумага и текст по ней. */
+  .btn-photo,
+  [data-btn="fill"] .btn-photo,
+  [data-btn="outline"] .btn-photo,
+  [data-btn="soft"] .btn-photo {
+    background-color: var(--paper);
+    border-color: transparent;
+    color: var(--ink);
+  }
+
+  .btn-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  /* Карточка: коробка с рамкой по линейке и тенью пресета. Границу рисует
+     что-то одно — либо рамка, либо тень; вместе они дают двойной контур,
+     который читается как недосмотр. Что именно, решает токен elevation
+     атрибутом data-elev на <html>, а не набор классов в каждом шаблоне: на
+     flat тень и так none, на raised рамка уходит.
+
+     Селектор идёт по .card, а не по перечню секций: карточка, написанная
+     завтра, получит то же правило тем, что назовётся карточкой. */
+  .card {
+    border: 1px solid var(--color-line);
+    box-shadow: var(--shadow);
+  }
+
+  [data-elev="raised"] .card {
+    border-color: transparent;
+  }
+
+  /* Выравнивание первого экрана — третий токен, который переменной не
+     выразить: он выбирает правило, а не значение. */
+  [data-align="center"] .align-hero {
+    text-align: center;
+  }
+
+  [data-align="center"] .align-hero > * {
+    margin-inline: auto;
+  }
+
+  [data-align="center"] .align-hero .btn-row {
+    justify-content: center;
+  }
+
+  /* Подложка текста поверх фонового фото. Лежит на самом блоке текста, а не на
+     всей секции: сколько текста — столько и затемнения, остальной кадр
+     остаётся фотографией. Наверху сходит на нет по верхнему полю блока.
+
+     Плотность выбрана по худшему снимку: фотография у каждого лида своя, и
+     какой она окажется, мы не знаем. 84% подмешанного ink держат AA и на
+     белом кадре (светлые пресеты, текст бумагой), и на чёрном (тёмные
+     пресеты: там ink светлый, и пара переворачивается вместе с палитрой).
+
+     Растушёвка идёт ровно по верхнему полю блока (--section-py): к первой
+     строке текста плотность уже полная, а выше поля — чистый кадр. */
+  .scrim {
+    background-image: linear-gradient(
+      to top,
+      color-mix(in oklab, var(--ink) 90%, transparent),
+      color-mix(in oklab, var(--ink) 84%, transparent)
+        calc(100% - var(--section-py)),
+      transparent
+    );
+  }
+
+  /* Появление при прокрутке. Начальное состояние ставит не CSS, а сам скрипт
+     (data-motion на <html>): не загрузился — страница просто видна целиком.
+     Порядок один и тот же везде: заголовок, следом текст. */
+  @media (prefers-reduced-motion: no-preference) {
+    [data-motion="on"] [data-reveal] {
+      opacity: 0;
+      transform: translateY(0.9rem);
+      transition:
+        opacity 0.7s var(--ease-reveal),
+        transform 0.7s var(--ease-reveal);
+    }
+
+    [data-motion="on"] [data-reveal="after"] {
+      transition-delay: 0.12s;
+    }
+
+    [data-motion="on"] [data-reveal].is-visible {
+      opacity: 1;
+      transform: none;
+    }
   }
 }

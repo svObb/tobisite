@@ -1,0 +1,13 @@
+# Товары без картинок: прайс-строкой. Ступень ниже products_grid — берётся,
+# когда фотографий у товаров нет или их меньше трёх.
+id: products_list
+role: products
+requires: {product_count: ">=3"}
+prefers: {has_prices: true, products_with_images: "..2"}
+image_slots: 0
+slots:
+  - {name: section_title, type: free, max_chars: 42, lang: from_lead}
+  - {name: product_name, type: fact, source: whitelist, group: products, repeat: 3..8, max_chars: 40}
+  - {name: product_price, type: fact, source: item, group: products, repeat: same_as_group, max_chars: 24, optional: true}
+perf: {est_dom_nodes: 28, images: 0}
+a11y: {heading_level: 2}

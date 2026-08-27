@@ -1,16 +1,18 @@
+{#- Снимок держит левую треть первого экрана: он часть композиции, а не
+    полоса картинки во всю страницу — та бывает только фоном (hero_bg_photo). -#}
 {%- set s = section.slots -%}
 {%- set portrait = section.images.portrait -%}
 <section id="{{ section.id }}" class="border-b border-line bg-paper py-section">
-  <div class="mx-auto grid w-full max-w-6xl gap-flow px-5 sm:px-8 lg:grid-cols-2 lg:items-center">
+  <div class="grid w-full gap-flow px-gutter lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
     <figure class="overflow-hidden rounded-preset-lg bg-surface">
       <img src="{{ portrait.src }}" alt="{{ s.portrait_alt }}" width="{{ portrait.width }}" height="{{ portrait.height }}" class="aspect-[4/3] w-full object-cover lg:aspect-[4/5]" loading="eager" decoding="async" fetchpriority="high">
     </figure>
-    <div>
-      <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm">{{ s.eyebrow }}</p>
-      <h1 class="mt-4 font-title text-3xl leading-[1.12] tracking-tight text-balance break-words sm:text-5xl">{{ s.headline }}</h1>
-      <p class="mt-5 max-w-[var(--measure)] text-base leading-relaxed text-muted sm:text-lg">{{ s.lede }}</p>
-      <div class="mt-flow flex flex-col gap-3 sm:flex-row sm:items-center">
-        <a href="{{ s.phone_href }}" class="rounded-preset bg-accent-ink px-6 py-3 text-center font-medium text-accent-on">{{ s.call_label }}</a>
+    <div class="align-hero">
+      <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm" data-reveal>{{ s.eyebrow }}</p>
+      <h1 class="mt-4 font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
+      <p class="mt-5 max-w-[var(--measure)] text-lede text-muted" data-reveal="after">{{ s.lede }}</p>
+      <div class="btn-row mt-flow" data-reveal="after">
+        <a href="{{ s.phone_href }}" class="btn" data-hit="cta_click">{{ s.call_label }}</a>
         <span class="text-sm text-muted">{{ s.reassurance }}</span>
       </div>
     </div>

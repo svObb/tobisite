@@ -3,24 +3,26 @@
 {%- set s = section.slots -%}
 {%- set map = section.images.map -%}
 <section id="{{ section.id }}" class="border-b border-line bg-paper py-section">
-  <div class="mx-auto grid w-full max-w-6xl gap-flow px-5 sm:px-8 lg:grid-cols-2 lg:items-center">
-    <div>
-      <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm">{{ s.eyebrow }}</p>
-      <h1 class="mt-4 font-title text-3xl leading-[1.12] tracking-tight text-balance break-words sm:text-5xl">{{ s.headline }}</h1>
-      <p class="mt-5 max-w-[var(--measure)] text-base leading-relaxed text-muted sm:text-lg">{{ s.lede }}</p>
-      <dl class="mt-flow grid gap-4 sm:grid-cols-2">
+  <div class="grid w-full gap-flow px-gutter lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-center">
+    <div class="align-hero">
+      <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm" data-reveal>{{ s.eyebrow }}</p>
+      <h1 class="mt-4 font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
+      <p class="mt-5 max-w-[var(--measure)] text-lede text-muted" data-reveal="after">{{ s.lede }}</p>
+      <dl class="mt-flow grid gap-4 sm:grid-cols-2" data-reveal="after">
         <div>
           <dt class="text-xs font-medium tracking-[0.14em] text-muted uppercase">{{ s.address_label }}</dt>
-          <dd class="mt-1 leading-relaxed">{{ s.address }}</dd>
+          <dd class="mt-1 leading-relaxed break-words">{{ s.address }}</dd>
         </div>
         {%- if s.hours %}
         <div>
           <dt class="text-xs font-medium tracking-[0.14em] text-muted uppercase">{{ s.hours_label }}</dt>
-          <dd class="mt-1 leading-relaxed">{{ s.hours }}</dd>
+          <dd class="mt-1 leading-relaxed break-words">{{ s.hours }}</dd>
         </div>
         {%- endif %}
       </dl>
-      <a href="{{ s.phone_href }}" class="mt-flow inline-block rounded-preset bg-accent-ink px-6 py-3 font-medium text-accent-on">{{ s.call_label }}</a>
+      <div class="btn-row mt-flow">
+        <a href="{{ s.phone_href }}" class="btn" data-hit="cta_click">{{ s.call_label }}</a>
+      </div>
     </div>
     <figure class="overflow-hidden rounded-preset-lg border border-line bg-surface">
       <img src="{{ map.src }}" alt="{{ s.map_alt }}" width="{{ map.width }}" height="{{ map.height }}" class="aspect-[4/3] w-full object-cover" loading="eager" decoding="async">

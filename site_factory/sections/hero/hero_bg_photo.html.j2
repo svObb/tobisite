@@ -1,0 +1,25 @@
+{#- Фон, а не полоса картинки: снимок лежит под текстом на всю ширину секции.
+    Затемнение .scrim идёт по самому блоку текста, а не по всей секции: под
+    буквами оно плотное, выше кадр остаётся кадром. Подпись фотографии не
+    нужна и вредна: описать чужой снимок движку нечем, поэтому alt пустой, а
+    сама картинка спрятана от скринридера.
+
+    Снимок выше секции на 12% — тот запас, внутри которого /assets/parallax.js
+    двигает его от прокрутки и мыши. Скрипта нет или включён prefers-reduced-
+    motion — фон просто стоит на месте, и это полноценная секция. -#}
+{%- set s = section.slots -%}
+{%- set photo = section.images.hero_bg -%}
+<section id="{{ section.id }}" class="relative isolate flex min-h-[78svh] items-end overflow-hidden bg-ink text-paper" data-parallax>
+  <div class="pointer-events-none absolute inset-0 -z-20 overflow-hidden" aria-hidden="true">
+    <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="absolute inset-x-0 top-[-6%] h-[112%] w-full object-cover" data-parallax-layer loading="eager" decoding="async" fetchpriority="high">
+  </div>
+  <div class="scrim align-hero w-full px-gutter py-section">
+    <p class="text-xs font-medium tracking-[0.18em] uppercase sm:text-sm" data-reveal>{{ s.eyebrow }}</p>
+    <h1 class="mt-4 max-w-[18ch] font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
+    <p class="mt-5 max-w-[var(--measure)] text-lede" data-reveal="after">{{ s.lede }}</p>
+    <div class="btn-row mt-flow" data-reveal="after">
+      <a href="{{ s.phone_href }}" class="btn btn-photo" data-hit="cta_click">{{ s.call_label }}</a>
+      <a href="#{{ s.secondary_target }}" class="px-2 py-3 font-medium underline decoration-paper/50 underline-offset-4">{{ s.secondary_label }}</a>
+    </div>
+  </div>
+</section>

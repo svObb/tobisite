@@ -2,42 +2,58 @@
 # Правила файла — см. комментарий в lawyer_rich.yaml.
 
 id: generic_light
-version: 1
+version: 2
 niche: generic
 track: light
 schema_type: LocalBusiness
 
 min_sections: 4
-roles_order: [hero, services, proof, cta, footer]
-optional_roles: [proof]
+roles_order: [header, hero, products, services, gallery, proof, about, info, cta, footer]
+optional_roles: [products, gallery, proof, about, info]
 role_substitutes:
-  services: [proof]
+  services: [products, proof, about]
+  products: [services]
 
 downgrade_ladder:
-  hero: [hero_split_map, hero_type_only, hero_photo_left]
-  services: [svc_list_icons, svc_cards_3]
+  header: [header_logo, header_wordmark]
+  hero: [hero_split_map, hero_bg_photo, hero_type_only, hero_photo_left]
+  products: [products_list, products_grid]
+  services: [svc_list_icons, svc_two_col_rule, svc_cards_3]
+  gallery: [gallery_strip]
   proof: [proof_stats_bar]
+  about: [about_note]
+  info: [info_hours_card]
   cta: [cta_form_short]
   footer: [footer_nap]
 
 niche_affinity:
-  hero_split_map: 0.8
+  header_logo: 1.0
+  header_wordmark: 0.5
+  hero_split_map: 0.85
+  hero_bg_photo: 0.75
   hero_type_only: 0.7
   hero_photo_left: 0.4
+  products_list: 0.8
+  products_grid: 0.8
   svc_list_icons: 0.8
+  svc_two_col_rule: 0.7
   svc_cards_3: 0.6
+  gallery_strip: 0.9
   proof_stats_bar: 0.7
+  about_note: 0.8
+  info_hours_card: 0.9
   cta_form_short: 1.0
   footer_nap: 1.0
 
 enrichment_hints:
   name: "Нужно название компании ровно так, как оно в карточке."
-  phone: "Нужен телефон — без него не собрать ни первый экран, ни форму заявки."
+  phone: "Нужен телефон — без него не собрать ни шапку, ни первый экран, ни форму заявки."
   address: "Нужен адрес: улица, дом, город — он идёт в футер и в карточку."
   services: "Нужен перечень услуг: минимум 2 позиции словами клиента."
+  products: "Нужны товары: название, цена и фото — так, как они стоят у клиента."
   hours: "Нужны часы работы — строкой, как их указывает клиент."
   photo_count: "Нужно минимум 3 фото (интерьер, команда, работа) или ссылка на альбом."
-  images: "Нужно минимум 3 фото (интерьер, команда, работа) или ссылка на альбом."
+  images: "Нужны картинки с сайта клиента: логотип для шапки и минимум 3 фото."
   proof_stats: "Нужны рейтинг и число отзывов из Google Maps."
   lang: "Нужен язык лида — на нём собирается весь текст черновика."
   _fallback: "Данных для черновика не хватает: пройдите карточку лида ещё раз."
@@ -57,6 +73,7 @@ free_defaults:
       map_alt: "Карта з розташуванням компанії"
       address_label: "Адреса"
       hours_label: "Години"
+      company_label: "Компанія"
       secondary_label: "Залишити звернення"
       name_label: "Імʼя"
       phone_label: "Телефон"
@@ -74,10 +91,23 @@ free_defaults:
         - "Працюємо за домовленим графіком."
         - "Відповідаємо на запитання до початку робіт."
         - "Пишіть або телефонуйте — підкажемо, з чого почати."
+        - "Розрахунок робимо до початку робіт."
+        - "Уточнимо деталі перед виїздом."
     svc_cards_3:
+      section_title: "Наші послуги"
+    svc_two_col_rule:
       section_title: "Наші послуги"
     svc_list_icons:
       section_title: "Наші послуги"
+    products_grid:
+      section_title: "Товари"
+    products_list:
+      section_title: "Перелік товарів"
+    info_hours_card:
+      section_title: "Коли ми працюємо"
+    about_note:
+      section_title: "Що варто знати до дзвінка"
+      about_text: "Тут зібрано те, про що питають найчастіше: чим ми займаємось, коли працюємо і як нас знайти. Якщо потрібної відповіді немає — зателефонуйте або залиште звернення, відповімо в робочі години."
     proof_stats_bar:
       section_title: "Показники профілю"
       stat_label:
@@ -101,6 +131,7 @@ free_defaults:
       map_alt: "Map showing the company location"
       address_label: "Address"
       hours_label: "Hours"
+      company_label: "Company"
       secondary_label: "Send an enquiry"
       name_label: "Name"
       phone_label: "Phone"
@@ -118,10 +149,23 @@ free_defaults:
         - "We work to the schedule we agree on."
         - "We answer questions before the work starts."
         - "Write or call — we will suggest where to start."
+        - "The estimate comes before the work does."
+        - "We check the details before we set out."
     svc_cards_3:
+      section_title: "What we do"
+    svc_two_col_rule:
       section_title: "What we do"
     svc_list_icons:
       section_title: "What we do"
+    products_grid:
+      section_title: "Products"
+    products_list:
+      section_title: "Product list"
+    info_hours_card:
+      section_title: "When we are open"
+    about_note:
+      section_title: "What to know before you call"
+      about_text: "This page gathers what people ask most often: what we do, when we work and how to find us. If the answer you need is not here, call us or leave an enquiry and we will reply during working hours."
     proof_stats_bar:
       section_title: "Google profile"
       stat_label:

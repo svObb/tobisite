@@ -2,14 +2,14 @@
     это ink/paper, поэтому цифры набраны ею, а иерархия держится на кегле. -#}
 {%- set s = section.slots -%}
 <section id="{{ section.id }}" class="bg-ink py-section text-paper">
-  <div class="mx-auto w-full max-w-6xl px-5 sm:px-8">
-    <h2 class="text-xs font-medium tracking-[0.18em] text-paper uppercase sm:text-sm">{{ s.section_title }}</h2>
+  <div class="w-full px-gutter">
+    <h2 class="text-xs font-medium tracking-[0.18em] text-paper uppercase sm:text-sm" data-reveal>{{ s.section_title }}</h2>
     <dl class="mt-flow grid gap-flow sm:grid-cols-2 lg:grid-cols-4">
       {%- for item in s.stats %}
       <div class="border-t border-paper/30 pt-4">
         <dt class="sr-only">{{ item.label }}</dt>
         <dd>
-          <span class="block font-title text-3xl leading-none tracking-tight sm:text-5xl">{{ item.value }}</span>
+          <span class="block font-title text-h1 leading-none tracking-tight">{{ item.value }}</span>
           <span class="mt-3 block text-sm leading-snug text-paper sm:text-base">{{ item.label }}</span>
         </dd>
       </div>

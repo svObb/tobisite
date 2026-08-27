@@ -2,7 +2,7 @@
 
 Признаки: photo_count, service_count, has_prices, has_hours, has_booking_url,
 review_count, google_rating, has_address, text_volume, old_site_state,
-brand_colors, ниша, язык, страна.
+brand_colors, products, ниша, язык, страна.
 
 Главное правило: у каждого поля отдельный флаг known, и unknown != false.
 Иначе система однажды соберёт сайт без телефона потому, что телефон не
@@ -14,8 +14,9 @@ brand_colors, ниша, язык, страна.
 
 Кроме сырых полей профиль отдаёт производные признаки (`feature`), которыми
 оперируют контракты секций: has_phone, has_address, service_count из списка
-услуг, proof_stats_count, нормализованная ниша. Производные считаются в одном
-месте, чтобы гейт и скоринг не разошлись в трактовке.
+услуг, product_count и products_with_images, has_logo, has_brand_colors,
+proof_stats_count, нормализованная ниша. Производные считаются в одном месте,
+чтобы гейт и скоринг не разошлись в трактовке.
 
 from_lead (сборка из БД) появится вместе с этапом 6 — здесь только from_dict
 для фикстур: пакет не импортирует ни моделей бота, ни драйвера базы.
@@ -25,6 +26,8 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from typing import Any, Callable
+
+from . import niches
 
 
 @dataclass(frozen=True)
@@ -51,22 +54,10 @@ OLD_SITE_STATE_ORDER = ("none", "broken", "not_mobile", "outdated", "ok")
 ORDERED_ENUMS = (TEXT_VOLUME_ORDER, OLD_SITE_STATE_ORDER)
 
 # Ниша лида приходит словом на языке работника; рецепты и контракты знают
-# только ключи. Всё, чего нет в таблице, обслуживает generic (§ рамка этапа 5).
-NICHE_ALIASES = {
-    "юрист": "lawyer",
-    "юристы": "lawyer",
-    "адвокат": "lawyer",
-    "адвокати": "lawyer",
-    "юридические услуги": "lawyer",
-    "юридичні послуги": "lawyer",
-    "lawyer": "lawyer",
-    "law firm": "lawyer",
-    "attorney": "lawyer",
-    "стоматология": "dental",
-    "стоматологія": "dental",
-    "dentist": "dental",
-    "dental": "dental",
-}
+# только ключи. Таблица переехала в tokens/niches.yaml — ниш скоро полсотни,
+# и каждая новая не должна быть коммитом в движок. Всё, чего нет в таблице,
+# обслуживает generic (§ рамка этапа 5).
+NICHE_ALIASES = niches.load()["aliases"]
 
 
 @dataclass(frozen=True)
@@ -110,6 +101,11 @@ class Profile:
     # {src, width, height}. Чего здесь нет — того на странице не будет.
     images: Feature = UNKNOWN
 
+    # Товары со страниц лида: [{name, price?, image?{src, width, height}}].
+    # Цена — строка ровно в том виде, в каком её пишет сам бизнес: движок цифр
+    # не форматирует и валюту не подставляет.
+    products: Feature = UNKNOWN
+
     @classmethod
     def from_dict(cls, data: dict) -> "Profile":
         raw = dict(data)
@@ -124,10 +120,9 @@ class Profile:
     @property
     def niche_key(self) -> str | None:
         """Ниша, приведённая к ключу рецепта. None, если ниша неизвестна."""
-        if not self.niche.known or not self.niche.value:
+        if not self.niche.known:
             return None
-        word = str(self.niche.value).strip().lower()
-        return NICHE_ALIASES.get(word, word)
+        return niches.key_for(self.niche.value)
 
     def proof_stats(self) -> list[dict]:
         """Показатели для proof-секции. Только цифры из профиля Google."""
@@ -170,12 +165,32 @@ def _service_count(p: Profile) -> Feature:
     return known(len(p.services.value)) if p.services.known else UNKNOWN
 
 
+def _products_with_images(p: Profile) -> Feature:
+    """Товаров, у которых есть картинка: товарная сетка живёт только ими."""
+    if not p.products.known:
+        return UNKNOWN
+    return known(sum(1 for item in (p.products.value or [])
+                     if (item or {}).get("image")))
+
+
+def _has_logo(p: Profile) -> Feature:
+    """Логотип — обычная картинка белого списка под именем logo (решение A)."""
+    if not p.images.known:
+        return UNKNOWN
+    return known("logo" in (p.images.value or {}))
+
+
 _DERIVED: dict[str, Callable[[Profile], Feature]] = {
     "niche": lambda p: known(p.niche_key) if p.niche.known else UNKNOWN,
     "has_phone": lambda p: _flag(p.phone),
     "has_address": lambda p: _fallback(p.has_address, p.address),
     "has_hours": lambda p: _fallback(p.has_hours, p.hours),
+    "has_logo": _has_logo,
+    "has_brand_colors": lambda p: _flag(p.brand_colors),
     "service_count": _service_count,
+    "product_count": lambda p: (known(len(p.products.value or []))
+                                if p.products.known else UNKNOWN),
+    "products_with_images": _products_with_images,
     # Сколько показателей мы реально знаем — знаем всегда, поэтому known=True.
     "proof_stats_count": lambda p: known(len(p.proof_stats())),
 }

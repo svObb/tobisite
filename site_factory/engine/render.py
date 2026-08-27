@@ -16,9 +16,12 @@
 Детерминизм (§3):
 
     seed          = int(sha256(domain_norm)[:8], 16)
-    пресет        = int(sha256(domain_norm), 16) % len(presets)
+    пул           = пресеты ниши из tokens/niches.yaml (нет ниши -> все)
+    пресет        = пул[int(sha256(domain_norm), 16) % len(пула)]
     трек          = rich, если photo_count >= 3 и он известен, иначе light
     рецепт        = <ниша>_<трек>, ниша вне покрытия -> generic
+
+Ниша решает, каким сайт вообще может быть, домен — каким он будет.
 
 Встроенный hash() здесь использовать нельзя ни в одном из двух мест: он
 солится на каждый запуск процесса, и тот же лид получил бы другой дизайн при
@@ -37,15 +40,30 @@ from typing import NamedTuple
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from . import slots
+from . import niches, slots
+from .color import PIVOT_LUMINANCE, luminance, srgb
 from .compose import apply_free_texts, compose, enough
+from .palette import brand_palette
 from .profile import Profile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS_BASE = "/assets"          # общий префикс превью; @font-face в бандле
-ENGINE_VERSION = 1
+ENGINE_VERSION = 2
 
-SECTION_ROLES = ("hero", "services", "proof", "cta", "footer")
+SECTION_ROLES = ("header", "hero", "products", "services", "gallery", "proof",
+                 "about", "info", "cta", "footer")
+
+# Скрипты каждой страницы превью, в порядке подключения: сначала вендорный
+# Lenis, потом наш preview.js — он рассчитывает, что библиотека уже
+# определена, и defer этот порядок сохраняет. Файлы лежат в site_factory/js
+# и копируются в build/ шагом tools/build_css.py.
+BASE_SCRIPTS = ("lenis", "preview")
+
+# Токены разнообразия пресета: у пресета они необязательны, а в шаблоне обязаны
+# быть всегда. Значения по умолчанию — то, как выглядели первые четыре пресета
+# до того, как эти токены появились.
+PRESET_DEFAULTS = {"type_scale": "regular", "button": "fill",
+                   "elevation": "flat", "align": "left"}
 
 
 class Draft(NamedTuple):
@@ -66,7 +84,10 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
     recipe = load_recipe(recipe_id_for(profile, root), root)
 
     seed = seed_for(profile.domain_norm)
-    preset = resolve_preset(preset_for(profile.domain_norm, tokens), tokens)
+    chosen = preset_for(profile, tokens, root)
+    palette, palette_source, palette_reason = brand_palette(_brand_colors(profile),
+                                                            chosen["palette"])
+    preset = dict(resolve_preset(chosen, tokens), palette=palette)
     composition = compose(profile, recipe, library, seed, recent_variants)
 
     trace = {
@@ -76,6 +97,7 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
         "track": track_for(profile),
         "recipe": recipe["id"],
         "preset": preset["id"],
+        "palette": {"source": palette_source, "reason": palette_reason},
         "versions": {
             "engine": ENGINE_VERSION,
             "library": tokens["version"],
@@ -102,7 +124,7 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
     lang = str(profile.lang.value)
     html = environment(root).get_template("base/layout.html.j2").render(
         preset=preset,
-        site=site_context(profile, recipe, lang),
+        site=site_context(profile, recipe, lang, composition.sections),
         facts=facts_context(profile, recipe),
         sections=composition.sections,
     )
@@ -113,10 +135,48 @@ def seed_for(domain_norm: str) -> int:
     return int(hashlib.sha256(domain_norm.encode()).hexdigest()[:8], 16)
 
 
-def preset_for(domain_norm: str, tokens: dict) -> dict:
-    presets = tokens["presets"]
-    index = int(hashlib.sha256(domain_norm.encode()).hexdigest(), 16) % len(presets)
-    return presets[index]
+def preset_for(profile: Profile, tokens: dict | None = None,
+               root: pathlib.Path = ROOT) -> dict:
+    """Пресет лида: пул его ниши, а внутри пула — хеш домена."""
+    tokens = tokens or load_tokens(root)
+    by_id = {preset["id"]: preset for preset in tokens["presets"]}
+    pool = _legible(niches.pool_for(profile.niche_key, tuple(by_id), root),
+                    by_id, profile)
+    index = int(hashlib.sha256(profile.domain_norm.encode()).hexdigest(), 16) % len(pool)
+    return by_id[pool[index]]
+
+
+def palette_for(profile: Profile, root: pathlib.Path = ROOT) -> dict:
+    """Палитра, которая уйдёт в HTML этого лида, — с бренд-цветами, если они есть.
+
+    Публичная, потому что проверки (checks/a11y.py) обязаны считать контраст
+    ровно той палитры, которая на странице, а не той, что записана в пресете.
+    """
+    tokens = load_tokens(root)
+    preset = preset_for(profile, tokens, root)
+    return brand_palette(_brand_colors(profile), preset["palette"])[0]
+
+
+def _brand_colors(profile: Profile):
+    return profile.brand_colors.value if profile.brand_colors.known else None
+
+
+def _legible(pool: tuple[str, ...], by_id: dict, profile: Profile) -> tuple[str, ...]:
+    """Тёмные пресеты вон, когда у лида есть логотип или бренд-цвета.
+
+    И логотип, и фирменный цвет нарисованы под белый фон: на чёрной бумаге
+    логотип пропадает, а бренд-акцент приходится высветлять до неузнаваемости.
+    Судим по самой бумаге, а не по mood: у arch-05 mood dual-theme, а paper
+    почти чёрный. Если светлых в пуле не осталось, пул остаётся как был —
+    пустого выбора не бывает.
+    """
+    if not (profile.feature("has_logo").value
+            or profile.feature("has_brand_colors").value):
+        return pool
+    light = tuple(preset_id for preset_id in pool
+                  if luminance(srgb(by_id[preset_id]["palette"]["paper"]))
+                  >= PIVOT_LUMINANCE)
+    return light or pool
 
 
 def track_for(profile: Profile) -> str:
@@ -133,15 +193,25 @@ def recipe_id_for(profile: Profile, root: pathlib.Path = ROOT) -> str:
 
 
 def resolve_preset(preset: dict, tokens: dict) -> dict:
-    """Пресет из presets.yaml в форму, которую ждёт base/layout.html.j2."""
+    """Пресет из presets.yaml в форму, которую ждёт base/layout.html.j2.
+
+    Токены разнообразия (type_scale, button, elevation, align) у пресета
+    необязательны: пропущенный берётся из PRESET_DEFAULTS. Шаблон о такой
+    необязательности не знает — до него доходят уже все четыре.
+    """
     fonts = {
         role: dict(tokens["fonts"][preset["type"][role]], family=preset["type"][role])
         for role in ("display", "body")
     }
-    return dict(preset, fonts=fonts, space=tokens["density_scale"][preset["density"]])
+    options = {key: preset.get(key, default)
+               for key, default in PRESET_DEFAULTS.items()}
+    return dict(preset, **options, fonts=fonts,
+                space=tokens["density_scale"][preset["density"]],
+                scale=tokens["type_scale"][options["type_scale"]],
+                shadow=tokens["elevation_scale"][options["elevation"]])
 
 
-def site_context(profile: Profile, recipe: dict, lang: str) -> dict:
+def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict:
     page = slots.page_defaults(recipe, lang)
     name = profile.name.value if profile.name.known else None
     city = profile.city.value if profile.city.known else None
@@ -150,8 +220,26 @@ def site_context(profile: Profile, recipe: dict, lang: str) -> dict:
         "title": f"{name} — {city}" if name and city else (name or ""),
         "description": page.get("description"),
         "assets_base": ASSETS_BASE,
+        "scripts": scripts_for(sections),
         "ui": {"skip_to_content": page.get("skip_to_content", "")},
     }
+
+
+def scripts_for(sections) -> list[str]:
+    """Скрипты превью: общие для всех страниц плюс те, что просят сами секции.
+
+    Общие — BASE_SCRIPTS: плавный скролл и появление секций положены каждому
+    черновику. Флагом js своего контракта секция добирает только то, что
+    нужно ей одной: параллакс едет туда, где есть фоновое фото, и никуда
+    больше.
+    """
+    names: list[str] = list(BASE_SCRIPTS)
+    for section in sections:
+        flag = (section.get("contract") or {}).get("js")
+        for name in ([flag] if isinstance(flag, str) else flag or []):
+            if name not in names:
+                names.append(name)
+    return [f"{ASSETS_BASE}/{name}.js" for name in names]
 
 
 def facts_context(profile: Profile, recipe: dict) -> dict:
@@ -193,7 +281,12 @@ def load_tokens(root: pathlib.Path = ROOT) -> dict:
 
 @functools.lru_cache(maxsize=8)
 def load_library(root: pathlib.Path = ROOT) -> dict:
-    """Контракты вариантов секций: id -> контракт с путём к шаблону."""
+    """Контракты вариантов секций: id -> контракт с путём к шаблону.
+
+    Роль без папки — не ошибка, а роль, для которой ещё не написано ни одного
+    варианта: glob по несуществующему каталогу просто пуст. Рецепт такую роль
+    в лестницу не положит, и до библиотеки дело не дойдёт.
+    """
     library = {}
     for role in SECTION_ROLES:
         for path in sorted((root / "sections" / role).glob("*.yaml")):

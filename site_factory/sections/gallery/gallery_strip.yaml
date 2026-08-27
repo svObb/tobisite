@@ -1,0 +1,11 @@
+# Полоса из трёх снимков лида во всю ширину страницы. Имена картинок —
+# контракт скрейпа: photo-2..photo-N это контентные фотографии сайта лида
+# (photo-1 не бывает: первым идёт portrait, фоновым — hero_bg).
+id: gallery_strip
+role: gallery
+requires: {photo_count: ">=3"}
+prefers: {photo_count: "4.."}
+image_slots: 3
+image_names: [photo-2, photo-3, photo-4]
+perf: {est_dom_nodes: 12, images: 1}
+a11y: {heading_level: 0}

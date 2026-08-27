@@ -1,0 +1,20 @@
+# Часы работы таблицей, а не строкой в футере: день слева, время справа.
+# Разрез строки делает движок по первому «: » (slots._hour_days) — расписание
+# пишет сам бизнес, и придумывать в нём нечего.
+id: info_hours_card
+role: info
+requires: {has_hours: true, has_address: true, has_phone: true}
+prefers: {has_hours: true}
+image_slots: 0
+slots:
+  - {name: section_title, type: free, max_chars: 32, lang: from_lead}
+  - {name: hour_day, type: fact, source: whitelist, group: hours, repeat: 1..7, max_chars: 28}
+  - {name: hour_time, type: fact, source: item, group: hours, repeat: same_as_group, max_chars: 40, optional: true}
+  - {name: contacts_title, type: free, max_chars: 20, lang: from_lead}
+  - {name: address_label, type: free, max_chars: 20, lang: from_lead}
+  - {name: address, type: fact, source: whitelist, max_chars: 120}
+  - {name: phone, type: fact, source: whitelist, max_chars: 24}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: email, type: fact, source: whitelist, max_chars: 60, optional: true}
+perf: {est_dom_nodes: 30, images: 0}
+a11y: {heading_level: 2}

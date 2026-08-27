@@ -1,0 +1,15 @@
+# Шапка с логотипом клиента. Логотип — обычная картинка белого списка под
+# именем logo: его кладёт скрейп сайта лида, движок его не рисует и не
+# выдумывает. Нет картинки — роль берёт следующую ступень (header_wordmark).
+id: header_logo
+role: header
+requires: {has_logo: true, has_phone: true}
+prefers: {has_logo: true, has_brand_colors: true}
+image_slots: 1
+image_names: [logo]
+slots:
+  - {name: business_name, type: fact, source: whitelist, max_chars: 60}
+  - {name: phone, type: fact, source: whitelist, max_chars: 24}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+perf: {est_dom_nodes: 8, images: 1}
+a11y: {heading_level: 0}

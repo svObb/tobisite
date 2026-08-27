@@ -4,8 +4,9 @@
 # paper/ink/accent, шрифтовая пара, radius_px и density скопированы оттуда
 # побайтово. Всё остальное в этом файле — контракт рендера, архетипы его не знают.
 #
-# ПОРЯДОК СПИСКА presets — ЧАСТЬ КОНТРАКТА. Движок выбирает пресет как
-# hash(domain_norm) % len(presets) (§3 шаг 5), поэтому переставлять и удалять
+# ПОРЯДОК СПИСКА presets — ЧАСТЬ КОНТРАКТА. Пул ниши (tokens/niches.yaml)
+# перечисляет пресеты по id, а внутри пула движок берёт
+# sha256(domain_norm) % len(pool) (§3 шаг 5), поэтому переставлять и удалять
 # пресеты нельзя: тот же лид получит другой дизайн посреди переписки.
 # Новые пресеты — только в конец списка.
 #
@@ -16,15 +17,21 @@
 #   accent_ink  — тот же тон, доведённый до контраста >= 4.5:1 по paper.
 #                 Несёт текст: ссылки, надзаголовки, заливка кнопок.
 #   accent_on   — текст поверх заливки accent_ink, контраст >= 4.5:1.
-# Там, где акцент архетипа сам проходит AA, accent_ink равен accent.
+# Там, где акцент архетипа сам проходит AA, accent_ink равен accent. Тона
+# пресетов 5-8 досчитаны engine/palette.py той же математикой, которой движок
+# доводит до AA бренд-цвет лида, — двух правил для одного контраста нет.
 # Производные тона (surface, line, muted) считает css/source.css через
 # color-mix — отдельными полями не хранятся, чтобы не расходились.
 #
 # Шрифты: семейства резолвятся по реестру fonts ниже. gwfh_id — идентификатор
 # в API google-webfonts-helper, по нему tools/fetch_fonts.py качает WOFF2-сабсеты
 # latin + latin-ext + cyrillic. fonts.googleapis.com в HTML запрещён (§4, GDPR).
+#
+# Четыре токена разнообразия — type_scale, button, elevation, align — у пресета
+# необязательны; пропущенный берётся из PRESET_DEFAULTS в engine/render.py
+# (regular / fill / flat / left). Ниже выписаны только не-дефолтные значения.
 
-version: 1
+version: 2
 
 subsets: [latin, latin-ext, cyrillic]
 weights: [400, 700]
@@ -39,6 +46,18 @@ fonts:
   Playfair Display:
     gwfh_id: playfair-display
     stack: "'Playfair Display', Georgia, 'Times New Roman', serif"
+  Oswald:
+    gwfh_id: oswald
+    stack: "'Oswald', 'Arial Narrow', Arial, sans-serif"
+  Lora:
+    gwfh_id: lora
+    stack: "'Lora', Georgia, 'Times New Roman', serif"
+  Manrope:
+    gwfh_id: manrope
+    stack: "'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Cormorant Garamond:
+    gwfh_id: cormorant-garamond
+    stack: "'Cormorant Garamond', Garamond, Georgia, 'Times New Roman', serif"
 
 # density архетипа → вертикальный ритм. Значения в clamp(), поэтому мобильный
 # отступ берётся сам и отдельного брейкпоинта не требует.
@@ -51,6 +70,33 @@ density_scale:
     section_py: "clamp(2.75rem, 7vw, 4.5rem)"
     flow: "clamp(1.25rem, 3vw, 2rem)"
     measure: "68ch"
+  compact:
+    section_py: "clamp(2rem, 5vw, 3.25rem)"
+    flow: "clamp(1rem, 2.2vw, 1.5rem)"
+    measure: "72ch"
+
+# Кегли заголовков и лида. Отдельно от density: плотность отвечает за воздух
+# между секциями, шкала — за размер шрифта внутри них, и сочетаются они
+# по-разному (плакатные заголовки в плотной вёрстке — это arch-05).
+type_scale:
+  compact:
+    h1: "clamp(1.9rem, 4vw, 2.6rem)"
+    h2: "clamp(1.3rem, 2.2vw, 1.6rem)"
+    lede: "clamp(1rem, 1.4vw, 1.08rem)"
+  regular:
+    h1: "clamp(2.2rem, 5.2vw, 3.4rem)"
+    h2: "clamp(1.45rem, 2.8vw, 1.95rem)"
+    lede: "clamp(1.05rem, 1.7vw, 1.2rem)"
+  display:
+    h1: "clamp(2.6rem, 7vw, 4.6rem)"
+    h2: "clamp(1.7rem, 3.6vw, 2.4rem)"
+    lede: "clamp(1.1rem, 2vw, 1.35rem)"
+
+# Тень карточек. Замешана на ink пресета, а не на чёрном: на тёмной бумаге
+# чёрная тень не видна вовсе.
+elevation_scale:
+  flat: "none"
+  raised: "0 1px 2px color-mix(in oklab, var(--ink) 10%, transparent), 0 10px 28px color-mix(in oklab, var(--ink) 10%, transparent)"
 
 presets:
   - id: corporate-trust
@@ -68,6 +114,8 @@ presets:
       scheme: serif-display-sans-body
     radius_px: 4
     density: regular
+    type_scale: compact
+    button: outline
 
   - id: editorial-warm
     archetype: arch-01
@@ -84,6 +132,7 @@ presets:
       scheme: serif-display-sans-body
     radius_px: 6
     density: airy
+    type_scale: display
 
   - id: clinical-light
     archetype: arch-03
@@ -100,6 +149,8 @@ presets:
       scheme: sans-grotesk-only
     radius_px: 10
     density: regular
+    button: soft
+    elevation: raised
 
   - id: deep-premium
     archetype: arch-02
@@ -116,3 +167,76 @@ presets:
       scheme: serif-display-sans-body
     radius_px: 2
     density: airy
+    align: center
+
+  - id: bold-trade
+    archetype: arch-05
+    mood: dual-theme
+    palette:
+      paper: "#181818"
+      ink: "#ffffff"
+      accent: "#ff7a1f"
+      accent_ink: "#ff7a1f"
+      accent_on: "#181818"
+    type:
+      display: Oswald
+      body: Inter
+      scheme: condensed-display
+    radius_px: 4
+    density: compact
+    type_scale: display
+
+  - id: warm-table
+    archetype: arch-06
+    mood: light
+    palette:
+      paper: "#f7f0e6"
+      ink: "#2c2117"
+      accent: "#c96f3d"
+      accent_ink: "#ab541f"
+      accent_on: "#f7f0e6"
+    type:
+      display: Lora
+      body: Manrope
+      scheme: serif-display-sans-body
+    radius_px: 8
+    density: regular
+    button: soft
+    elevation: raised
+
+  - id: salon-monochrome
+    archetype: arch-07
+    mood: dual-theme
+    palette:
+      paper: "#faf8f5"
+      ink: "#191919"
+      accent: "#b98a74"
+      accent_ink: "#936651"
+      accent_on: "#faf8f5"
+    type:
+      display: Cormorant Garamond
+      body: Manrope
+      scheme: serif-display-sans-body
+    radius_px: 0
+    density: airy
+    type_scale: display
+    button: outline
+    align: center
+
+  - id: friendly-pop
+    archetype: arch-08
+    mood: colorful
+    palette:
+      paper: "#fdf9f2"
+      ink: "#23262e"
+      accent: "#f2732e"
+      accent_ink: "#c44900"
+      accent_on: "#fdf9f2"
+    type:
+      display: Manrope
+      body: Manrope
+      scheme: sans-grotesk-only
+    radius_px: 16
+    density: regular
+    elevation: raised
+    align: center

@@ -1,0 +1,39 @@
+{#- Часы и адрес рядом: это две половины одного ответа на вопрос «когда и
+    куда приходить». Пустая ячейка времени — строка часов, которая не режется
+    по «: »; писать в неё нечего. -#}
+{%- set s = section.slots -%}
+<section id="{{ section.id }}" class="bg-surface py-section">
+  <div class="grid w-full gap-flow px-gutter lg:grid-cols-2 lg:items-start">
+    <div>
+      <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
+      <table class="mt-flow w-full text-left">
+        <tbody>
+          {%- for row in s.hours %}
+          <tr class="border-b border-line">
+            <th scope="row" class="py-3 pr-6 font-medium break-words">{{ row.day }}</th>
+            <td class="py-3 text-right break-words text-muted">{% if row.time %}{{ row.time }}{% endif %}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="lg:pl-flow">
+      <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.contacts_title }}</h2>
+      <dl class="mt-flow grid gap-5 border-t border-line pt-5">
+        <div>
+          <dt class="text-xs font-medium tracking-[0.14em] text-muted uppercase">{{ s.address_label }}</dt>
+          <dd class="mt-1 text-lede break-words">{{ s.address }}</dd>
+        </div>
+        <div>
+          <dt class="sr-only">{{ s.contacts_title }}</dt>
+          <dd class="grid gap-2">
+            <a href="{{ s.phone_href }}" class="text-lede font-medium break-words text-accent-ink underline decoration-line underline-offset-4" data-hit="cta_click">{{ s.phone }}</a>
+            {%- if s.email %}
+            <a href="mailto:{{ s.email }}" class="break-words underline decoration-line underline-offset-4">{{ s.email }}</a>
+            {%- endif %}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+</section>

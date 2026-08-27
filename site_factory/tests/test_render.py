@@ -1,16 +1,30 @@
 """Детерминизм и след решения: тот же лид -> тот же сайт (§3)."""
 import hashlib
 import json
+import re
 
+from site_factory.engine import niches
 from site_factory.engine.profile import Profile
-from site_factory.engine.render import (load_tokens, preset_for, recipe_id_for,
-                                        render, seed_for, track_for)
+from site_factory.engine.render import (BASE_SCRIPTS, PRESET_DEFAULTS,
+                                        SECTION_ROLES, load_library,
+                                        load_tokens, preset_for, recipe_id_for,
+                                        render, resolve_preset, seed_for,
+                                        track_for)
 
-from .conftest import GENERIC_LIGHT, LAWYER_POOR, LAWYER_RICH
+from .conftest import GENERIC_LIGHT, GENERIC_RICH, LAWYER_POOR, LAWYER_RICH
 
 # Домены-однодневки, на которых видно, что пресет меняется вместе с доменом.
 DOMAINS = ["alfa.example", "beta.example", "gamma.example", "delta.example",
            "epsilon.example", "zeta.example", "eta.example", "theta.example"]
+
+# Ниши всех пулов плюс слово вне таблицы: вместе с доменами они обязаны
+# покрыть каждый пресет библиотеки.
+NICHES = ["Юрист", "Стоматология", "Автосервис", "Кафе/ресторан",
+          "Салон красоты", "Гостиница", "Строительство", "Bakery"]
+
+
+def preset_ids():
+    return tuple(preset["id"] for preset in load_tokens()["presets"])
 
 
 def test_two_renders_are_byte_identical(buildable_profile):
@@ -28,33 +42,55 @@ def test_seed_comes_from_domain(lawyer_rich):
     assert trace["seed"] == int(digest[:8], 16)
 
 
-def test_domain_changes_preset_and_page():
-    """Домен решает пресет и ничьи в скоринге.
+def test_preset_comes_from_the_pool_of_the_niche():
+    """Ниша решает, каким сайт вообще может быть, домен — каким он будет."""
+    ids = preset_ids()
+    for niche in NICHES:
+        pool = niches.pool_for(_key(niche), ids)
+        for domain in DOMAINS:
+            profile = Profile.from_dict(
+                {"domain_norm": domain, "niche": niche, "lang": "uk"})
+            digest = int(hashlib.sha256(domain.encode()).hexdigest(), 16)
+            assert preset_for(profile)["id"] == pool[digest % len(pool)]
 
-    На одних и тех же данных варианты секций совпадают (их выбирает score, а не
-    домен), поэтому страниц ровно столько, сколько выпало разных пресетов —
-    восемь доменов покрывают все четыре.
-    """
-    tokens = load_tokens()
-    pages, presets, seeds = set(), set(), set()
-    for domain in DOMAINS:
-        html, trace = render(Profile.from_dict(dict(LAWYER_RICH,
-                                                    domain_norm=domain)))
-        pages.add(html)
-        presets.add(trace["preset"])
-        seeds.add(trace["seed"])
-    assert len(presets) == len(tokens["presets"])
-    assert len(pages) == len(presets)
-    assert len(seeds) == len(DOMAINS)
+
+def test_every_preset_is_reachable():
+    """Пресет, до которого не доходит ни одна ниша, — мёртвый вес библиотеки."""
+    reached = {preset_for(Profile.from_dict(
+        {"domain_norm": domain, "niche": niche, "lang": "uk"}))["id"]
+        for niche in NICHES for domain in DOMAINS}
+    assert reached == set(preset_ids())
 
 
 def test_preset_index_is_sha256_not_builtin_hash():
     """Встроенный hash() солится на запуск — тот же лид получил бы другой дизайн."""
-    tokens = load_tokens()
+    pool = niches.pool_for("cafe", preset_ids())
+    assert len(pool) > 1, "проверять формулу на пуле из одного пресета нечем"
     for domain in DOMAINS:
         digest = int(hashlib.sha256(domain.encode()).hexdigest(), 16)
-        expected = tokens["presets"][digest % len(tokens["presets"])]
-        assert preset_for(domain, tokens)["id"] == expected["id"]
+        profile = Profile.from_dict(
+            {"domain_norm": domain, "niche": "Кафе/ресторан", "lang": "uk"})
+        assert preset_for(profile)["id"] == pool[digest % len(pool)]
+
+
+def test_domain_changes_preset_and_page():
+    """Домен решает пресет и ничьи в скоринге.
+
+    На одних и тех же данных варианты секций совпадают (их выбирает score, а не
+    домен), поэтому страниц ровно столько, сколько выпало разных пресетов.
+    Полного покрытия здесь не требуется: пул ниши уже, чем список пресетов, и
+    покрытие проверяет юнит preset_for выше.
+    """
+    pages, presets, seeds = set(), set(), set()
+    for domain in DOMAINS:
+        html, trace = render(Profile.from_dict(dict(GENERIC_RICH,
+                                                    domain_norm=domain)))
+        pages.add(html)
+        presets.add(trace["preset"])
+        seeds.add(trace["seed"])
+    assert len(presets) > 1
+    assert len(pages) == len(presets)
+    assert len(seeds) == len(DOMAINS)
 
 
 def test_track_and_recipe(lawyer_rich, lawyer_light, generic_light, lawyer_poor):
@@ -74,10 +110,24 @@ def test_trace_keeps_rejected_candidates_and_versions(lawyer_rich):
     losers = [c["variant"] for c in hero["candidates"] if c["variant"] != hero["chosen"]]
     assert losers, "в следе нет отвергнутых альтернатив со score"
     assert hero["chosen"] in [c["variant"] for c in hero["candidates"]]
-    assert trace["versions"] == {"engine": 1, "library": load_tokens()["version"],
-                                 "recipe": 1}
+    assert trace["versions"] == {"engine": 2, "library": load_tokens()["version"],
+                                 "recipe": 2}
     assert trace["profile"]["photo_count"] == {"value": 6, "known": True}
     assert trace["profile"]["brand_colors"] == {"value": None, "known": False}
+
+
+def test_trace_says_where_the_palette_came_from(lawyer_rich, brand_shop, brand_ugly):
+    _, plain = render(lawyer_rich)
+    assert plain["palette"] == {"source": "preset", "reason": "no_brand_color"}
+    _, branded = render(brand_shop)
+    assert branded["palette"] == {"source": "brand", "reason": ""}
+    _, grey = render(brand_ugly)
+    assert grey["palette"] == {"source": "preset", "reason": "low_chroma"}
+
+
+def test_brand_colors_reach_the_page(brand_shop):
+    html, _ = render(brand_shop)
+    assert brand_shop.brand_colors.value["accent"] in html
 
 
 def test_trace_is_json_serialisable(any_profile):
@@ -98,6 +148,34 @@ def test_language_switches_texts(generic_light):
     assert "Перейти" not in html
 
 
+def test_every_page_gets_the_base_scripts(buildable_profile):
+    """Плавный скролл и появление секций — на каждом черновике.
+
+    Заодно и граница CSP: скрипты только свои и только файлами, единственный
+    инлайн на странице — JSON-LD, а это данные, а не код.
+    """
+    html, _ = render(buildable_profile)
+    tags = re.findall(r"<script[^>]*>", html)
+    loaded = [tag for tag in tags if "src=" in tag]
+    assert loaded[:len(BASE_SCRIPTS)] == \
+        [f'<script defer src="/assets/{name}.js">' for name in BASE_SCRIPTS]
+    assert all(re.fullmatch(r'<script defer src="/assets/[a-z]+\.js">', tag)
+               for tag in loaded)
+    assert all("application/ld+json" in tag for tag in tags if "src=" not in tag)
+
+
+def test_parallax_script_comes_only_with_the_section_that_asks(lawyer_rich,
+                                                               brand_shop):
+    """Скрипт секции просит сама секция — флагом js в контракте."""
+    plain, plain_trace = render(lawyer_rich)
+    assert "hero_bg_photo" not in plain_trace["sections"]
+    assert "/assets/parallax.js" not in plain
+
+    photo, photo_trace = render(brand_shop)
+    assert "hero_bg_photo" in photo_trace["sections"]
+    assert '<script defer src="/assets/parallax.js"></script>' in photo
+
+
 def test_recent_variants_lower_the_score(lawyer_rich):
     _, plain = render(lawyer_rich)
     _, penalised = render(lawyer_rich, recent_variants=("hero_photo_left",))
@@ -115,6 +193,43 @@ def test_unknown_profile_field_stays_unknown():
     empty = Profile.from_dict(dict(GENERIC_LIGHT))
     assert empty.feature("service_count").known
     assert empty.feature("service_count").value == 0
+
+
+def test_lawyer_fixture_keeps_its_niche():
+    assert Profile.from_dict(LAWYER_RICH).niche_key == "lawyer"
+
+
+def test_preset_without_diversity_tokens_still_resolves():
+    """Токены разнообразия необязательны: пресет без них — валидный пресет."""
+    tokens = load_tokens()
+    bare = {key: value for key, value in tokens["presets"][0].items()
+            if key not in PRESET_DEFAULTS}
+    resolved = resolve_preset(bare, tokens)
+    assert {key: resolved[key] for key in PRESET_DEFAULTS} == PRESET_DEFAULTS
+    assert resolved["scale"] == tokens["type_scale"]["regular"]
+    assert resolved["shadow"] == tokens["elevation_scale"]["flat"]
+
+
+def test_diversity_tokens_reach_the_page(any_profile):
+    html, trace = render(any_profile)
+    if html is None:
+        return
+    preset = next(p for p in load_tokens()["presets"] if p["id"] == trace["preset"])
+    assert f'data-btn="{preset.get("button", "fill")}"' in html
+    assert f'data-align="{preset.get("align", "left")}"' in html
+    assert f'data-elev="{preset.get("elevation", "flat")}"' in html
+    assert "--h1:clamp" in html
+
+
+def test_library_survives_roles_without_variants():
+    """Роль без папки — роль, для которой ещё не написано ни одного варианта."""
+    library = load_library()
+    assert {contract["role"] for contract in library.values()} <= set(SECTION_ROLES)
+    assert "footer_nap" in library
+
+
+def _key(niche: str) -> str:
+    return niches.key_for(niche)
 
 
 def _score_of(trace, role, variant):

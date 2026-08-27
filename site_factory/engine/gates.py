@@ -47,7 +47,10 @@ HINT_FIELDS = {
     "has_phone": "phone",
     "has_address": "address",
     "has_hours": "hours",
+    "has_logo": "images",
     "service_count": "services",
+    "product_count": "products",
+    "products_with_images": "products",
     "proof_stats_count": "proof_stats",
 }
 

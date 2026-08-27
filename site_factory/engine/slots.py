@@ -12,9 +12,19 @@
   {name: service_name, group: services} + {name: service_blurb, group: services}
   превращается в s.services = [{name, blurb}, ...]. Имя ключа в элементе — имя
   слота без singular-приставки группы (services -> service_).
+* группу ведёт ровно один fact-слот без source: item — он решает, сколько
+  элементов будет. Остальные fact-слоты группы объявляют source: item и берут
+  свои значения из того же элемента драйвера: {name: product_name} даёт цену
+  через {name: product_price, source: item} и картинку через product_image.
+  Так товар «название + цена + фото» помещается в контракт, не заводя второй
+  источник длины списка.
+* group_filter на слоте-драйвере отсеивает элементы до проверки repeat: у
+  товарной сетки без картинок нет смысла, и лучше пусть выбудет весь вариант,
+  чем встанут пустые рамки.
 * max_chars — ограничение для генератора слотов, не для вёрстки. Молча резать
   текст нельзя: если заготовка или факт не влезли, вариант выбывает по гейту
-  с причиной too_long, и роль берёт следующую ступень лестницы.
+  с причиной too_long, и роль берёт следующую ступень лестницы. Словарь
+  (картинка) мимо max_chars: считать символы в {src, width, height} нечего.
 
 Белый список фактов — таблица FACT_SOURCES ниже, и только она. Слот type: fact,
 которого в таблице нет, — ошибка контракта, а не повод что-нибудь придумать.
@@ -176,11 +186,44 @@ def _services(profile: Profile, lang: str):
             for i, v in enumerate(profile.services.value or [])]
 
 
+def _products(profile: Profile, lang: str):
+    """Товары лида. Цена и картинка ждут слотов с source: item."""
+    if not profile.products.known:
+        return None
+    rows = []
+    for index, item in enumerate(profile.products.value or []):
+        name = str((item or {}).get("name") or "").strip()
+        if not name:
+            continue        # товар без названия нечем показать и нечем назвать
+        rows.append({"key": str(index), "value": name,
+                     "price": item.get("price"), "image": item.get("image")})
+    return rows
+
+
 def _hours_rows(profile: Profile, lang: str):
     if not profile.hours.known:
         return None
     return [{"key": str(i), "value": str(v)}
             for i, v in enumerate(profile.hours.value or [])]
+
+
+def _hour_days(profile: Profile, lang: str):
+    """Часы таблицей: день слева, время справа.
+
+    Строку часов пишет сам бизнес, поэтому единственное, что здесь можно
+    сделать, — разрезать её по первому «: ». Не режется — вся строка уходит в
+    день, а время остаётся пустым: выдумывать расписание движку нечем.
+    """
+    if not profile.hours.known:
+        return None
+    rows = []
+    for index, line in enumerate(profile.hours.value or []):
+        text = str(line)
+        day, separator, time = text.partition(": ")
+        rows.append({"key": str(index),
+                     "value": day if separator else text,
+                     "time": time.strip() if separator else None})
+    return rows
 
 
 def _hours_line(profile: Profile, lang: str):
@@ -209,7 +252,16 @@ FACT_SOURCES: dict[str, FactSource] = {
     "email": FactSource("email", _plain("email")),
     "address": FactSource("address", _plain("address")),
     "service_name": FactSource("services", _services),
+    "product_name": FactSource("products", _products),
+    "hour_day": FactSource("hours", _hour_days),
     "stat_value": FactSource("proof_stats", _stats),
+}
+
+# Отборы элементов группы. Имя из group_filter слота-драйвера; фильтр видит
+# элемент целиком, поэтому судит по ключам, которых нет ни у одного признака
+# профиля (картинка конкретного товара).
+GROUP_FILTERS: dict[str, Callable[[dict], bool]] = {
+    "has_image": lambda item: bool(item.get("image")),
 }
 
 # Слоты, которые в одном контракте повторяются, а в другом идут строкой.
@@ -280,11 +332,12 @@ def _repeat_plain(spec, profile: Profile, lang: str):
 
 
 def _group(group, specs, contract, profile, recipe, lang):
-    fact_specs = [s for s in specs if s["type"] == "fact"]
-    if len(fact_specs) != 1:
+    driver_specs = [s for s in specs
+                    if s["type"] == "fact" and s.get("source") != "item"]
+    if len(driver_specs) != 1:
         raise ValueError(f"{contract['id']}: группа {group!r} обязана иметь "
-                         f"ровно один fact-слот")
-    driver = fact_specs[0]
+                         f"ровно один fact-слот без source: item")
+    driver = driver_specs[0]
     source = _source(driver)
     items = source.build(profile, lang)
     if not items:
@@ -292,7 +345,7 @@ def _group(group, specs, contract, profile, recipe, lang):
                              f"нет данных для группы {group!r}"),)
 
     low, high = _repeat_range(driver["repeat"])
-    items = items[:high]
+    items = _filtered(driver, items)[:high]
     if len(items) < low:
         return None, (Reason(source.field, TOO_FEW,
                              f"{group}: {len(items)} значений, нужно от {low}"),)
@@ -305,6 +358,8 @@ def _group(group, specs, contract, profile, recipe, lang):
             key = _item_key(group, spec["name"])
             if spec is driver:
                 value, trouble = _measure(spec, item["value"])
+            elif spec.get("source") == "item":
+                value, trouble = _item_value(spec, source, item, key)
             else:
                 value, trouble = _free_item(spec, contract, recipe, lang,
                                             item["key"], index)
@@ -312,6 +367,26 @@ def _group(group, specs, contract, profile, recipe, lang):
             reasons.extend(trouble)
         rows.append(row)
     return rows, tuple(reasons)
+
+
+def _filtered(driver, items):
+    """group_filter драйвера: отсев элементов до проверки repeat."""
+    name = driver.get("group_filter")
+    if not name:
+        return items
+    keep = GROUP_FILTERS.get(name)
+    if keep is None:
+        raise ValueError(f"неизвестный group_filter {name!r}")
+    return [item for item in items if keep(item)]
+
+
+def _item_value(spec, source: FactSource, item: dict, key: str):
+    """Дополнительный ключ элемента драйвера: цена товара, время работы."""
+    value = item.get(key)
+    if value is None:
+        return _absent(spec, Reason(source.field, FACT_MISSING,
+                                    f"в элементе группы нет ключа {key!r}"))
+    return _measure(spec, value)
 
 
 def _free_item(spec, contract, recipe, lang, item_key, index):
@@ -341,6 +416,8 @@ def _free_item(spec, contract, recipe, lang, item_key, index):
 
 def _measure(spec, value):
     max_chars = spec.get("max_chars")
+    if isinstance(value, dict):
+        return value, ()      # картинка: считать символы в {src, width, height} нечего
     if value is not None and max_chars and len(str(value)) > max_chars:
         return value, (Reason(f"slot:{spec['name']}", TOO_LONG,
                               f"{spec['name']}: {len(str(value))} символов при "

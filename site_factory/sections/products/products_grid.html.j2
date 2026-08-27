@@ -1,0 +1,20 @@
+{#- Название товара стоит текстом рядом с фотографией, поэтому у картинки
+    пустой alt и aria-hidden: озвучивать одно и то же дважды нечем и незачем,
+    а описать чужой снимок движку нечем вовсе. -#}
+{%- set s = section.slots -%}
+<section id="{{ section.id }}" class="bg-paper py-section">
+  <div class="w-full px-gutter">
+    <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
+    <ul class="mt-flow grid grid-cols-2 gap-x-6 gap-y-flow lg:grid-cols-3">
+      {%- for item in s.products %}
+      <li class="grid gap-3">
+        <img src="{{ item.image.src }}" alt="" aria-hidden="true" width="{{ item.image.width }}" height="{{ item.image.height }}" class="aspect-square w-full rounded-preset bg-surface object-cover" loading="lazy" decoding="async">
+        <h3 class="font-title text-base leading-snug break-words sm:text-lg">{{ item.name }}</h3>
+        {%- if item.price %}
+        <p class="text-sm font-medium text-accent-ink sm:text-base">{{ item.price }}</p>
+        {%- endif %}
+      </li>
+      {%- endfor %}
+    </ul>
+  </div>
+</section>

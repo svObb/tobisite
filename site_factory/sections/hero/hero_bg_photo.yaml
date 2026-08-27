@@ -1,0 +1,21 @@
+# Первый экран с фотографией лида фоном. Большая картинка на странице бывает
+# только такой: фон секции с затемнением и движением от прокрутки и мыши
+# (js: parallax). Снимок приходит из белого списка профиля под именем hero_bg —
+# его выбирает скрейп сайта, движок картинок не генерирует.
+id: hero_bg_photo
+role: hero
+requires: {photo_count: ">=1"}
+prefers: {photo_count: "3..", text_volume: ">=short"}
+image_slots: 1
+image_names: [hero_bg]
+js: parallax
+slots:
+  - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}
+  - {name: headline, type: free, max_chars: 56, lang: from_lead}
+  - {name: lede, type: free, max_chars: 160, lang: from_lead}
+  - {name: call_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: secondary_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: secondary_target, type: fact, source: composer, max_chars: 32}
+perf: {est_dom_nodes: 16, images: 1}
+a11y: {heading_level: 1}
