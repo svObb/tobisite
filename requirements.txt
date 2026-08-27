@@ -18,6 +18,6 @@ anthropic>=1.0
 dnspython>=2.7
 # скрейп сайта лида: грязный HTML разбирает bs4 поверх lxml (кодировки берёт
 # на себя UnicodeDammit), картинки в webp пережимает Pillow
-beautifulsoup4>=4.12
+beautifulsoup4>=4.15.0
 lxml>=5.3
 Pillow>=11.0
