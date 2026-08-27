@@ -269,14 +269,30 @@ def test_challenge_page_is_recognised_without_being_solved():
 
 # --- обход: вежливость и деградация -------------------------------------------
 
-class FakeResponse:
-    def __init__(self, url, status, body, headers=None):
-        self.url, self.status, self._body = url, status, body
-        self.headers = headers or {}
-        self.content = self
+class FakeStream:
+    """Тело ответа кусками, как его отдаёт сокет.
+
+    read(n) настоящего aiohttp возвращает то, что успело прийти, а не n байт;
+    chunk задаёт размер этого куска. По умолчанию тело приходит целиком —
+    именно так его отдавали фикстуры, и именно поэтому обрезка не ловилась.
+    """
+
+    def __init__(self, body: bytes, chunk=None):
+        self._body, self._at = body, 0
+        self._chunk = chunk or max(len(body), 1)
 
     async def read(self, limit):
-        return self._body[:limit]
+        end = min(self._at + min(limit, self._chunk), len(self._body))
+        data = self._body[self._at:end]
+        self._at = end
+        return data
+
+
+class FakeResponse:
+    def __init__(self, url, status, body, headers=None, chunk=None):
+        self.url, self.status = url, status
+        self.headers = headers or {}
+        self.content = FakeStream(body, chunk)
 
     async def __aenter__(self):
         return self
@@ -292,8 +308,8 @@ class FakeSession:
     и каждый их адрес обязан пройти проверку.
     """
 
-    def __init__(self, pages, fail=None):
-        self.pages, self.fail = pages, fail
+    def __init__(self, pages, fail=None, chunk=None):
+        self.pages, self.fail, self.chunk = pages, fail, chunk
         self.asked = []
 
     def get(self, url, **kw):
@@ -305,7 +321,7 @@ class FakeSession:
             return FakeResponse(url, 404, b"")
         if isinstance(body, tuple):
             return FakeResponse(url, 302, b"", {"Location": body[1]})
-        return FakeResponse(url, 200, body)
+        return FakeResponse(url, 200, body, chunk=self.chunk)
 
 
 @pytest.fixture(autouse=True)
@@ -332,6 +348,28 @@ def _resolver(monkeypatch):
         return [HOSTS[host]]
 
     monkeypatch.setattr(ss, "resolve_host", fake)
+
+
+async def test_the_page_is_read_to_the_end_not_to_the_first_chunk():
+    """Страница приходит кусками, и разбирать надо всю, а не первый кусок."""
+    body = ("<html><head><title>Ліхтарик</title></head><body>"
+            + "<p>x</p>" * 15_000 + "<footer>кінець</footer></body></html>"
+            ).encode()
+    session = FakeSession({BASE: body}, chunk=40_000)
+
+    got = await ss.fetch_page(session, BASE)
+
+    assert got.ok and got.body == body
+    assert len(body) > 40_000            # иначе тест ничего не проверяет
+
+
+async def test_a_page_over_the_ceiling_is_cut_at_it():
+    session = FakeSession({BASE: b"<html>" + b"y" * ss.MAX_HTML},
+                          chunk=100_000)
+
+    got = await ss.fetch_page(session, BASE)
+
+    assert got.ok and len(got.body) == ss.MAX_HTML
 
 
 async def test_walk_stops_at_the_page_limit():
@@ -403,6 +441,15 @@ async def test_download_respects_the_total_weight():
     got = await ss.download_images(session, urls)
 
     assert sum(len(data) for _, data in got) <= ss.MAX_TOTAL_BYTES
+
+
+async def test_a_picture_arrives_whole_not_by_its_first_chunk():
+    """Обрезанные байты Pillow либо не откроет, либо развернёт наполовину."""
+    url = f"{BASE}logo.png"
+    body = b"\x89PNG\r\n\x1a\n" + b"z" * 200_000
+    session = FakeSession({url: body}, chunk=32_000)
+
+    assert await ss.download_images(session, [url]) == [(url, body)]
 
 
 async def test_an_oversized_file_is_skipped_whole():

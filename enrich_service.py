@@ -42,6 +42,7 @@ import draft_service
 import site_images
 import site_scrape
 from models import Contact, Lead, Session, log_event
+from site_factory.engine import color
 
 log = logging.getLogger(__name__)
 
@@ -295,7 +296,9 @@ def enrich_line(lead) -> str:
                        ("hours", "строк часов")):
         values = enrichment.get(key)
         if values:
-            parts.append(f"{label} {len(values)}")
+            # часы человек правит и строкой: len() дал бы число символов
+            count = len(values) if isinstance(values, (list, tuple, dict)) else 1
+            parts.append(f"{label} {count}")
     return f"{journal.get('at', '')[:16]}: " + ", ".join(parts)
 
 
@@ -358,17 +361,21 @@ def _phone_diff(scrape, contact_types) -> str:
 
 
 def _brand_colors(scrape, staged: dict) -> dict:
-    """Цвета бренда: со страницы, а если их там нет — с логотипа."""
+    """Цвета бренда: со страницы, а если их там нет — с логотипа.
+
+    Страница приоритетнее: meta theme-color сайт объявляет о себе сам, а
+    логотип — догадка по пикселям. Акцентом с логотипа идёт самый насыщенный
+    цвет, а не второй по частоте: accent движок ставит на кнопки и ссылки, и
+    приглушённый оттенок в этой роли оставляет страницу без бренда. Отсеивать
+    серое здесь незачем — этим занят AA-гард палитры движка.
+    """
     if scrape.brand_colors:
         return scrape.brand_colors
-    logo = staged.get("logo")
-    if logo is None or not logo.get("colors"):
+    colors = (staged.get("logo") or {}).get("colors") or []
+    if not colors:
         return {}
-    colors = logo["colors"]
-    picked = {"primary": colors[0], "source": "logo"}
-    if len(colors) > 1:
-        picked["accent"] = colors[1]
-    return picked
+    return {"primary": colors[0], "source": "logo",
+            "accent": max(colors, key=lambda value: color.chroma(color.srgb(value)))}
 
 
 def _products_with_images(products, staged: dict) -> list[dict]:
@@ -404,9 +411,10 @@ async def _stage(session, lead_id: int, scrape) -> tuple[dict, str, bool, str]:
     if not draft_service.r2_ready():
         return {}, "не заданы ключи R2 — картинки пропущены", False, ""
     product_images = [p["image"] for p in scrape.products if p.get("image")]
+    # только растровые: у инлайнового SVG url пустой, и качать там нечего
+    logo_urls = [c["url"] for c in scrape.logos if c.get("url")][:LOGO_CANDIDATES]
     wanted = (
-        [(c["url"], "logo", False, False)
-         for c in scrape.logos if c.get("url")][:LOGO_CANDIDATES]
+        [(url, "logo", False, False) for url in logo_urls]
         + [(c["url"], "photo", c.get("og", False), False)
            for c in scrape.images][:PHOTO_CANDIDATES]
         + [(url, "photo", False, True)
@@ -432,6 +440,8 @@ async def _stage(session, lead_id: int, scrape) -> tuple[dict, str, bool, str]:
         svg, logo_note = _inline_logo(scrape)
         if svg is not None:
             files = {"logo": svg} | files
+        elif not logo_note:
+            logo_note = _lost_logo_note(logo_urls)
     if not files:
         return ({}, "картинок, годных для страницы, на сайте не нашлось",
                 True, logo_note)
@@ -462,12 +472,30 @@ def _render_files(roles: dict, bodies: dict) -> dict:
     return files
 
 
+def _lost_logo_note(candidates: list[str]) -> str:
+    """Логотип на сайте был, а до страницы не доехал. Пусто — его там и нет.
+
+    Без этой строки отчёт одинаково говорил «логотипа нет» и о сайте без
+    логотипа, и о картинке, которая не скачалась или оказалась мельче 64px, —
+    а руками в этих двух случаях делают разное.
+    """
+    if not candidates:
+        return ""
+    return (f"логотип: кандидатов {len(candidates)}, ни один не скачался или "
+            "не подошёл — взять руками")
+
+
 def _inline_logo(scrape) -> tuple[dict | None, str]:
     """Логотип, нарисованный прямо в HTML. Санитайзер сомнений не прощает.
 
     Второе значение — строка для отчёта админу. Размеры берём из самой
     очищенной разметки: без них движок выбросит запись при сборке страницы, и
     получилось бы «логотип есть» в отчёте при пустой шапке на превью.
+
+    Отказ санитайзера тоже пишется в отчёт: у инлайнового кандидата url пуст,
+    в растровые он не попадает, и без этой строки сайт с одним битым SVG
+    выглядел бы как сайт вовсе без логотипа. Первая причина и остаётся: она о
+    самом заметном кандидате, дальше идут те, что мельче.
     """
     note = ""
     for candidate in scrape.logos:
@@ -475,10 +503,11 @@ def _inline_logo(scrape) -> tuple[dict | None, str]:
             continue
         clean = site_images.sanitize_svg(candidate.get("markup") or "")
         if clean is None:
+            note = note or "SVG-логотип не прошёл проверку — взять руками"
             continue
         size = site_images.svg_size(clean)
         if size is None:
-            note = "SVG-логотип без размеров — взять руками"
+            note = note or "SVG-логотип без размеров — взять руками"
             continue
         return {"data": clean.encode(), "content_type": "image/svg+xml",
                 "filename": "logo.svg", **size,

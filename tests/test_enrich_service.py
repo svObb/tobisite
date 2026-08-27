@@ -10,6 +10,7 @@ import io
 import itertools
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -24,6 +25,7 @@ import site_images
 import site_scrape
 from email_gen import LOSS_KEY
 from models import Contact, CostLedger, Lead, LeadEvent, Session
+from site_factory.engine import color
 
 SITE = "https://lihtaryk.example/"
 LOGO_URL = f"{SITE}logo.png"
@@ -41,6 +43,25 @@ def png(width, height, color=(194, 98, 26)) -> bytes:
 
 BLOBS = {LOGO_URL: png(400, 120), WIDE_URL: png(2400, 1200),
          TEAM_URL: png(1000, 1200), BOX_URL: png(900, 900)}
+
+# Логотип из двух цветов: приглушённый занимает больше места, яркий — меньше.
+# Порядок по частоте тут обратен порядку по насыщенности, и на этом видно,
+# какой из них уходит в accent: на самом частом цвете тест бы прошёл и с
+# ошибкой «accent — просто первый в палитре».
+VIVID, MUTED = (220, 20, 60), (130, 120, 90)
+
+
+def two_tone_logo() -> bytes:
+    img = Image.new("RGB", (400, 120), MUTED)
+    img.paste(Image.new("RGB", (100, 120), VIVID), (300, 0))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _hex(rgb) -> str:
+    """Цвет так, как его вернёт палитра: по сетке в 32 уровня на канал."""
+    return "#%02x%02x%02x" % tuple(channel // 8 * 8 for channel in rgb)
 
 
 def result(**kw) -> site_scrape.ScrapeResult:
@@ -372,8 +393,23 @@ async def test_a_site_without_usable_pictures_says_so(site_lead, scraped, r2):
 
     assert got.ok and got.staged == []
     assert "не нашлось" in got.images_reason
+    # логотипа на сайте не было вовсе — объяснять тут нечего
+    assert got.logo_note == ""
     data = await enrichment_of(lead.id)
     assert data["images"] == {} and data["photo_count"] == 0
+
+
+async def test_a_logo_that_did_not_survive_the_download_says_so(site_lead,
+                                                                scraped, r2):
+    """Иначе отчёт говорит «логотипа нет» и о сайте без логотипа, и об этом."""
+    lead = await site_lead()
+    # кандидат в шапке был, но картинка мельче 64px — на страницу не годится
+    scraped(result(images=[], products=[]), blobs={LOGO_URL: png(40, 20)})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == [] and "кандидатов 1" in got.logo_note
+    assert "взять руками" in got.logo_note
 
 
 async def test_stale_staging_is_swept_before_the_new_one(site_lead, scraped,
@@ -459,6 +495,51 @@ async def test_two_taps_at_once_start_only_one_walk(site_lead, monkeypatch, r2):
     assert not es.enrich_busy(lead.id)
 
 
+# --- цвета бренда -------------------------------------------------------------
+
+async def test_the_logo_gives_the_brand_colours_when_the_page_has_none(
+        site_lead, scraped, r2):
+    """У конструкторов theme-color пуст, и единственный след бренда — логотип."""
+    lead = await site_lead()
+    scraped(result(brand_colors={}, images=[], products=[]),
+            blobs={LOGO_URL: two_tone_logo()})
+
+    await es.enrich_from_site(lead.id)
+
+    colors = (await enrichment_of(lead.id))["brand_colors"]
+    palette = site_images.dominant_colors(two_tone_logo())
+    assert len(palette) == 2 and colors["source"] == "logo"
+    # primary — самый частый цвет логотипа, им залита большая часть картинки
+    assert colors["primary"] == palette[0] == _hex(MUTED)
+    # accent — самый насыщенный, а не первый по частоте: движок ставит его на
+    # кнопки и ссылки, и приглушённый оттенок оставляет страницу без бренда
+    assert colors["accent"] == palette[1] == _hex(VIVID)
+    assert color.chroma(color.srgb(palette[1])) > color.chroma(
+        color.srgb(palette[0]))
+
+
+async def test_the_page_colours_win_over_the_logo(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result(images=[], products=[]), blobs={LOGO_URL: two_tone_logo()})
+
+    await es.enrich_from_site(lead.id)
+
+    # meta theme-color сайт объявляет о себе сам, логотип — догадка по пикселям
+    assert (await enrichment_of(lead.id))["brand_colors"] == {
+        "primary": "#1f6f4a", "source": "meta"}
+
+
+async def test_without_a_logo_there_are_no_brand_colours(site_lead, scraped,
+                                                          r2):
+    lead = await site_lead()
+    scraped(result(brand_colors={}, logos=[]),
+            blobs={WIDE_URL: BLOBS[WIDE_URL]})
+
+    await es.enrich_from_site(lead.id)
+
+    assert "brand_colors" not in await enrichment_of(lead.id)
+
+
 # --- логотип, нарисованный прямо в HTML ---------------------------------------
 
 def svg_logo(markup: str) -> dict:
@@ -512,6 +593,26 @@ async def test_an_inline_svg_without_a_size_is_left_to_hands(site_lead,
     assert (await enrichment_of(lead.id))["images"] == {}
 
 
+async def test_an_inline_svg_the_sanitiser_refused_is_left_to_hands(site_lead,
+                                                                    scraped,
+                                                                    r2):
+    """Битый SVG — не «логотипа нет»: у инлайнового кандидата ссылки нет вовсе.
+
+    Растровая строка отчёта считает кандидатов по ссылкам, а их тут ноль, — и
+    без своей строки такой сайт был бы неотличим от сайта без логотипа.
+    """
+    lead = await site_lead()
+    scraped(result(logos=[svg_logo(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64">'
+        '<path d="M0 0h240v64H0z"></svg>')], images=[], products=[]), blobs={})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == [] and not r2.objects
+    assert got.logo_note == "SVG-логотип не прошёл проверку — взять руками"
+    assert (await enrichment_of(lead.id))["images"] == {}
+
+
 async def test_the_card_line_says_what_came_from_the_site(site_lead, scraped,
                                                           r2):
     lead = await site_lead()
@@ -527,6 +628,16 @@ async def test_the_card_line_says_what_came_from_the_site(site_lead, scraped,
 
 def test_a_card_nobody_scraped_has_no_line():
     assert es.enrich_line(None) == ""
+
+
+def test_hours_written_by_hand_as_one_string_count_as_one_line():
+    """Строку в карточке пишет человек, и len() дал бы число её символов."""
+    lead = SimpleNamespace(enrichment={
+        "_scrape": {"at": "2026-08-27T10:00:00", "pages": [SITE]},
+        "hours": "Пн–Сб: по домовленості, неділя вихідний",
+    })
+
+    assert "строк часов 1" in es.enrich_line(lead)
 
 
 # --- ИИ-ветка -----------------------------------------------------------------

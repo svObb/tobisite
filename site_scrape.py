@@ -613,7 +613,7 @@ async def _follow(session, url: str, label: str) -> Page:
                 status, final = resp.status, str(resp.url)
                 location = resp.headers.get("Location")
                 body = b"" if status in REDIRECT_STATUS else \
-                    await resp.content.read(MAX_HTML)
+                    await _read_body(resp.content, MAX_HTML)
         except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError,
                 UnicodeError, ValueError) as e:
             return Page(url=target, error=f"{label}: {e.__class__.__name__}")
@@ -630,6 +630,24 @@ async def _follow(session, url: str, label: str) -> Page:
             return Page(url=final, status=status, error=f"HTTP {status}")
         return Page(url=final, ok=True, status=status, body=body)
     return Page(url=target, error="слишком много перенаправлений")
+
+
+async def _read_body(content, limit: int) -> bytes:
+    """Тело ответа целиком, но не длиннее limit.
+
+    read(n) у aiohttp отдаёт то, что уже пришло в буфер, а не n байт: на
+    странице в триста килобайт возвращался первый кусок в семьдесят, и разбор
+    шёл по разметке, оборванной на середине шапки. Читаем до конца сами.
+    """
+    chunks: list[bytes] = []
+    left = limit
+    while left > 0:
+        chunk = await content.read(left)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks)[:limit]
 
 
 def is_blocked(status: int | None, body: bytes) -> bool:
@@ -691,7 +709,8 @@ async def _fetch_image(session, url: str) -> bytes | None:
                     continue
                 if status >= 400:
                     return None
-                data = await resp.content.read(MAX_IMAGE_BYTES + 1)
+                # на байт больше потолка: по нему ниже и виден перебор
+                data = await _read_body(resp.content, MAX_IMAGE_BYTES + 1)
         except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError,
                 UnicodeError, ValueError) as e:
             log.info("картинка %s не скачалась: %s", url, e.__class__.__name__)
