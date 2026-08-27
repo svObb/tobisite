@@ -464,9 +464,15 @@ def products(soup, base: str, nodes=None) -> list[dict]:
 
 
 def pick_internal_links(soup, base: str) -> list[str]:
-    """До трёх внутренних страниц, где вероятнее всего лежит недостающее."""
+    """До трёх внутренних страниц, где вероятнее всего лежит недостающее.
+
+    Сначала берётся лучшая ссылка каждого класса весов — контакты, каталог,
+    услуги, о компании, — и только потом свободные слоты добираются по общему
+    рейтингу. Иначе сайт с двумя контактными страницами (у prom.ua их две, обе
+    по сорок очков) вытесняет из выборки каталог, а товары лежат только там.
+    """
     host = urlparse(base).netloc.lower()
-    scored: dict[str, int] = {}
+    scored: dict[str, tuple[int, int]] = {}
     for tag in soup.find_all("a", href=True):
         url = urljoin(base, tag["href"].strip())
         parsed = urlparse(url)
@@ -476,11 +482,27 @@ def pick_internal_links(soup, base: str) -> list[str]:
         if url.rstrip("/") == base.rstrip("/"):
             continue
         anchor = f"{_clean(tag.get_text(' '))} {parsed.path}"
-        weight = max((w for rx, w in _LINK_WEIGHTS if rx.search(anchor)), default=0)
-        if weight and weight > scored.get(url, 0):
-            scored[url] = weight
-    best = sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))
-    return [url for url, _ in best[:MAX_LINKS]]
+        hits = [(w, i) for i, (rx, w) in enumerate(_LINK_WEIGHTS) if rx.search(anchor)]
+        if not hits:
+            continue
+        weight, group = max(hits, key=lambda hit: (hit[0], -hit[1]))
+        if weight > scored.get(url, (0, 0))[0]:
+            scored[url] = (weight, group)
+    ranked = sorted(scored.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    picked: list[str] = []
+    taken: set[int] = set()
+    for url, (_, group) in ranked:
+        if len(picked) >= MAX_LINKS:
+            break
+        if group not in taken:
+            taken.add(group)
+            picked.append(url)
+    for url, _ in ranked:
+        if len(picked) >= MAX_LINKS:
+            break
+        if url not in picked:
+            picked.append(url)
+    return picked
 
 
 def text_excerpts(soup) -> list[str]:

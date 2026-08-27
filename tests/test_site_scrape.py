@@ -82,6 +82,34 @@ def test_internal_links_are_scored_and_capped(shop):
     assert not any("facebook" in url for url in links)
 
 
+def _links_page() -> str:
+    return """<html><body>
+      <a href="/contacts/">Контакти</a>
+      <a href="/cp69600-kontakty.html">Контакти магазину</a>
+      <a href="/product_list">Каталог товарів</a>
+      <a href="/about/">Про нас</a>
+    </body></html>"""
+
+
+def test_a_second_contacts_page_does_not_push_out_the_catalog():
+    """Две контактные страницы весят одинаково — каталог всё равно в выборке.
+
+    На prom.ua так и было: обе «контактные» прошли по сорок очков, каталог с
+    тридцатью пятью остался четвёртым, и товары не приехали вовсе.
+    """
+    links = ss.pick_internal_links(ss.soup_of(_links_page()), BASE)
+
+    assert f"{BASE}product_list" in links
+    assert any("kontakt" in url or "contacts" in url for url in links)
+    assert len(links) == ss.MAX_LINKS
+
+
+def test_link_choice_is_deterministic():
+    soup = ss.soup_of(_links_page())
+
+    assert ss.pick_internal_links(soup, BASE) == ss.pick_internal_links(soup, BASE)
+
+
 def test_text_volume_is_a_ladder():
     assert ss.text_volume("") == "none"
     assert ss.text_volume("x" * 500) == "short"
