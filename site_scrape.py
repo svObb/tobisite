@@ -115,10 +115,15 @@ _PRICE_HINT = re.compile(r"price|amount|cost|cena|цін|цен|вартіст|�
 _TITLE_HINT = re.compile(r"title|name|heading|caption", re.I)
 _ADDRESS_HINT = re.compile(r"address|adress|adresa|адрес|адрес[аи]|контакт", re.I)
 # Анкоры внутренних страниц, на которых что-то есть: чем ближе к делу, тем выше.
+# Прайс — отдельный класс от каталога: страница «Ціни на …» на prom.ua
+# заполнена расценками на услуги, а не карточками товаров, и по алфавиту
+# обгоняла настоящий каталог в пер-классовой выборке; вес ниже услуг, потому
+# что сами услуги уже покрыты своим классом.
 _LINK_WEIGHTS = (
     (re.compile(r"контакт|contact|kontakt|звʼяз|связ", re.I), 40),
-    (re.compile(r"катало|catalog|shop|магазин|товар|product|прайс|price|ціни|цены", re.I), 35),
+    (re.compile(r"катало|catalog|shop|магазин|товар|product|goods", re.I), 35),
     (re.compile(r"послуг|услуг|service|servis", re.I), 30),
+    (re.compile(r"прайс|price|ціни|цены|расцен|розцін", re.I), 25),
     (re.compile(r"про\s|about|о\s+нас|о\s+компан|команд", re.I), 20),
 )
 # Типы JSON-LD, у которых name — это название компании, а не товара.

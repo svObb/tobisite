@@ -104,6 +104,31 @@ def test_a_second_contacts_page_does_not_push_out_the_catalog():
     assert len(links) == ss.MAX_LINKS
 
 
+def _price_and_catalog_page() -> str:
+    return """<html><body>
+      <a href="/contacts/">Контакти</a>
+      <a href="/cp65568-rastsenki.html">Ціни на дрібний ремонт</a>
+      <a href="/product_list">Товари та послуги</a>
+      <a href="/services/">Послуги</a>
+    </body></html>"""
+
+
+def test_a_price_page_does_not_push_out_the_catalog():
+    """Воспроизводит бой на лиде prom.ua: /ua/cp65568-rastsenki-… vs /ua/product_list.
+
+    Раньше «ціни» весили как каталог (35) и по алфавиту (cp65568… < product_list)
+    занимали слот каталога первыми — товары с сайта не приезжали. Прайс теперь
+    свой класс весом 25, ниже каталога и услуг.
+    """
+    links = ss.pick_internal_links(ss.soup_of(_price_and_catalog_page()), BASE)
+
+    assert f"{BASE}product_list" in links
+    assert f"{BASE}services/" in links
+    assert any("contacts" in url for url in links)
+    assert not any("rastsenki" in url for url in links)
+    assert len(links) == ss.MAX_LINKS
+
+
 def test_link_choice_is_deterministic():
     soup = ss.soup_of(_links_page())
 
