@@ -6,7 +6,7 @@ image_slots: 0
 slots:
   - {name: section_title, type: free, max_chars: 42, lang: from_lead}
   # repeat-слоты с общим group движок кладёт одним списком: s.services[].name / .blurb
-  - {name: service_name, type: fact, source: whitelist, group: services, repeat: 3..6, max_chars: 34}
+  - {name: service_name, type: fact, source: whitelist, group: services, repeat: 3..6, max_chars: 60}
   - {name: service_blurb, type: free, group: services, repeat: same_as_group, max_chars: 110, lang: from_lead}
 perf: {est_dom_nodes: 48, images: 0}
 a11y: {heading_level: 2}

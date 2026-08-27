@@ -73,6 +73,7 @@ free_defaults:
   uk:
     _page:
       skip_to_content: "Перейти до вмісту"
+      nav_label: "Розділи сторінки"
       description: "Юридичні послуги: напрями роботи, контакти та форма звернення."
     _common:
       eyebrow: "Юридичні послуги"
@@ -131,6 +132,7 @@ free_defaults:
   en:
     _page:
       skip_to_content: "Skip to content"
+      nav_label: "Sections"
       description: "Legal services: practice areas, contacts and an enquiry form."
     _common:
       eyebrow: "Legal services"

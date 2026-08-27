@@ -111,7 +111,8 @@ def test_needs_enrichment_lists_what_to_ask(lawyer_poor):
 
 def test_long_fact_is_not_truncated():
     """Слот не влезает в max_chars — вариант выбывает, а не режет текст."""
-    too_long = "Супровід перевірок контролюючих органів та оскарження рішень"
+    too_long = ("Супровід перевірок контролюючих органів та оскарження їхніх "
+                "рішень в судах усіх інстанцій")
     profile = Profile.from_dict(dict(
         LAWYER_RICH, services=[too_long] + LAWYER_RICH["services"][:2]))
     html, trace = render(profile)

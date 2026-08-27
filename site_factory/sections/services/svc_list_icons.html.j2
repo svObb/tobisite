@@ -12,7 +12,9 @@
         </svg>
         <div class="min-w-0">
           <h3 class="font-title text-lg leading-snug break-words">{{ item.name }}</h3>
+          {%- if item.blurb %}
           <p class="mt-2 max-w-[var(--measure)] leading-relaxed text-muted">{{ item.blurb }}</p>
+          {%- endif %}
         </div>
       </li>
       {%- endfor %}

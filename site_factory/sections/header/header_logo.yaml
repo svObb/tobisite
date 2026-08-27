@@ -11,5 +11,5 @@ slots:
   - {name: business_name, type: fact, source: whitelist, max_chars: 60}
   - {name: phone, type: fact, source: whitelist, max_chars: 24}
   - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
-perf: {est_dom_nodes: 8, images: 1}
+perf: {est_dom_nodes: 18, images: 1}
 a11y: {heading_level: 0}

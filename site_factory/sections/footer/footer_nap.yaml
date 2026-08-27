@@ -11,7 +11,10 @@ slots:
   - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
   - {name: email, type: fact, source: whitelist, max_chars: 60, optional: true}
   - {name: hours_title, type: free, max_chars: 20, lang: from_lead, optional: true}
-  - {name: hours, type: fact, source: whitelist, repeat: 1..7, max_chars: 40, optional: true}
+  # 120 — потолок строки часов у источника (site_scrape режет её там же).
+  # Роль footer обязательна и замены не имеет: строка длиннее лимита увела бы
+  # со страницы не секцию, а всю страницу.
+  - {name: hours, type: fact, source: whitelist, repeat: 1..7, max_chars: 120, optional: true}
   - {name: legal_line, type: free, max_chars: 90, lang: from_lead}
 perf: {est_dom_nodes: 30, images: 0}
 a11y: {heading_level: 2}

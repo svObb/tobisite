@@ -35,6 +35,7 @@ compose.py (якорь соседней секции). Такие слоты з�
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -94,12 +95,23 @@ def free_specs(contract: dict) -> list[dict]:
     """Скалярные free-слоты варианта — ровно то, что пишет модель.
 
     Повторяющиеся free-слоты (blurb услуги, подпись показателя) сюда не входят:
-    у них по значению на каждый элемент группы, а контракт слот-генерации —
-    одна строка на слот. Их по-прежнему закрывают заготовки рецепта.
+    у них по значению на каждый элемент группы. Слоты группы отдаёт
+    group_free_specs, и ключ у них свой, с индексом элемента.
     """
     return [spec for spec in contract.get("slots") or []
             if spec["type"] == "free" and not spec.get("group")
             and not spec.get("repeat") and spec.get("source") != "composer"]
+
+
+def group_free_specs(contract: dict) -> list[dict]:
+    """Повторяющиеся free-слоты варианта: по значению на каждый элемент группы.
+
+    Ключ такого текста несёт индекс — «вариант.слот[0]». Позиция элемента
+    в группе детерминирована: композиция это чистая функция профиля и seed,
+    а тексты ложатся поверх неё уже готовой.
+    """
+    return [spec for spec in contract.get("slots") or []
+            if spec["type"] == "free" and spec.get("group")]
 
 
 def apply_free_texts(section: dict, texts: dict) -> bool:
@@ -107,17 +119,23 @@ def apply_free_texts(section: dict, texts: dict) -> bool:
 
     Ключ текста — «вариант.слот»: одно и то же имя слота живёт в разных
     секциях с разным смыслом и разным лимитом, и плоский ключ склеил бы
-    заголовок первого экрана с заголовком формы.
+    заголовок первого экрана с заголовком формы. У слотов группы к ключу
+    добавляется индекс элемента: «svc_cards_3.service_blurb[1]».
 
-    Слота нет в словаре — текста для него нет, и заготовка рецепта его не
-    подменяет: слот-генерация всегда отдаёт ключ на каждый free-слот
+    Скалярного слота нет в словаре — текста для него нет, и заготовка рецепта
+    его не подменяет: слот-генерация всегда отдаёт ключ на каждый free-слот
     композиции, а недостающий ключ означает, что тексты собраны для другой
     композиции (публикация старого черновика на обновлённой библиотеке).
     Тихий плейсхолдер в этом месте — рыба рецепта на живом превью.
 
+    С групповыми наоборот: недостающий ключ оставляет заготовку рецепта на
+    месте. Тексты старых черновиков блёрбов не содержат вовсе, и требовать их
+    задним числом значило бы уронить каждую такую страницу.
+
     Пустая строка или превышение max_chars — слот пуст: молча резать текст
     нельзя (тот же запрет, что и в _measure), а пустой обязательный слот
-    выводит секцию из состава страницы целиком (§3 ступень 4).
+    выводит секцию из состава страницы целиком (§3 ступень 4). Пустой блёрб
+    элемента секцию не валит: карточка услуги без пояснения — карточка.
     """
     ok = True
     for spec in free_specs(section["contract"]):
@@ -129,6 +147,18 @@ def apply_free_texts(section: dict, texts: dict) -> bool:
         if not value and not spec.get("optional"):
             ok = False
         section["slots"][spec["name"]] = value or None
+
+    for spec in group_free_specs(section["contract"]):
+        field = _item_key(spec["group"], spec["name"])
+        max_chars = spec.get("max_chars")
+        for index, row in enumerate(section["slots"].get(spec["group"]) or []):
+            key = f"{section['variant']}.{spec['name']}[{index}]"
+            if key not in texts:
+                continue
+            value = str(texts.get(key) or "").strip()
+            if max_chars and len(value) > max_chars:
+                value = ""
+            row[field] = value or None
     return ok
 
 
@@ -200,30 +230,59 @@ def _products(profile: Profile, lang: str):
     return rows
 
 
-def _hours_rows(profile: Profile, lang: str):
+def _hours_list(profile: Profile):
+    """Часы профиля списком строк. None — часов не спрашивали.
+
+    Строка приходит одним элементом, а не рассыпается по буквам: расписание
+    ручного ввода добирается сюда целиком, и посимвольная итерация нарисовала
+    бы таблицу часов из отдельных знаков. Резать такую строку — дело шлюза
+    (draft_service._clean_hours), где ещё видно, откуда она взялась.
+    """
     if not profile.hours.known:
         return None
-    return [{"key": str(i), "value": str(v)}
-            for i, v in enumerate(profile.hours.value or [])]
+    value = profile.hours.value
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return list(value or [])
+
+
+def _hours_rows(profile: Profile, lang: str):
+    lines = _hours_list(profile)
+    if lines is None:
+        return None
+    return [{"key": str(i), "value": str(v)} for i, v in enumerate(lines)]
 
 
 def _hour_days(profile: Profile, lang: str):
     """Часы таблицей: день слева, время справа.
 
-    Строку часов пишет сам бизнес, поэтому единственное, что здесь можно
-    сделать, — разрезать её по первому «: ». Не режется — вся строка уходит в
-    день, а время остаётся пустым: выдумывать расписание движку нечем.
+    Строку часов пишет сам бизнес, поэтому режем её по первому «: », а если
+    двоеточия нет — по пробелу перед началом времени («Пн-Пт 9:00-19:00»). Не
+    режется ни так, ни так — вся строка уходит в день, а время остаётся
+    пустым: выдумывать расписание движку нечем.
     """
-    if not profile.hours.known:
+    lines = _hours_list(profile)
+    if lines is None:
         return None
     rows = []
-    for index, line in enumerate(profile.hours.value or []):
-        text = str(line)
-        day, separator, time = text.partition(": ")
-        rows.append({"key": str(index),
-                     "value": day if separator else text,
-                     "time": time.strip() if separator else None})
+    for index, line in enumerate(lines):
+        day, time = _split_hours(str(line))
+        rows.append({"key": str(index), "value": day, "time": time})
     return rows
+
+
+# «Пн-Пт 9:00-19:00»: день — всё до пробела, за которым начинается время.
+_HOURS_TIME = re.compile(r"^(?P<day>.+?)\s+(?P<time>\d{1,2}[:.]\d{2}.*)$")
+
+
+def _split_hours(text: str) -> tuple[str, str | None]:
+    day, separator, time = text.partition(": ")
+    if separator:
+        return day, time.strip()
+    found = _HOURS_TIME.match(text)
+    if found:
+        return found["day"].strip(), found["time"].strip()
+    return text, None
 
 
 def _hours_line(profile: Profile, lang: str):

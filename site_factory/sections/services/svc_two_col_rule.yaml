@@ -8,7 +8,7 @@ prefers: {service_count: "2..8", text_volume: ">=medium"}
 image_slots: 0
 slots:
   - {name: section_title, type: free, max_chars: 42, lang: from_lead}
-  - {name: service_name, type: fact, source: whitelist, group: services, repeat: 2..8, max_chars: 40}
+  - {name: service_name, type: fact, source: whitelist, group: services, repeat: 2..8, max_chars: 60}
   - {name: service_blurb, type: free, group: services, repeat: same_as_group, max_chars: 130, lang: from_lead}
 perf: {est_dom_nodes: 44, images: 0}
 a11y: {heading_level: 2}

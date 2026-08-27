@@ -6,7 +6,9 @@
       {%- for item in s.services %}
       <li class="grid gap-2 border-b border-line py-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-flow">
         <h3 class="font-title text-lg leading-snug break-words sm:text-xl">{{ item.name }}</h3>
+        {%- if item.blurb %}
         <p class="max-w-[var(--measure)] leading-relaxed text-muted">{{ item.blurb }}</p>
+        {%- endif %}
       </li>
       {%- endfor %}
     </ul>

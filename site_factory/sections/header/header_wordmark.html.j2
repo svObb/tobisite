@@ -1,9 +1,28 @@
 {#- Текстовый логотип. Не h1 и не h2: шапка стоит до <main> и в иерархию
-    заголовков страницы не входит. -#}
+    заголовков страницы не входит.
+
+    Меню собирается из самих секций страницы: подпись пункта — заголовок
+    секции, адрес — её якорь. Ролей без заголовка (hero, галерея, футер) в нём
+    нет, придуманных пунктов — тоже; на узком экране оно уходит второй строкой
+    и прокручивается вбок вместо переноса. -#}
 {%- set s = section.slots -%}
 <header id="{{ section.id }}" class="border-b border-line bg-paper">
   <div class="flex w-full flex-wrap items-baseline justify-between gap-x-8 gap-y-2 px-gutter py-4">
     <p class="font-title text-xl leading-tight tracking-tight break-words sm:text-2xl">{{ s.business_name }}</p>
+    {%- set nav_items = [] -%}
+    {%- for target in sections if target.role in ('products', 'services', 'about', 'info', 'cta') -%}
+      {%- set title = target.slots.get('section_title') -%}
+      {%- if title %}{% set _ = nav_items.append((target.id, title)) %}{% endif -%}
+    {%- endfor -%}
+    {%- if nav_items %}
+    <nav aria-label="{{ site.ui.nav_label }}" class="order-last w-full overflow-x-auto lg:order-none lg:w-auto">
+      <ul class="flex items-center gap-x-6 whitespace-nowrap text-sm">
+        {%- for anchor, label in nav_items %}
+        <li><a href="#{{ anchor }}" class="text-muted underline-offset-4 hover:text-ink hover:underline">{{ label }}</a></li>
+        {%- endfor %}
+      </ul>
+    </nav>
+    {%- endif %}
     <a href="{{ s.phone_href }}" class="text-base font-medium break-words text-accent-ink underline decoration-line underline-offset-4 sm:text-lg" data-hit="cta_click">{{ s.phone }}</a>
   </div>
 </header>

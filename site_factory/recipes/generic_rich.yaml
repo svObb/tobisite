@@ -66,6 +66,7 @@ free_defaults:
   uk:
     _page:
       skip_to_content: "Перейти до вмісту"
+      nav_label: "Розділи сторінки"
       description: "Послуги, контакти та форма звернення в одному місці."
     _common:
       eyebrow: "Послуги"
@@ -124,6 +125,7 @@ free_defaults:
   en:
     _page:
       skip_to_content: "Skip to content"
+      nav_label: "Sections"
       description: "Services, contacts and an enquiry form in one place."
     _common:
       eyebrow: "Services"

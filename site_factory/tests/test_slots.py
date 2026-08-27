@@ -11,10 +11,13 @@ from site_factory.engine.profile import Profile
 
 from .conftest import LAWYER_RICH, PRODUCTS, PRODUCTS_LEAD
 
+BLURB = "Заготовка рецепта"
+
 RECIPE = {
     "id": "synthetic",
     "free_defaults": {
-        "uk": {"_common": {"section_title": "Товари", "hours_title": "Графік"}},
+        "uk": {"_common": {"section_title": "Товари", "hours_title": "Графік",
+                           "service_blurb": BLURB}},
     },
 }
 
@@ -62,8 +65,30 @@ HOURS_CARD = {
 }
 
 
+# Карточки услуг: у каждой позиции свой blurb, и пишет его модель.
+SERVICE_CARDS = {
+    "id": "svc_cards_3",
+    "role": "services",
+    "slots": [
+        {"name": "section_title", "type": "free", "max_chars": 42},
+        {"name": "service_name", "type": "fact", "group": "services",
+         "repeat": "3..6", "max_chars": 60},
+        {"name": "service_blurb", "type": "free", "group": "services",
+         "repeat": "same_as_group", "max_chars": 110},
+    ],
+}
+
+
 def build(contract, data):
     return slots.build(contract, Profile.from_dict(data), RECIPE)
+
+
+def section(contract, data) -> dict:
+    """Секция в той форме, в которой её отдаёт compose и ждёт apply_free_texts."""
+    filled = build(contract, data)
+    return {"id": contract["role"], "role": contract["role"],
+            "variant": contract["id"], "contract": contract,
+            "slots": dict(filled.slots), "images": filled.images}
 
 
 def test_group_reads_price_from_the_driver_item(products_lead):
@@ -171,6 +196,79 @@ def test_hours_stay_a_line_where_the_contract_asks_for_a_line(products_lead):
                 "slots": [{"name": "hours", "type": "fact", "max_chars": 90}]}
     filled = slots.build(contract, products_lead, RECIPE)
     assert filled.slots["hours"] == "Пн–Сб: 08:00–19:00"
+
+
+def test_hours_written_as_one_string_stay_one_row():
+    """Ручная строка расписания — строка таблицы, а не таблица из букв."""
+    filled = build(HOURS_CARD, dict(PRODUCTS_LEAD, hours="Пн-Пт 9:00-19:00"))
+    assert filled.ok
+    assert filled.slots["hours"] == [{"day": "Пн-Пт", "time": "9:00-19:00"}]
+
+
+def test_hours_split_falls_back_to_the_space_before_the_time():
+    """Двоеточия с пробелом нет — режем там, где начинается время."""
+    data = dict(PRODUCTS_LEAD, hours=["Пн-Пт 9:00-19:00", "Сб 10.00-17.00",
+                                      "Цілодобово"])
+    filled = build(HOURS_CARD, data)
+    assert filled.slots["hours"] == [{"day": "Пн-Пт", "time": "9:00-19:00"},
+                                     {"day": "Сб", "time": "10.00-17.00"},
+                                     {"day": "Цілодобово", "time": None}]
+
+
+def test_hours_string_is_one_item_where_the_contract_repeats():
+    """footer_nap просит список строк: строка приходит одним элементом."""
+    contract = {"id": "footer_nap", "role": "footer",
+                "slots": [{"name": "hours", "type": "fact", "repeat": "1..7",
+                           "max_chars": 60}]}
+    filled = build(contract, dict(PRODUCTS_LEAD, hours="Пн-Пт 9:00-19:00"))
+    assert filled.slots["hours"] == ["Пн-Пт 9:00-19:00"]
+
+
+def test_group_text_replaces_only_its_own_element():
+    part = section(SERVICE_CARDS, LAWYER_RICH)
+    written = "Ведемо справу в усіх інстанціях."
+
+    ok = slots.apply_free_texts(part, {
+        "svc_cards_3.section_title": "Напрями роботи",
+        "svc_cards_3.service_blurb[1]": written,
+    })
+
+    assert ok
+    rows = part["slots"]["services"]
+    assert rows[1]["blurb"] == written
+    # ключа нет — заготовка рецепта на месте: старые тексты страницу не валят
+    assert rows[0]["blurb"] == BLURB
+
+
+def test_empty_group_text_leaves_the_element_without_a_blurb():
+    part = section(SERVICE_CARDS, LAWYER_RICH)
+
+    ok = slots.apply_free_texts(part, {
+        "svc_cards_3.section_title": "Напрями роботи",
+        "svc_cards_3.service_blurb[0]": "   ",
+    })
+
+    # блёрба нет, а карточка есть: секцию пустой элемент группы не выводит
+    assert ok
+    assert part["slots"]["services"][0]["blurb"] is None
+
+
+def test_group_text_over_the_limit_is_dropped_and_not_cut():
+    part = section(SERVICE_CARDS, LAWYER_RICH)
+
+    ok = slots.apply_free_texts(part, {
+        "svc_cards_3.section_title": "Напрями роботи",
+        "svc_cards_3.service_blurb[2]": "я" * 111,
+    })
+
+    assert ok
+    assert part["slots"]["services"][2]["blurb"] is None
+
+
+def test_group_free_specs_names_the_repeating_free_slots():
+    assert [spec["name"] for spec in slots.group_free_specs(SERVICE_CARDS)] == \
+        ["service_blurb"]
+    assert slots.free_specs(SERVICE_CARDS) == [SERVICE_CARDS["slots"][0]]
 
 
 def test_group_needs_exactly_one_driver():

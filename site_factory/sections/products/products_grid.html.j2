@@ -1,6 +1,10 @@
 {#- Название товара стоит текстом рядом с фотографией, поэтому у картинки
     пустой alt и aria-hidden: озвучивать одно и то же дважды нечем и незачем,
-    а описать чужой снимок движку нечем вовсе. -#}
+    а описать чужой снимок движку нечем вовсе.
+
+    line-clamp-3 у заголовка карточки — вёрстка, а не правка данных: названия
+    в прайсах магазинов бывают на строку с описанием, и в сетке они рвут ряд.
+    Название остаётся в разметке целиком: обрезает CSS, читалка читает всё. -#}
 {%- set s = section.slots -%}
 <section id="{{ section.id }}" class="bg-paper py-section">
   <div class="w-full px-gutter">
@@ -9,7 +13,7 @@
       {%- for item in s.products %}
       <li class="grid gap-3">
         <img src="{{ item.image.src }}" alt="" aria-hidden="true" width="{{ item.image.width }}" height="{{ item.image.height }}" class="aspect-square w-full rounded-preset bg-surface object-cover" loading="lazy" decoding="async">
-        <h3 class="font-title text-base leading-snug break-words sm:text-lg">{{ item.name }}</h3>
+        <h3 class="line-clamp-3 font-title text-base leading-snug break-words sm:text-lg">{{ item.name }}</h3>
         {%- if item.price %}
         <p class="text-sm font-medium text-accent-ink sm:text-base">{{ item.price }}</p>
         {%- endif %}

@@ -250,7 +250,8 @@ def site_for(sections: list) -> dict:
         "description": "Фікстура для смоук-рендера site_factory.",
         "assets_base": ASSETS_BASE,
         "scripts": [f"{ASSETS_BASE}/{name}.js" for name in names],
-        "ui": {"skip_to_content": "Перейти до вмісту"},
+        "ui": {"skip_to_content": "Перейти до вмісту",
+               "nav_label": "Розділи сторінки"},
     }
 
 

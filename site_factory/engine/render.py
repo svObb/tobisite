@@ -221,7 +221,8 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
         "description": page.get("description"),
         "assets_base": ASSETS_BASE,
         "scripts": scripts_for(sections),
-        "ui": {"skip_to_content": page.get("skip_to_content", "")},
+        "ui": {"skip_to_content": page.get("skip_to_content", ""),
+               "nav_label": page.get("nav_label", "")},
     }
 
 

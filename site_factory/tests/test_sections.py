@@ -5,18 +5,32 @@
 """
 import re
 
+from site_factory.engine import slots
+from site_factory.engine.compose import compose
 from site_factory.engine.profile import Profile
-from site_factory.engine.render import (ROOT, environment, load_tokens, render,
-                                        resolve_preset)
+from site_factory.engine.render import (ROOT, environment, load_library,
+                                        load_recipe, load_tokens,
+                                        recipe_id_for, render, resolve_preset,
+                                        seed_for)
 
 from . import smoke_render
-from .conftest import BRAND_SHOP
+from .conftest import BRAND_SHOP, PRODUCTS
 
 IMG_SRC = re.compile(r'<img[^>]+\bsrc="([^"]+)"')
 
 # Потолок медиа страницы: логотип и семь картинок скрейпа (site_scrape
 # складывает в стейджинг не больше восьми файлов).
 MEDIA_BUDGET = 8
+
+# Название товара из настоящего прайса: в маркетплейсах они длиной со строку
+# описания, и лимит слота обязан их пропускать (усечение данных запрещено).
+LONG_PRODUCT = ("Комплект зчеплення в зборі для важкої комерційної техніки "
+                "з підшипником вимикання зчеплення")
+
+# Часы одной строкой: так их пишет и сам бизнес, и работник в карточке. Длина
+# — под потолок источника (120 знаков режет и скрейп, и шлюз карточки).
+LONG_HOURS = ("Пн–Чт: 09:00–13:00 та 14:00–19:00, Пт: 09:00–18:00, "
+              "Сб: 10:00–17:00 без перерви, Нд і святкові дні: вихідний")
 
 
 def images_of(html):
@@ -138,6 +152,55 @@ def test_about_note_anchors_the_free_text_in_facts(brand_shop):
     assert not any(char.isdigit() for char in _text_of(about, "text-lede"))
 
 
+def test_a_long_product_name_reaches_the_page_whole():
+    """Лимит слота пропускает название прайса целиком, обрезает его вёрстка."""
+    profile = Profile.from_dict(dict(
+        BRAND_SHOP, products=[dict(PRODUCTS[0], name=LONG_PRODUCT)] + PRODUCTS[1:]))
+    html, trace = render(profile)
+    products = section_html(html, "products")
+    assert "products_grid" in trace["sections"]
+    assert LONG_PRODUCT in products
+    assert "line-clamp-3" in products
+
+
+def test_a_long_hours_line_keeps_the_footer_on_the_page():
+    """Роль footer обязательна: длинная строка часов не имеет права её увести."""
+    profile = Profile.from_dict(dict(BRAND_SHOP, hours=LONG_HOURS))
+    html, trace = render(profile)
+    assert html is not None, trace.get("failed") or trace["needs_enrichment"]
+    assert "footer_nap" in trace["sections"]
+    assert LONG_HOURS in section_html(html, "footer")
+
+
+def test_a_service_without_a_blurb_prints_nothing_in_its_place(lawyer_rich):
+    """Пустой блёрб — карточка без пояснения, а не литерал None в разметке."""
+    variant = variant_of(lawyer_rich, "services")
+    texts = free_texts_for(lawyer_rich, {f"{variant}.service_blurb[0]": ""})
+
+    html, trace = render(lawyer_rich, free_texts=texts)
+
+    assert variant in trace["sections"]
+    assert ">None<" not in html
+    assert section_html(html, "services").count("<li") >= 3
+
+
+def test_the_header_menu_leads_to_the_sections_of_the_page(brand_shop):
+    """Пункт меню — заголовок секции и её якорь, придуманных пунктов нет."""
+    html, _ = render(brand_shop)
+    header = html[:html.index("</header>")]
+    assert 'href="#services"' in header and 'href="#cta"' in header
+    for role in ("services", "cta"):
+        title = _text_of(section_html(html, role), "text-h2")
+        assert title and f">{title}</a>" in header
+    assert 'href="#"' not in html
+
+
+def test_a_lead_without_products_has_no_products_link(lawyer_rich):
+    html, trace = render(lawyer_rich)
+    assert not any(v.startswith("products_") for v in trace["sections"])
+    assert 'href="#products"' not in html[:html.index("</header>")]
+
+
 def test_smoke_pages_render_on_every_preset():
     """Смоук держит те варианты, до которых фикстуры движка не доходят.
 
@@ -153,6 +216,29 @@ def test_smoke_pages_render_on_every_preset():
                                  facts=smoke_render.FACTS, sections=sections)
             assert "{{" not in html and "{%" not in html, preset["id"] + suffix
             assert html.count("<h1") == 1, preset["id"] + suffix
+
+
+def variant_of(profile, role):
+    """Какой вариант выиграл роль у этого профиля."""
+    _, trace = render(profile)
+    library = load_library()
+    return next(variant for variant in trace["sections"]
+                if library[variant]["role"] == role)
+
+
+def free_texts_for(profile, overrides):
+    """Тексты «модели» на композицию профиля: заготовки рецепта плюс правка.
+
+    Групповые ключи сюда не входят — недостающий ключ оставляет заготовку
+    рецепта, и подменить надо ровно тот блёрб, о котором тест.
+    """
+    recipe = load_recipe(recipe_id_for(profile))
+    composition = compose(profile, recipe, load_library(),
+                          seed_for(profile.domain_norm))
+    texts = {f"{part['variant']}.{spec['name']}": part["slots"][spec["name"]]
+             for part in composition.sections
+             for spec in slots.free_specs(part["contract"])}
+    return texts | overrides
 
 
 def section_html(html, role):
