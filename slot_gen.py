@@ -29,7 +29,10 @@ from site_factory.engine import slots as sf_slots
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
+# Квалити-гейт 28.08.2026 (пилот №2): Haiku систематически (3 из 3 прогонов)
+# отдаёт пустой about_text — секция «О нас» выпадает, плюс платная
+# перегенерация на каждом черновике. Sonnet прошёл 59/59 слотов с первого раза.
+MODEL = "claude-sonnet-5"
 PROMPT_VERSION = "s3"
 # Три десятка коротких строк JSON'ом: к слотам страницы добавились блёрбы
 # услуг, по одному на позицию. Больше здесь означает, что модель начала
@@ -43,8 +46,8 @@ MAX_TOKENS = 2000
 # зовёт slot_specs с include_fact_bound=True, дорожка модели — никогда.
 FACT_BOUND_GROUP_SLOTS = ("stat_label",)
 
-# Прайс Haiku 4.5, $/1M токенов. Кэш: чтение ~0,1×, запись ~1,25× от входа.
-PRICE_IN, PRICE_OUT = Decimal("1"), Decimal("5")
+# Прайс Sonnet, $/1M токенов. Кэш: чтение ~0,1×, запись ~1,25× от входа.
+PRICE_IN, PRICE_OUT = Decimal("3"), Decimal("15")
 CACHE_READ_RATE, CACHE_WRITE_RATE = Decimal("0.1"), Decimal("1.25")
 MILLION = Decimal("1000000")
 
