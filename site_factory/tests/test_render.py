@@ -70,13 +70,20 @@ def test_library_is_version_three_with_sixteen_presets():
 
 
 def test_every_preset_is_reachable():
-    """Пресет, до которого не доходит ни одна ниша, — мёртвый вес библиотеки."""
+    """Пресет, до которого не доходит ни одна ниша, — мёртвый вес библиотеки.
+
+    Считается по самим пулам: фолбэк незнакомой ниши отдаёт полный список
+    и покрыл бы любой пресет, потому в union он не участвует.
+    """
     ids = preset_ids()
-    keys = list(niches.pools(ids)) + [_key("Bakery")]
-    reached = {preset_for(Profile.from_dict(
-        {"domain_norm": domain, "niche": key, "lang": "uk"}))["id"]
-        for key in keys for domain in DOMAINS}
-    assert reached == set(ids)
+    pooled = {pid for pool in niches.pools(ids).values() for pid in pool}
+    assert pooled == set(ids)
+
+
+def test_unknown_niche_gets_the_whole_library():
+    """Слово вне таблицы не сужает выбор — лид получает все пресеты."""
+    ids = preset_ids()
+    assert niches.pool_for(_key("Bakery"), ids) == ids
 
 
 def test_preset_index_is_sha256_not_builtin_hash():
@@ -161,6 +168,7 @@ def test_needs_enrichment_has_no_html(lawyer_poor):
 
 def test_language_switches_texts(generic_light):
     html, _ = render(generic_light)
+    assert html is not None
     assert "Skip to content" in html
     assert "Перейти" not in html
 
@@ -172,6 +180,7 @@ def test_every_page_gets_the_base_scripts(buildable_profile):
     инлайн на странице — JSON-LD, а это данные, а не код.
     """
     html, _ = render(buildable_profile)
+    assert html is not None
     tags = re.findall(r"<script[^>]*>", html)
     loaded = [tag for tag in tags if "src=" in tag]
     assert loaded[:len(BASE_SCRIPTS)] == \
@@ -185,10 +194,12 @@ def test_parallax_script_comes_only_with_the_section_that_asks(lawyer_rich,
                                                                brand_shop):
     """Скрипт секции просит сама секция — флагом js в контракте."""
     plain, plain_trace = render(lawyer_rich)
+    assert plain is not None
     assert "hero_bg_photo" not in plain_trace["sections"]
     assert "/assets/parallax.js" not in plain
 
     photo, photo_trace = render(brand_shop)
+    assert photo is not None
     assert "hero_bg_photo" in photo_trace["sections"]
     assert '<script defer src="/assets/parallax.js"></script>' in photo
 
@@ -246,7 +257,9 @@ def test_library_survives_roles_without_variants():
 
 
 def _key(niche: str) -> str:
-    return niches.key_for(niche)
+    key = niches.key_for(niche)
+    assert key is not None
+    return key
 
 
 def _score_of(trace, role, variant):

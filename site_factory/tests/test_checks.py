@@ -19,6 +19,7 @@ def test_every_draft_passes_every_check(buildable_profile):
     Они расходятся у лида с бренд-цветами — и проверять надо ту, что в HTML.
     """
     html, _ = render(buildable_profile)
+    assert html is not None
     assert run_all(html, buildable_profile, palette_for(buildable_profile)) == {}
 
 
