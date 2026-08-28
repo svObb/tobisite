@@ -11,6 +11,25 @@ from .conftest import BRAND_SHOP
 DOMAINS = ["alfa.example", "beta.example", "gamma.example", "delta.example",
            "epsilon.example", "zeta.example", "eta.example", "theta.example"]
 
+# Пулы семи ниш бота выписаны целиком намеренно: пресет выбирается как хеш
+# домена по модулю длины пула, поэтому вставка в середину меняет дизайн лиду,
+# с которым уже идёт переписка. Долив архетипов обязан ложиться в конец.
+BOT_POOLS = {
+    "lawyer": ("corporate-trust", "editorial-stone"),
+    "dental": ("clinical-light", "editorial-warm", "warm-table", "friendly-pop",
+               "coral-clinic"),
+    "auto_service": ("bold-trade", "friendly-pop", "clinical-light",
+                     "corporate-trust", "urgent-trade", "verdant-craft"),
+    "cafe": ("deep-premium", "warm-table", "editorial-warm", "friendly-pop"),
+    "beauty": ("editorial-warm", "salon-monochrome", "deep-premium",
+               "editorial-stone", "soft-modal", "neon-grid"),
+    "hotel": ("editorial-warm", "deep-premium", "warm-table", "salon-monochrome",
+              "amber-crew", "soft-modal"),
+    "construction": ("editorial-warm", "bold-trade", "corporate-trust",
+                     "editorial-stone", "urgent-trade", "amber-crew",
+                     "verdant-craft", "violet-poster"),
+}
+
 
 def preset_ids():
     return tuple(preset["id"] for preset in load_tokens()["presets"])
@@ -60,6 +79,20 @@ def test_every_bot_niche_has_a_pool():
     for niche in ("Стоматология", "Автосервис", "Кафе/ресторан", "Юрист",
                   "Салон красоты", "Гостиница", "Строительство"):
         assert niches.key_for(niche) in table, niche
+
+
+def test_bot_pools_keep_their_order():
+    table = niches.pools(preset_ids())
+    for key, pool in BOT_POOLS.items():
+        assert table[key] == pool, key
+
+
+def test_reserve_niches_have_pools_too():
+    """Ниши-заготовки: правило есть, рецепта ещё нет, а пул уже выбран."""
+    table = niches.pools(preset_ids())
+    assert len(table) == len(BOT_POOLS) + 43
+    for slug in ("roofing-contractor", "nail-salon", "tire-shop"):
+        assert table[slug], slug
 
 
 def test_logo_pushes_dark_presets_out_of_the_pool():

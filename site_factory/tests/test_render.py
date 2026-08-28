@@ -17,10 +17,16 @@ from .conftest import GENERIC_LIGHT, GENERIC_RICH, LAWYER_POOR, LAWYER_RICH
 DOMAINS = ["alfa.example", "beta.example", "gamma.example", "delta.example",
            "epsilon.example", "zeta.example", "eta.example", "theta.example"]
 
-# Ниши всех пулов плюс слово вне таблицы: вместе с доменами они обязаны
-# покрыть каждый пресет библиотеки.
+# Семь ниш бота словами карточки плюс слово вне таблицы: на них проверяется
+# формула выбора пресета.
 NICHES = ["Юрист", "Стоматология", "Автосервис", "Кафе/ресторан",
           "Салон красоты", "Гостиница", "Строительство", "Bakery"]
+
+# Порядок первых восьми пресетов заморожен: от индекса в пуле зависит, какой
+# дизайн уже ушёл лиду в письме. Новые пресеты дописываются только в конец.
+FROZEN_PRESETS = ("corporate-trust", "editorial-warm", "clinical-light",
+                  "deep-premium", "bold-trade", "warm-table",
+                  "salon-monochrome", "friendly-pop")
 
 
 def preset_ids():
@@ -54,12 +60,23 @@ def test_preset_comes_from_the_pool_of_the_niche():
             assert preset_for(profile)["id"] == pool[digest % len(pool)]
 
 
+def test_library_is_version_three_with_sixteen_presets():
+    """Первые восемь пресетов заморожены — слот-ключи лидов считают их по месту."""
+    ids = preset_ids()
+    assert load_tokens()["version"] == 3
+    assert len(ids) == 16
+    assert ids[:len(FROZEN_PRESETS)] == FROZEN_PRESETS
+    assert len(set(ids)) == len(ids)
+
+
 def test_every_preset_is_reachable():
     """Пресет, до которого не доходит ни одна ниша, — мёртвый вес библиотеки."""
+    ids = preset_ids()
+    keys = list(niches.pools(ids)) + [_key("Bakery")]
     reached = {preset_for(Profile.from_dict(
-        {"domain_norm": domain, "niche": niche, "lang": "uk"}))["id"]
-        for niche in NICHES for domain in DOMAINS}
-    assert reached == set(preset_ids())
+        {"domain_norm": domain, "niche": key, "lang": "uk"}))["id"]
+        for key in keys for domain in DOMAINS}
+    assert reached == set(ids)
 
 
 def test_preset_index_is_sha256_not_builtin_hash():

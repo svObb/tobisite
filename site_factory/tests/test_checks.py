@@ -22,9 +22,13 @@ def test_every_draft_passes_every_check(buildable_profile):
     assert run_all(html, buildable_profile, palette_for(buildable_profile)) == {}
 
 
-def test_all_presets_pass_contrast():
-    for preset in load_tokens()["presets"]:
-        assert a11y.contrast_problems(preset["palette"]) == [], preset["id"]
+@pytest.mark.parametrize("preset_id", [preset["id"]
+                                       for preset in load_tokens()["presets"]])
+def test_preset_passes_contrast(preset_id):
+    """Каждый пресет библиотеки поимённо: брак одного не прячется за остальными."""
+    preset = next(preset for preset in load_tokens()["presets"]
+                  if preset["id"] == preset_id)
+    assert a11y.contrast_problems(preset["palette"]) == []
 
 
 def test_contrast_catches_a_bad_pair():
