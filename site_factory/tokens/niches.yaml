@@ -5,16 +5,24 @@
 # обслуживает generic, а пресет берётся из всего списка presets.yaml.
 #
 # pools: ключ ниши -> пресеты, которыми эта ниша вообще может быть собрана.
-# Составлены из matches архетипов дизайн-библиотеки
-# (tobisite-launch/design-library/archetypes/arch-01..08): сначала архетипы,
+# Семь ниш бота (config.NICHES) собраны из matches архетипов дизайн-библиотеки
+# (tobisite-launch/design-library/archetypes/arch-01..16): сначала архетипы,
 # где ниша primary, затем alt, внутри — по номеру архетипа.
+#
+# Ниши-заготовки ниже (slug правила из design-library/niche-rules) собраны из
+# archetype_affinity их правил, таблица — handoff-stage2.md §3. Пул у ниши
+# один, а привязка в правиле раздельная по трекам rich/light, поэтому здесь
+# треки слиты: primary rich, primary light, затем alt обоих треков. Трек всё
+# равно выбирает рецепт (render.track_for), а не пресет.
 #
 # ПОРЯДОК ПУЛА — ЧАСТЬ КОНТРАКТА. Внутри пула пресет выбирается как
 # sha256(domain_norm) % len(pool), поэтому перестановка меняет дизайн лидам,
-# с которыми уже идёт переписка. Дописывать — только в конец пула.
+# с которыми уже идёт переписка. Дописывать — только в конец пула. Пересборка
+# пулов бота на arch-09..16 контракт не тронула: все восемь новых архетипов
+# приходят в matches как alt и встают за существующими.
 #
 # Пулы намеренно узкие: ниша решает, каким сайт вообще может быть, домен —
-# каким он будет. Расширятся вместе с архетипами arch-09..16 (дорожка I, W6).
+# каким он будет.
 
 aliases:
   юрист: lawyer
@@ -74,10 +82,60 @@ aliases:
   construction: construction
 
 pools:
-  lawyer: [corporate-trust]
-  dental: [clinical-light, editorial-warm, warm-table, friendly-pop]
-  auto_service: [bold-trade, friendly-pop, clinical-light, corporate-trust]
+  lawyer: [corporate-trust, editorial-stone]
+  dental: [clinical-light, editorial-warm, warm-table, friendly-pop, coral-clinic]
+  auto_service: [bold-trade, friendly-pop, clinical-light, corporate-trust,
+                 urgent-trade, verdant-craft]
   cafe: [deep-premium, warm-table, editorial-warm, friendly-pop]
-  beauty: [editorial-warm, salon-monochrome, deep-premium]
-  hotel: [editorial-warm, deep-premium, warm-table, salon-monochrome]
-  construction: [editorial-warm, bold-trade, corporate-trust]
+  beauty: [editorial-warm, salon-monochrome, deep-premium, editorial-stone,
+           soft-modal, neon-grid]
+  hotel: [editorial-warm, deep-premium, warm-table, salon-monochrome,
+          amber-crew, soft-modal]
+  construction: [editorial-warm, bold-trade, corporate-trust, editorial-stone,
+                 urgent-trade, amber-crew, verdant-craft, violet-poster]
+
+  accounting-firm: [deep-premium, editorial-warm, corporate-trust]
+  auto-body-shop: [bold-trade, corporate-trust]
+  auto-glass-repair: [urgent-trade, clinical-light, bold-trade]
+  bakery-confectionery: [deep-premium, warm-table, editorial-warm]
+  bar-pub: [deep-premium, bold-trade]
+  barbershop: [deep-premium, editorial-warm, friendly-pop]
+  car-detailing: [corporate-trust, clinical-light, friendly-pop]
+  chiropractic-clinic: [editorial-warm, corporate-trust, clinical-light]
+  coffee-roastery: [deep-premium, warm-table, editorial-warm]
+  dj-entertainment: [deep-premium, bold-trade]
+  dog-training-school: [editorial-warm, warm-table]
+  driving-school: [corporate-trust, soft-modal, clinical-light]
+  electrician-service: [urgent-trade, clinical-light, bold-trade, corporate-trust]
+  event-planning-service: [editorial-warm, corporate-trust]
+  fitness-gym: [bold-trade, clinical-light, editorial-warm]
+  flooring-installation: [warm-table, editorial-warm]
+  florist-shop: [editorial-warm, salon-monochrome]
+  house-cleaning-service: [neon-grid, soft-modal, warm-table, friendly-pop,
+                           clinical-light]
+  hvac-service: [urgent-trade, clinical-light, friendly-pop, corporate-trust]
+  insurance-agency: [deep-premium, corporate-trust, clinical-light]
+  landscaping-service: [warm-table, editorial-warm]
+  locksmith-service: [urgent-trade, clinical-light, bold-trade, corporate-trust]
+  martial-arts-school: [amber-crew, bold-trade, deep-premium]
+  medspa-aesthetics: [warm-table, editorial-warm, salon-monochrome]
+  moving-company: [corporate-trust, clinical-light, friendly-pop]
+  nail-salon: [salon-monochrome, editorial-warm, friendly-pop, neon-grid]
+  notary-office: [friendly-pop, corporate-trust, clinical-light]
+  optometry-eyewear: [editorial-warm, clinical-light, salon-monochrome,
+                      editorial-stone]
+  painting-decorating: [editorial-warm, corporate-trust, warm-table]
+  pest-control-service: [urgent-trade, clinical-light, bold-trade, corporate-trust]
+  pet-boarding-daycare: [warm-table, friendly-pop, clinical-light, verdant-craft]
+  pet-grooming-salon: [friendly-pop, clinical-light, editorial-warm, neon-grid]
+  photography-studio: [salon-monochrome, deep-premium]
+  physical-therapy-clinic: [clinical-light, deep-premium]
+  plumbing-service: [corporate-trust, clinical-light, friendly-pop]
+  real-estate-agency: [deep-premium, editorial-warm, amber-crew, editorial-stone]
+  roofing-contractor: [urgent-trade, clinical-light, bold-trade, corporate-trust]
+  spa-wellness-center: [deep-premium, warm-table, editorial-warm, soft-modal]
+  tattoo-studio: [deep-premium, salon-monochrome, bold-trade]
+  tire-shop: [urgent-trade, clinical-light, bold-trade, corporate-trust]
+  vacation-rental-bnb: [deep-premium, editorial-warm, warm-table]
+  veterinary-clinic: [warm-table, clinical-light, friendly-pop]
+  yoga-pilates-studio: [deep-premium, editorial-warm, friendly-pop]

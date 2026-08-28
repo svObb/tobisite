@@ -18,7 +18,7 @@
 #                 Несёт текст: ссылки, надзаголовки, заливка кнопок.
 #   accent_on   — текст поверх заливки accent_ink, контраст >= 4.5:1.
 # Там, где акцент архетипа сам проходит AA, accent_ink равен accent. Тона
-# пресетов 5-8 досчитаны engine/palette.py той же математикой, которой движок
+# пресетов 5-16 досчитаны engine/palette.py той же математикой, которой движок
 # доводит до AA бренд-цвет лида, — двух правил для одного контраста нет.
 # Производные тона (surface, line, muted) считает css/source.css через
 # color-mix — отдельными полями не хранятся, чтобы не расходились.
@@ -31,7 +31,7 @@
 # необязательны; пропущенный берётся из PRESET_DEFAULTS в engine/render.py
 # (regular / fill / flat / left). Ниже выписаны только не-дефолтные значения.
 
-version: 2
+version: 3
 
 subsets: [latin, latin-ext, cyrillic]
 weights: [400, 700]
@@ -58,6 +58,30 @@ fonts:
   Cormorant Garamond:
     gwfh_id: cormorant-garamond
     stack: "'Cormorant Garamond', Garamond, Georgia, 'Times New Roman', serif"
+  IBM Plex Sans:
+    gwfh_id: ibm-plex-sans
+    stack: "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  PT Sans:
+    gwfh_id: pt-sans
+    stack: "'PT Sans', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Jost:
+    gwfh_id: jost
+    stack: "'Jost', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Golos Text:
+    gwfh_id: golos-text
+    stack: "'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Noto Sans:
+    gwfh_id: noto-sans
+    stack: "'Noto Sans', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Rubik:
+    gwfh_id: rubik
+    stack: "'Rubik', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Montserrat:
+    gwfh_id: montserrat
+    stack: "'Montserrat', system-ui, -apple-system, 'Segoe UI', sans-serif"
+  Exo 2:
+    gwfh_id: exo-2
+    stack: "'Exo 2', system-ui, -apple-system, 'Segoe UI', sans-serif"
 
 # density архетипа → вертикальный ритм. Значения в clamp(), поэтому мобильный
 # отступ берётся сам и отдельного брейкпоинта не требует.
@@ -240,3 +264,131 @@ presets:
     density: regular
     elevation: raised
     align: center
+
+  - id: editorial-stone
+    archetype: arch-09
+    mood: light
+    palette:
+      paper: "#f8f6f2"
+      ink: "#201f1c"
+      accent: "#000000"
+      accent_ink: "#000000"
+      accent_on: "#f8f6f2"
+    type:
+      display: IBM Plex Sans
+      body: IBM Plex Sans
+      scheme: sans-grotesk-only
+    radius_px: 4
+    density: airy
+
+  - id: urgent-trade
+    archetype: arch-10
+    mood: dual-theme
+    palette:
+      paper: "#ffffff"
+      ink: "#1a2233"
+      accent: "#e53e3e"
+      accent_ink: "#da3235"
+      accent_on: "#ffffff"
+    type:
+      display: PT Sans
+      body: PT Sans
+      scheme: sans-grotesk-only
+    radius_px: 6
+    density: regular
+
+  - id: amber-crew
+    archetype: arch-11
+    mood: dual-theme
+    palette:
+      paper: "#232323"
+      ink: "#f2f2f0"
+      accent: "#ff8c42"
+      accent_ink: "#ff8c42"
+      accent_on: "#232323"
+    type:
+      display: Jost
+      body: Jost
+      scheme: sans-grotesk-only
+    radius_px: 3
+    density: regular
+
+  - id: verdant-craft
+    archetype: arch-12
+    mood: dual-theme
+    palette:
+      paper: "#f3ead9"
+      ink: "#2b2620"
+      accent: "#1f9468"
+      accent_ink: "#00794f"
+      accent_on: "#f3ead9"
+    type:
+      display: Golos Text
+      body: Golos Text
+      scheme: sans-grotesk-only
+    radius_px: 10
+    density: regular
+
+  - id: coral-clinic
+    archetype: arch-13
+    mood: dual-theme
+    palette:
+      paper: "#ffffff"
+      ink: "#0c3559"
+      accent: "#ff7e3d"
+      accent_ink: "#ca4e00"
+      accent_on: "#ffffff"
+    type:
+      display: Noto Sans
+      body: Noto Sans
+      scheme: sans-grotesk-only
+    radius_px: 12
+    density: regular
+
+  - id: soft-modal
+    archetype: arch-14
+    mood: light
+    palette:
+      paper: "#f7f9fa"
+      ink: "#1f2937"
+      accent: "#0f7d8c"
+      accent_ink: "#0f7d8c"
+      accent_on: "#f7f9fa"
+    type:
+      display: Rubik
+      body: Rubik
+      scheme: sans-grotesk-only
+    radius_px: 20
+    density: regular
+
+  - id: neon-grid
+    archetype: arch-15
+    mood: colorful
+    palette:
+      paper: "#fff2f6"
+      ink: "#1c1c1c"
+      accent: "#ff1493"
+      accent_ink: "#da0075"
+      accent_on: "#fff2f6"
+    type:
+      display: Montserrat
+      body: Montserrat
+      scheme: sans-grotesk-only
+    radius_px: 18
+    density: compact
+
+  - id: violet-poster
+    archetype: arch-16
+    mood: dual-theme
+    palette:
+      paper: "#ffffff"
+      ink: "#111111"
+      accent: "#6b2891"
+      accent_ink: "#6b2891"
+      accent_on: "#ffffff"
+    type:
+      display: Exo 2
+      body: Exo 2
+      scheme: sans-grotesk-only
+    radius_px: 2
+    density: airy
