@@ -10,8 +10,13 @@
   предостерегает §3 шаг 1 (unknown != false).
 * **Картинки — тоже requires.** Вариант с image_names требует, чтобы каждая
   картинка лежала в белом списке профиля; вариант с image_pool — чтобы
-  свободных снимков хватило на все его image_slots. Секции с пустой рамкой
-  вместо фото не бывает: это ступень 5 лестницы, запрет на подмену.
+  свободных снимков хватило на его порог (engine/photos). Секции с пустой
+  рамкой вместо фото не бывает: это ступень 5 лестницы, запрет на подмену.
+* **Пул считается по остатку.** taken — имена кадров, которые уже разобрали
+  секции выше по странице. Для варианта с image_pool признак
+  nonproduct_photo_count это остаток пула, а не весь пул: три снимка, из
+  которых два забрала галерея, — это один снимок, и вариант, которому нужно
+  два, обязан выбыть здесь, а не встать на страницу с чужими кадрами.
 
 Язык условий (он же используется в score.py для prefers):
 
@@ -28,7 +33,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .profile import ORDERED_ENUMS, Feature, Profile
+from . import photos
+from .profile import ORDERED_ENUMS, Feature, Profile, known
 
 # Виды отказов. Первые два ставит этот модуль, остальные — slots.py: список
 # общий, потому что для лестницы деградации все они значат одно — вариант выбыл.
@@ -40,6 +46,10 @@ TOO_LONG = "too_long"
 NO_DEFAULT = "no_default"
 TOO_FEW = "too_few"
 
+
+# Признак, который вариант с image_pool считает по остатку пула, а не по всему
+# белому списку профиля (см. _feature).
+POOL_COUNT = "nonproduct_photo_count"
 
 # Признак контракта -> поле профиля, которое дозаполняет работник. Контракт
 # спрашивает has_address, а бот просит «адрес»: таблица переводит одно в другое
@@ -75,24 +85,36 @@ class Verdict:
     reasons: tuple[Reason, ...] = ()
 
 
-def check(contract: dict, profile: Profile) -> Verdict:
-    """Пропустить вариант или отсеять его вместе с причинами."""
+def check(contract: dict, profile: Profile, taken=()) -> Verdict:
+    """Пропустить вариант или отсеять его вместе с причинами.
+
+    taken — кадры пула, разобранные секциями выше по странице.
+    """
     reasons: list[Reason] = []
     for name, condition in (contract.get("requires") or {}).items():
-        feature = profile.feature(name)
+        feature = _feature(name, contract, profile, taken)
         if not feature.known:
             reasons.append(Reason(name, UNKNOWN_FIELD,
                                   f"{name} неизвестен, требуется {condition!r}"))
         elif not satisfies(condition, feature):
             reasons.append(Reason(name, MISMATCH,
                                   f"{name}={feature.value!r}, требуется {condition!r}"))
-    reasons.extend(_image_reasons(contract, profile))
+    reasons.extend(_image_reasons(contract, profile, taken))
     return Verdict(not reasons, tuple(reasons))
 
 
-def _image_reasons(contract: dict, profile: Profile) -> list[Reason]:
+def _feature(name: str, contract: dict, profile: Profile, taken) -> Feature:
+    """Признак профиля глазами варианта: пул он видит по остатку страницы."""
+    if name != POOL_COUNT or not photos.uses_pool(contract):
+        return profile.feature(name)
+    if not profile.images.known:
+        return profile.feature(name)
+    return known(len(photos.remaining(profile, taken)))
+
+
+def _image_reasons(contract: dict, profile: Profile, taken) -> list[Reason]:
     if contract.get("image_pool"):
-        return _pool_reasons(contract, profile)
+        return _pool_reasons(contract, profile, taken)
     names = contract.get("image_names") or []
     if not names:
         return []
@@ -101,16 +123,18 @@ def _image_reasons(contract: dict, profile: Profile) -> list[Reason]:
             for name in names if name not in (available or {})]
 
 
-def _pool_reasons(contract: dict, profile: Profile) -> list[Reason]:
+def _pool_reasons(contract: dict, profile: Profile, taken) -> list[Reason]:
     """Секция берёт картинки пулом: важно их число, а не имена."""
     if not profile.images.known:
         return [Reason("images", UNKNOWN_FIELD, "картинки лида неизвестны")]
-    needed = contract.get("image_slots") or 0
-    free = len(profile.free_photos())
-    if free >= needed:
+    needed = photos.floor(contract)
+    free = photos.available(contract, profile, taken)
+    if len(free) >= needed:
         return []
+    least = contract.get("pool_min_width")
+    width = f" шириной от {least}px" if least else ""
     return [Reason("images", MISSING_IMAGE,
-                   f"свободных фотографий {free}, нужно {needed}")]
+                   f"свободных фотографий{width} {len(free)}, нужно {needed}")]
 
 
 def satisfies(condition, feature: Feature) -> bool:

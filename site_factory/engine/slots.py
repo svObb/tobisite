@@ -24,7 +24,9 @@
 * image_names перечисляет картинки поимённо, и каждая обязана лежать в белом
   списке профиля. image_pool: free_photos, наоборот, просит image_slots любых
   свободных снимков — тех, что не заняты ни именованной ролью, ни товарной
-  сеткой. Так полоса галереи не повторяет фотографии витрины.
+  сеткой, ни секцией выше по странице (taken). Так полоса галереи не повторяет
+  ни фотографии витрины, ни кадр, уже стоящий в галерее-заявлении. Кого именно
+  выдаёт пул, решает engine/photos.
 * max_chars — ограничение для генератора слотов, не для вёрстки. Молча резать
   текст нельзя: если заготовка или факт не влезли, вариант выбывает по гейту
   с причиной too_long, и роль берёт следующую ступень лестницы. Словарь
@@ -43,14 +45,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from . import photos
 from .gates import FACT_MISSING, NO_DEFAULT, TOO_FEW, TOO_LONG, Reason
 from .profile import Profile
 
 COMMON = "_common"        # заготовки, общие для всех вариантов рецепта
 PAGE = "_page"            # заготовки уровня страницы: title/description/ui
 RESERVED = (COMMON, PAGE)
-
-FREE_PHOTOS = "free_photos"   # единственный пул картинок (image_pool контракта)
 
 _MISSING = object()
 
@@ -66,8 +67,11 @@ class Filled:
         return not self.reasons
 
 
-def build(contract: dict, profile: Profile, recipe: dict) -> Filled:
-    """Собрать JSON слотов варианта. Пустой Filled.reasons — вариант годен."""
+def build(contract: dict, profile: Profile, recipe: dict, taken=()) -> Filled:
+    """Собрать JSON слотов варианта. Пустой Filled.reasons — вариант годен.
+
+    taken — кадры пула, разобранные секциями выше по странице.
+    """
     if not profile.lang.known or not profile.lang.value:
         return Filled({}, {}, (Reason("lang", FACT_MISSING,
                                       "язык лида неизвестен"),))
@@ -94,7 +98,7 @@ def build(contract: dict, profile: Profile, recipe: dict) -> Filled:
         slots[group] = items
         reasons.extend(trouble)
 
-    return Filled(slots, _images(contract, profile), tuple(reasons))
+    return Filled(slots, _images(contract, profile, taken), tuple(reasons))
 
 
 def free_specs(contract: dict) -> list[dict]:
@@ -551,15 +555,16 @@ def _repeat_range(spec) -> tuple[int, int]:
     return int(low or 1), int(high or 99)
 
 
-def _images(contract: dict, profile: Profile) -> dict:
+def _images(contract: dict, profile: Profile, taken=()) -> dict:
     """Картинки секции: поимённо из image_names или пулом из image_pool.
 
-    Пул отдаёт первые image_slots свободных снимков в порядке profile —
-    он детерминирован, как и весь остальной подбор.
+    Пул отдаёт кадры остатка по правилам контракта (engine/photos): порядок
+    номерной либо «самый широкий вперёд», ширина ниже pool_min_width не
+    считается вовсе. Всё это детерминировано, как и остальной подбор.
     """
     available = (profile.images.value if profile.images.known else {}) or {}
-    if contract.get("image_pool") == FREE_PHOTOS:
-        names = profile.free_photos()[:contract.get("image_slots") or 0]
+    if photos.uses_pool(contract):
+        names = photos.picked(contract, profile, taken)
     else:
         names = contract.get("image_names") or []
     return {name: available[name] for name in names if name in available}

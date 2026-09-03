@@ -28,13 +28,18 @@ needs_enrichment со списком недостающего, а не крив�
 Ничьи в скоринге разрешает один random.Random(seed) на весь вызов. Порядок
 розыгрышей — порядок ролей в рецепте, поэтому он воспроизводим для профиля,
 но не пытайтесь предсказать его для отдельно взятой роли.
+
+Тем же порядком ролей задан приоритет на фотографии: пул беспредметных
+снимков один на страницу, и курсор по нему сквозной (engine/photos). Секция,
+выбывшая позже на пустом тексте модели (apply_free_texts), свои кадры
+обратно не отдаёт — это принятая цена, как и резерв товарной сетки.
 """
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
 
-from . import gates, slots
+from . import gates, photos, slots
 from .profile import Profile
 from .score import choose, score
 
@@ -74,6 +79,11 @@ def compose(profile: Profile, recipe: dict, library: dict, seed: int,
     sections: list[dict] = []
     trace: list[dict] = []
     taken: set[str] = set()
+    # Курсор пула: кадры, разобранные секциями выше по странице. Роли идут в
+    # порядке roles_order, поэтому приоритет на снимки задаёт он же — галерея
+    # выбирает раньше блока о компании, и один кадр дважды на странице не
+    # встречается по построению.
+    taken_photos: set[str] = set()
 
     for position in order:
         if position in taken:
@@ -82,13 +92,13 @@ def compose(profile: Profile, recipe: dict, library: dict, seed: int,
             continue
 
         section, record = _fill(position, profile, recipe, library, rng,
-                                recent_variants)
+                                recent_variants, taken_photos)
         if section is None:
             for substitute in substitutes.get(position, []):
                 if substitute in taken:
                     continue
                 section, sub_record = _fill(substitute, profile, recipe, library,
-                                            rng, recent_variants)
+                                            rng, recent_variants, taken_photos)
                 record.setdefault("substitutes_tried", []).append(sub_record)
                 if section is not None:
                     record["substituted_by"] = substitute
@@ -100,6 +110,7 @@ def compose(profile: Profile, recipe: dict, library: dict, seed: int,
         else:
             record["status"] = "substituted" if record.get("substituted_by") else "filled"
             sections.append(section)
+            taken_photos |= photos.claimed(section)
         taken.add(position)
         trace.append(record)
 
@@ -138,8 +149,12 @@ def enough(composition: Composition, recipe: dict, dropped: list[str]) -> bool:
 
 
 def _fill(role: str, profile: Profile, recipe: dict, library: dict,
-          rng: random.Random, recent_variants):
-    """Одна роль: гейты -> слоты -> скоринг. None, если годных вариантов нет."""
+          rng: random.Random, recent_variants, taken_photos=()):
+    """Одна роль: гейты -> слоты -> скоринг. None, если годных вариантов нет.
+
+    taken_photos — курсор пула на момент этой роли: и гейт, и слоты видят
+    только те кадры, которые секции выше по странице ещё не забрали.
+    """
     record = {"role": role, "chosen": None, "candidates": [], "rejected": []}
     admitted = []
 
@@ -147,11 +162,11 @@ def _fill(role: str, profile: Profile, recipe: dict, library: dict,
         contract = library[variant]
         if contract["role"] != role:
             raise ValueError(f"{recipe['id']}: вариант {variant!r} не роли {role!r}")
-        verdict = gates.check(contract, profile)
+        verdict = gates.check(contract, profile, taken_photos)
         if not verdict.ok:
             record["rejected"].append(_rejection(variant, "gate", verdict.reasons))
             continue
-        filled = slots.build(contract, profile, recipe)
+        filled = slots.build(contract, profile, recipe, taken_photos)
         if not filled.ok:
             record["rejected"].append(_rejection(variant, "slots", filled.reasons))
             continue
