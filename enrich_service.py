@@ -17,8 +17,15 @@
 * **никогда** — `name`. Название компании в карточке правил человек, а в
   <title> чужого сайта лежит что угодно.
 
-Служебный ключ `_scrape` начинается с подчёркивания, поэтому в профиль движка
-он не просачивается: build_profile берёт только ENRICHMENT_FIELDS.
+Служебные ключи `_scrape` и `_ambient` начинаются с подчёркивания, поэтому в
+профиль движка они не просачиваются: build_profile берёт только
+ENRICHMENT_FIELDS.
+
+Картинки скрейп ведёт целиком, и одно исключение из этого правила есть:
+`_ambient` перечисляет имена, которые в стейджинг положила амбиент-генерация,
+а не сайт. Их файлы переживают перескрейп, а записи возвращаются в `images` —
+иначе доложенный руками фон исчезал бы от каждого повторного нажатия. Занял
+скрейп то же имя своим снимком — настоящее фото компании побеждает.
 
 Картинки живут в бакете под `_enrich/<lead_id>/img/`. Ни диска, ни /tmp:
 файловая система бота read-only, а tmpfs умирает вместе с контейнером.
@@ -65,18 +72,22 @@ IMG_DIR = "img"
 SCRAPER_OWNED = ("images", "photo_count", "brand_colors", "products")
 # Ключи, которые скрейп только предлагает: ручное значение переживает перескрейп.
 PROMOTED = ("services", "service_count", "hours", "has_hours", "address",
-            "address_parts", "has_address", "text_volume", "old_site_state")
+            "address_parts", "has_address", "text_volume", "old_site_state",
+            "rating")
 # Контакты особые: enrichment перекрывает контакты лида при сборке профиля, а
 # телефон из подвала чужого шаблона бывает не тот. Поэтому предлагаем их только
 # лиду, у которого контакта такого типа нет вовсе.
 CONTACT_PROMOTED = ("phone", "email")
 SCRAPE_KEY = "_scrape"
+# Имена картинок стейджинга, которые положил не скрейп, а амбиент-генерация:
+# ["hero_bg"]. Служебный ключ, в профиль движка не проходит.
+AMBIENT_KEY = "_ambient"
 # Что отчёт называет найденным и ненайденным: людскими словами, а не ключами
 # схемы — отчёт читает человек, а производные вроде service_count ему не нужны.
 REPORT_FIELDS = (("services", "услуги"), ("hours", "часы"),
                  ("address", "адрес"), ("phone", "телефон"),
                  ("email", "почта"), ("products", "товары"),
-                 ("brand_colors", "цвета бренда"))
+                 ("rating", "рейтинг"), ("brand_colors", "цвета бренда"))
 # Производных признаков (service_count, has_hours) в этой таблице нет
 # намеренно: они едут вместе со своим полем и отдельной строкой в отчёте были
 # бы шумом.
@@ -85,7 +96,7 @@ FIELD_LABELS = {
     "address_parts": "адрес по частям", "phone": "телефон", "email": "почта",
     "images": "картинки", "photo_count": "число фото", "products": "товары",
     "brand_colors": "цвета бренда", "text_volume": "объём текста",
-    "old_site_state": "состояние сайта",
+    "old_site_state": "состояние сайта", "rating": "рейтинг",
 }
 
 # Сколько кандидатов каждого вида доходит до скачивания. Дальше потолки
@@ -143,6 +154,8 @@ class EnrichResult:
     phone_diff: str = ""
     ai_note: str = ""
     logo_note: str = ""
+    rating: str = ""
+    ambient: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -200,8 +213,14 @@ async def enrich_from_site(lead_id: int, *,
 
 
 def merge_enrichment(current: dict, found: dict, *,
-                     contact_types=()) -> MergeResult:
+                     contact_types=(), unexamined: tuple = ()) -> MergeResult:
     """Слить найденное с карточкой по трём правилам (см. докстринг модуля).
+
+    unexamined — те scraper-owned ключи, которых этот прогон не осматривал
+    вовсе: без стейджинга картинок сказать «на сайте этого больше нет» не о
+    чем, и прежнее значение остаётся как было. Принадлежность скрейпу при этом
+    переносится вперёд — иначе следующий успешный прогон принял бы уцелевшее
+    значение за ручную правку и больше никогда его не переписал.
 
     Чистая функция: ни базы, ни сети — её и гоняют тесты идемпотентности.
     """
@@ -212,6 +231,9 @@ def merge_enrichment(current: dict, found: dict, *,
         if key in found:
             result[key] = found[key]
             written.append(key)
+        elif key in unexamined:
+            if key in previous:
+                written.append(key)
         elif key in previous:
             # прошлый скрейп это писал, нынешний не видит — значит на сайте
             # этого больше нет, и держать устаревшее было бы враньём
@@ -243,6 +265,11 @@ def found_fields(scrape, staged: dict, colors: dict, *,
     услуг и неспрошенные услуги для гейтов движка — разные вещи. Ровно поэтому
     images и photo_count пишутся, только когда картинки правда смотрели: без
     ключей R2 «фотографий ноль» было бы утверждением, которого мы не делали.
+
+    looked_at_images=False молчит и обо всём остальном, что зависит от
+    стейджинга: товары остаются без картинок, а цвета бренда — без логотипа.
+    Такой прогон merge_enrichment получает списком unexamined, и прежние
+    значения этих ключей в карточке переживают его нетронутыми.
     """
     found: dict = {}
     if scrape.services:
@@ -251,6 +278,8 @@ def found_fields(scrape, staged: dict, colors: dict, *,
     if scrape.hours:
         found["hours"] = list(scrape.hours)
         found["has_hours"] = True
+    if scrape.rating:
+        found["rating"] = dict(scrape.rating)
     if scrape.address.get("display"):
         found["address"] = scrape.address["display"]
         found["has_address"] = True
@@ -279,6 +308,30 @@ def found_fields(scrape, staged: dict, colors: dict, *,
     if products:
         found["products"] = products
     return found
+
+
+def rating_note(value) -> str:
+    """Оценка компании словами: «4.8 (127 отзывов)». Пусто — оценки нет.
+
+    Цифры отсюда — ровно те, что лежат в карточке: ни округления шкалы, ни
+    пересчёта отзывов. «4.0» пишется как «4» — нулевая десятая на странице и в
+    отчёте одинаково выглядит машинным следом.
+    """
+    if not isinstance(value, dict):
+        return ""
+    score, count = value.get("value"), value.get("count")
+    if not isinstance(score, (int, float)) or not isinstance(count, (int, float)):
+        return ""
+    count = int(count)
+    return f"{score:g} ({count} {_reviews_word(count)})"
+
+
+def _reviews_word(count: int) -> str:
+    if count % 10 == 1 and count % 100 != 11:
+        return "отзыв"
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "отзыва"
+    return "отзывов"
 
 
 def enrich_line(lead) -> str:
@@ -316,12 +369,25 @@ async def _run(lead_id, url, country, enrichment, contact_types,
             return EnrichResult(reason=scrape.reason or "сайт не открылся",
                                 lead_id=lead_id, url=url)
         scrape, ai_note = await _ask_model(scrape, lead_id)
+        ambient = _ambient_names(enrichment)
         staged, images_reason, looked, logo_note = await _stage(
-            session, lead_id, scrape)
+            session, lead_id, scrape, keep=ambient)
 
+    survived = [name for name in ambient if name not in staged]
     colors = _brand_colors(scrape, staged)
-    found = found_fields(scrape, staged, colors, looked_at_images=looked)
-    merged = merge_enrichment(enrichment, found, contact_types=contact_types)
+    found = _with_ambient(
+        found_fields(scrape, staged, colors, looked_at_images=looked),
+        enrichment, survived)
+    unexamined = () if looked else SCRAPER_OWNED
+    merged = merge_enrichment(enrichment, found, contact_types=contact_types,
+                              unexamined=unexamined)
+    # прогон без стейджинга ничего не утверждает о картинках — и отчёт обязан
+    # сказать, что прежнее в карточке от этого не пропало
+    spared = [FIELD_LABELS[key] for key in unexamined
+              if key not in found and key in enrichment]
+    if spared:
+        images_reason = (f"{images_reason}; прежнее в карточке сохранено: "
+                         + ", ".join(spared))
     journal = {
         "url": scrape.url,
         "at": datetime.now(config.TZ).isoformat(timespec="seconds"),
@@ -334,6 +400,10 @@ async def _run(lead_id, url, country, enrichment, contact_types,
     }
     enriched = dict(merged.enrichment)
     enriched[SCRAPE_KEY] = journal
+    if ambient:
+        # список амбиента ведёт обогащение: имя, которое скрейп занял своим
+        # фото, амбиентом больше не считается
+        enriched[AMBIENT_KEY] = survived
     async with Session() as s, s.begin():
         lead = await s.get(Lead, lead_id)
         if lead is None:
@@ -349,8 +419,36 @@ async def _run(lead_id, url, country, enrichment, contact_types,
         empty=[label for key, label in REPORT_FIELDS if key not in found],
         staged=sorted(staged), images_reason=images_reason,
         phone_diff=_phone_diff(scrape, contact_types), ai_note=ai_note,
-        logo_note=logo_note,
+        logo_note=logo_note, rating=rating_note(merged.enrichment.get("rating")),
+        ambient=survived,
     )
+
+
+def _ambient_names(enrichment: dict) -> list[str]:
+    """Имена картинок, которые в стейджинг положили мы, а не скрейп."""
+    return [str(name) for name in (enrichment or {}).get(AMBIENT_KEY) or []
+            if str(name)]
+
+
+def _with_ambient(found: dict, previous: dict, survived: list[str]) -> dict:
+    """Вернуть в images записи амбиента, пережившего перескрейп.
+
+    images ведёт скрейп и переписывает целиком — без этого шага доложенный
+    руками фон первого экрана исчезал бы из карточки при каждом повторном
+    обогащении, а файл в бакете оставался бы сиротой. Запись берётся прежняя:
+    свою мы не придумываем, а размеры у амбиента те же, что были.
+    """
+    if not survived or "images" not in found:
+        return found
+    images = dict(found["images"])
+    for name in survived:
+        record = ((previous or {}).get("images") or {}).get(name)
+        if isinstance(record, dict) and record.get("src"):
+            images.setdefault(name, record)
+    found = dict(found)
+    found["images"] = images
+    found["photo_count"] = len(site_images.photo_names(images))
+    return found
 
 
 def _phone_diff(scrape, contact_types) -> str:
@@ -400,13 +498,16 @@ def _products_with_images(products, staged: dict) -> list[dict]:
     return out
 
 
-async def _stage(session, lead_id: int, scrape) -> tuple[dict, str, bool, str]:
+async def _stage(session, lead_id: int, scrape, *,
+                 keep=()) -> tuple[dict, str, bool, str]:
     """Скачать, пережать и выложить картинки.
 
     Возвращает ({имя: запись}, причину пропуска, смотрели ли вообще, строку о
     логотипе). Третий флаг отделяет «на сайте фотографий нет» от «мы не
     проверяли»: первое пишется в enrichment нулём, второе не пишется никак.
     Четвёртая — то, что админу придётся доделать руками.
+
+    keep — имена амбиента: их файлы уборка стейджинга не трогает.
     """
     if not draft_service.r2_ready():
         return {}, "не заданы ключи R2 — картинки пропущены", False, ""
@@ -446,7 +547,7 @@ async def _stage(session, lead_id: int, scrape) -> tuple[dict, str, bool, str]:
         return ({}, "картинок, годных для страницы, на сайте не нашлось",
                 True, logo_note)
     try:
-        await _put_all(lead_id, files)
+        await _put_all(lead_id, files, keep=keep)
     except Exception as e:
         log.exception("лид %s: стейджинг картинок не удался", lead_id)
         return {}, f"картинки не выложены: {e}", False, logo_note
@@ -515,6 +616,11 @@ def _inline_logo(scrape) -> tuple[dict | None, str]:
     return None, note
 
 
+def _name_of(key: str) -> str:
+    """Роль картинки из ключа бакета: `_enrich/7/img/hero_bg.webp` -> hero_bg."""
+    return key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
 def _record(item: dict) -> dict:
     record = {"src": f"/{IMG_DIR}/{item['filename']}", "width": item["width"],
               "height": item["height"], "source": item["source"]}
@@ -523,15 +629,21 @@ def _record(item: dict) -> dict:
     return record
 
 
-async def _put_all(lead_id: int, files: dict):
+async def _put_all(lead_id: int, files: dict, *, keep=()):
     """Снести прежний стейджинг лида и выложить новый.
 
     Сносим целиком: имена ролей фиксированные, но прошлый скрейп мог оставить
     photo-5, которого в этот раз нет, и он уехал бы в публикацию призраком.
+
+    Кроме амбиента: эти файлы положил не скрейп, и второе нажатие кнопки не
+    повод стирать доложенную руками работу. Имя, которое скрейп занял своим
+    снимком, из исключений выпадает — настоящее фото компании лучше нашего.
     """
+    spared = {name for name in keep if name not in files}
     old = await draft_service.list_keys(staging_prefix(lead_id), limit=10_000)
-    if old:
-        await draft_service.delete_keys(old)
+    doomed = [key for key in old if _name_of(key) not in spared]
+    if doomed:
+        await draft_service.delete_keys(doomed)
     s3 = draft_service.s3_client()
     for item in files.values():
         await asyncio.to_thread(

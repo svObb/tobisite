@@ -1411,17 +1411,19 @@ def enrich_report(result) -> str:
     if not result.ok:
         return f"Не обогатилось: {esc(result.reason)}"
     lines = [f"🌐 Сайт прочитан, страниц: {result.pages}"]
-    written = _enrich_labels(result.written)
+    written = _enrich_labels(result.written, result.rating)
     lines.append(f"Записано: {esc(', '.join(written))}" if written
                  else "Нового ничего не записано")
     if result.staged:
         lines.append(f"Картинки ({len(result.staged)}): "
                      f"{esc(', '.join(result.staged))}")
+    if result.ambient:
+        lines.append(f"Амбиент сохранён: {esc(', '.join(result.ambient))}")
     if result.images_reason:
         lines.append(f"⚠️ Картинок нет: {esc(result.images_reason)}")
     if result.logo_note:
         lines.append(f"⚠️ {esc(result.logo_note)}")
-    kept = _enrich_labels(result.kept)
+    kept = _enrich_labels(result.kept, result.rating)
     if kept:
         lines.append(f"Не тронуто, заполнено руками: {esc(', '.join(kept))}")
     if result.phone_diff:
@@ -1434,10 +1436,21 @@ def enrich_report(result) -> str:
     return "\n".join(lines)
 
 
-def _enrich_labels(keys) -> list[str]:
-    """Ключи схемы — словами. Производные признаки в отчёт не идут."""
-    return [enrich_service.FIELD_LABELS[key] for key in keys
-            if key in enrich_service.FIELD_LABELS]
+def _enrich_labels(keys, rating: str = "") -> list[str]:
+    """Ключи схемы — словами. Производные признаки в отчёт не идут.
+
+    Рейтинг идёт с цифрами — «рейтинг 4.8 (127 отзывов)»: одно слово «рейтинг»
+    не даёт понять, ту ли оценку мы записали, а сверять её с сайтом придётся
+    глазами.
+    """
+    labels = []
+    for key in keys:
+        label = enrich_service.FIELD_LABELS.get(key)
+        if label is None:
+            continue
+        labels.append(f"{label} {rating}" if key == "rating" and rating
+                      else label)
+    return labels
 
 
 # --- сборка черновика сайта ---------------------------------------------------

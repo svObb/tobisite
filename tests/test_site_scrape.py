@@ -203,6 +203,98 @@ def test_hours_are_capped(shop):
     assert len(ss.hours(shop)) <= ss.MAX_HOURS
 
 
+# --- рейтинг ------------------------------------------------------------------
+#
+# Оценка компании — цифра, которая уедет на страницу клиента, поэтому берётся
+# она только там, где сомнений нет: у самой компании и по пятибалльной шкале.
+
+def _rating_page(node: str) -> str:
+    return ('<html><head><script type="application/ld+json">'
+            + node + "</script></head><body>Сторінка</body></html>")
+
+
+def _business(rating: str, kind: str = "LocalBusiness") -> str:
+    return ('{"@context": "https://schema.org", "@type": "%s", '
+            '"name": "Ліхтарик", "aggregateRating": %s}' % (kind, rating))
+
+
+def test_the_rating_of_the_company_is_taken_from_json_ld():
+    page = _rating_page(_business(
+        '{"@type": "AggregateRating", "ratingValue": "4.8", '
+        '"reviewCount": "127", "bestRating": "5"}'))
+
+    assert ss.rating(ss.soup_of(page)) == {"value": 4.8, "count": 127,
+                                           "source": "jsonld"}
+
+
+def test_an_organisation_rating_counts_too():
+    page = _rating_page(_business(
+        '{"ratingValue": 4.5, "ratingCount": 12}', kind="Organization"))
+
+    assert ss.rating(ss.soup_of(page)) == {"value": 4.5, "count": 12,
+                                           "source": "jsonld"}
+
+
+def test_a_product_rating_is_not_the_rating_of_the_company():
+    """Пять звёзд у одного чайника — не пять звёзд у магазина."""
+    page = _rating_page(
+        '{"@context": "https://schema.org", "@type": "Product", '
+        '"name": "Ноутбук Промінь 14", "aggregateRating": '
+        '{"ratingValue": "5", "reviewCount": "3"}}')
+
+    assert ss.rating(ss.soup_of(page)) == {}
+
+
+def test_a_ten_point_scale_is_skipped_and_not_converted():
+    """Делённая пополам девятка — цифра, которой на сайте нет."""
+    page = _rating_page(_business(
+        '{"ratingValue": "9.2", "reviewCount": "40", "bestRating": "10"}'))
+
+    assert ss.rating(ss.soup_of(page)) == {}
+
+
+def test_a_rating_outside_the_scale_or_without_reviews_is_skipped():
+    for node in ('{"ratingValue": "0", "reviewCount": "10"}',
+                 '{"ratingValue": "5.4", "reviewCount": "10"}',
+                 '{"ratingValue": "4.8", "reviewCount": "0"}',
+                 '{"ratingValue": "4.8"}',
+                 '{"ratingValue": "чотири", "reviewCount": "10"}'):
+        assert ss.rating(ss.soup_of(_rating_page(_business(node)))) == {}
+
+
+def test_a_page_without_a_rating_says_nothing(shop):
+    assert ss.rating(shop) == {}
+
+
+def test_a_thousand_reviews_stay_a_thousand():
+    """«1,234» — разделитель тысяч. Как дробь это читалось «1 отзыв»."""
+    page = _rating_page(_business(
+        '{"ratingValue": "4.8", "reviewCount": "1,234"}'))
+
+    assert ss.rating(ss.soup_of(page)) == {"value": 4.8, "count": 1234,
+                                           "source": "jsonld"}
+
+
+def test_a_review_count_that_is_not_whole_takes_the_rating_with_it():
+    """«1,5» отзыва не бывает — а гадать, тысячи это или дробь, мы не будем."""
+    page = _rating_page(_business(
+        '{"ratingValue": "4.8", "reviewCount": "1,5"}'))
+
+    assert ss.rating(ss.soup_of(page)) == {}
+
+
+# Третья строка таблицы — с неразрывным пробелом (U+00A0): им сайты разделяют
+# тысячи не реже, чем обычным, и от обычного он тут отличается только байтами.
+@pytest.mark.parametrize("value, count", [
+    ("1,234", 1234), ("1 234", 1234), ("1 234", 1234), ("1.234", 1234),
+    ("12", 12), (12, 12), (12.0, 12),
+    (1.5, None), ("1,5", None), ("12,34", None), (True, None),
+    ("чотири", None), ("", None),
+])
+def test_the_review_count_takes_only_the_unambiguous(value, count):
+    assert ss._review_count(value) == count
+
+
 # --- услуги -------------------------------------------------------------------
 
 def test_services_are_read_from_a_named_block(shop):

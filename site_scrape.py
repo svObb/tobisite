@@ -132,6 +132,12 @@ _BUSINESS_TYPES = {
     "dentist", "restaurant", "hotel", "automotiverepair", "legalservice",
     "healthandbeautybusiness", "homeandconstructionbusiness", "professionalservice",
 }
+# Чья оценка — оценка компании. WebSite сюда не входит: aggregateRating у
+# страницы это оценка страницы, а Product в этом наборе не был и не будет.
+_RATING_TYPES = _BUSINESS_TYPES - {"website"}
+# Шкала, которую мы понимаем. Чужую десятибалльную не пересчитываем: делённая
+# на два девятка — цифра, которой на сайте нет.
+RATING_SCALE = 5
 _ADDRESS_KEYS = (
     ("streetAddress", "street"), ("addressLocality", "locality"),
     ("addressRegion", "region"), ("postalCode", "postal_code"),
@@ -414,6 +420,23 @@ def hours(soup, nodes=None) -> list[str]:
     return lines[:MAX_HOURS]
 
 
+def rating(soup, nodes=None) -> dict:
+    """Оценка компании из JSON-LD: {value, count, source}. Пусто — её нет.
+
+    Берём только с узла самой компании: aggregateRating у Product — оценка
+    одного товара, и выдать её за оценку компании значило бы соврать на
+    странице клиента. Всё, в чём есть сомнение, — тоже мимо: чужая шкала не
+    пересчитывается, оценка без числа отзывов не пишется.
+    """
+    for node in nodes if nodes is not None else jsonld(soup):
+        if not _ld_types(node) & _RATING_TYPES:
+            continue
+        found = _ld_rating(node.get("aggregateRating"))
+        if found:
+            return found
+    return {}
+
+
 def services(soup, nodes=None) -> list[str]:
     """Услуги: JSON-LD-каталог, затем блоки с «услугами» в классе или заголовке."""
     found: list[str] = []
@@ -554,6 +577,7 @@ class ScrapeResult:
     emails: list[str] = field(default_factory=list)
     address: dict = field(default_factory=dict)
     hours: list[str] = field(default_factory=list)
+    rating: dict = field(default_factory=dict)
     services: list[str] = field(default_factory=list)
     products: list[dict] = field(default_factory=list)
     logos: list[dict] = field(default_factory=list)
@@ -773,6 +797,7 @@ async def _walk(session, url: str, region: str | None) -> ScrapeResult:
         "emails": emails(soup, text),
         "address": address(soup, nodes),
         "hours": hours(soup, nodes),
+        "rating": rating(soup, nodes),
         "services": services(soup, nodes),
         "products": products(soup, base, nodes),
         "logos": logo_candidates(soup, base),
@@ -813,6 +838,8 @@ def _merge_page(result: dict, soup, base: str, region: str | None):
         result["address"] = address(soup, nodes)
     if not result["hours"]:
         result["hours"] = hours(soup, nodes)
+    if not result["rating"]:
+        result["rating"] = rating(soup, nodes)
     for value in services(soup, nodes):
         if value not in result["services"] and len(result["services"]) < MAX_SERVICES:
             result["services"].append(value)
@@ -886,6 +913,28 @@ def _ld_price(offers) -> str:
         currency = _text(offer.get("priceCurrency"))
         return f"{price} {currency}".strip()[:32]
     return ""
+
+
+def _ld_rating(value) -> dict:
+    """aggregateRating одного узла. Числа на чужих сайтах бывают строками.
+
+    Оценка и число отзывов разбираются разными парсерами: у «4,8» запятая
+    десятичная, у «1,234» — разделитель тысяч, и один разбор на двоих сделал
+    бы из тысячи двухсот тридцати четырёх отзывов один.
+    """
+    for node in _as_list(value):
+        best = _float(node.get("bestRating"))
+        if best is not None and best != RATING_SCALE:
+            continue
+        score = _float(node.get("ratingValue"))
+        reviews = _review_count(node.get("reviewCount")
+                                or node.get("ratingCount"))
+        if score is None or not 0 < score <= RATING_SCALE:
+            continue
+        if reviews is None or reviews < 1:
+            continue
+        return {"value": score, "count": reviews, "source": "jsonld"}
+    return {}
 
 
 def _ld_image(value) -> str:
@@ -1126,6 +1175,47 @@ def _int(value) -> int:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return 0
+
+
+def _float(value) -> float | None:
+    """Число, записанное как угодно. None — записанное не число."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+# Голые цифры или группировка тысяч строго по три: «1,234», «1 234», «1.234».
+# Разделителем в классе перечислены и неразрывные пробелы (U+00A0, U+202F):
+# тысячи ими на чужих сайтах разделены не реже, чем обычным.
+_COUNT = re.compile(r"\d+|\d{1,3}(?:[ ,.  ]\d{3})+")
+_COUNT_SEP = re.compile(r"[ ,.  ]")
+
+
+def _review_count(value) -> int | None:
+    """Число отзывов. None — записано так, что уверенности нет.
+
+    Отдельно от _float, потому что запятая тут значит другое: у ratingValue
+    «4,8» — десятичная дробь, а у reviewCount «1,234» — тысячи, и общий разбор
+    превратил бы 1234 отзыва в один. Число отзывов целое по природе, поэтому
+    пропускаем только однозначное: голые цифры и группы ровно по три. «1,5»
+    отзыва не бывает — такое значение не толкуется, а отбрасывается, по тому
+    же правилу «не уверен — не трогаем», что и format_price в draft_service.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not _COUNT.fullmatch(text):
+        return None
+    return int(_COUNT_SEP.sub("", text))
 
 
 def _bare(url: str) -> str:

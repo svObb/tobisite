@@ -33,7 +33,9 @@ log = logging.getLogger(__name__)
 # отдаёт пустой about_text — секция «О нас» выпадает, плюс платная
 # перегенерация на каждом черновике. Sonnet прошёл 59/59 слотов с первого раза.
 MODEL = "claude-sonnet-5"
-PROMPT_VERSION = "s3"
+# s4: source_note перестал быть free-слотом (подпись источника рейтинга теперь
+# факт), из словаря и few-shot он убран.
+PROMPT_VERSION = "s4"
 # Три десятка коротких строк JSON'ом: к слотам страницы добавились блёрбы
 # услуг, по одному на позицию. Больше здесь означает, что модель начала
 # сочинять абзацы вместо подписей.
@@ -98,7 +100,6 @@ service_blurb — строка под названием услуги: что о
   не пересказывай его другими словами
 about_text — абзац о компании: чем она занимается и для кого. Это единственный
   слот длиннее строки; два-три предложения, без оценок и без обещаний
-source_note — строка под показателями: откуда взяты цифры
 name_label, phone_label, message_label, submit_label — подписи полей формы и
   кнопки отправки
 honeypot_label — подпись скрытого поля формы: просьба не заполнять его
@@ -192,15 +193,15 @@ FEWSHOT = {
                  "role": "cta", "max_chars": 120},
                 {"slot": "footer_nap.contacts_title", "kind": "contacts_title",
                  "role": "footer", "max_chars": 20},
-                {"slot": "proof_stats_bar.source_note", "kind": "source_note",
-                 "role": "proof", "max_chars": 64},
+                {"slot": "footer_nap.hours_title", "kind": "hours_title",
+                 "role": "footer", "max_chars": 20},
             ],
             "output": {
                 "svc_cards_3.section_title": "What we do",
                 "cta_form_short.privacy_note": "We use the details from this form "
                                                "only to reply to your message.",
                 "footer_nap.contacts_title": "Contacts",
-                "proof_stats_bar.source_note": "Figures from the Google Business profile.",
+                "footer_nap.hours_title": "Opening hours",
             },
         },
     ],

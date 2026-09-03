@@ -6,6 +6,7 @@
 """
 import json
 
+import pytest
 from sqlalchemy import select
 
 import config
@@ -190,8 +191,9 @@ async def test_products_from_the_site_reach_the_page(slot_answer, draft_lead, r2
     html = r2.puts[-1]["Body"].decode()
     for product in SHOP_PRODUCTS:
         assert product["name"] in html
-    # цену на страницу ставит код строкой ровно из карточки, а не модель
-    assert "24 900 грн" in html
+    # цену на страницу ставит код строкой из карточки, а не модель; тысячи
+    # в ней разделены неразрывным пробелом (draft_service.format_price)
+    assert "24\u00a0900 грн" in html
     assert 'src="/img/photo-2.webp"' in html
 
 
@@ -233,6 +235,60 @@ async def test_half_written_pictures_do_not_reach_the_page(slot_answer,
     # картинки без размеров нет в белом списке — секция с ней и не выигрывает
     assert "hero_photo_left" not in row.section_variants
     assert "/img/portrait.webp" not in row.image_ids
+
+
+# --- цена товара --------------------------------------------------------------
+#
+# Форматтер детерминированный и трогает только то, что узнал наверняка: цену
+# бизнеса мы причёсываем, но не пересчитываем и не переводим в свою валюту.
+
+NB = "\u00a0"
+PRICES = [
+    # узнаём: число и гривна в любом порядке, копейки нулевые — срезаются
+    ("140.00 UAH", "140 грн"),
+    ("140,00 грн", "140 грн"),
+    ("UAH 140", "140 грн"),
+    ("\u20b4140", "140 грн"),
+    ("140 uah", "140 грн"),
+    ("140грн.", "140 грн"),
+    ("1200 UAH", f"1{NB}200 грн"),
+    ("24 990 грн", f"24{NB}990 грн"),
+    ("1000000 грн", f"1{NB}000{NB}000 грн"),
+    # ненулевые копейки остаются: это цена, а не машинный след
+    ("149.50 UAH", "149,50 грн"),
+    ("\u20b4149,50", "149,50 грн"),
+    # чужая валюта: срезаются только нулевые копейки, знак остаётся своим
+    ("$25.00", "$25"),
+    ("\u20ac30.00", "\u20ac30"),
+    ("25.00 \u20ac", "25 \u20ac"),
+    ("$25.50", "$25.50"),
+    # не узнали — не тронули, байт в байт
+    ("Цена по запросу", "Цена по запросу"),
+    ("", ""),
+    ("140 грн", "140 грн"),
+    ("від 140 грн", "від 140 грн"),
+    ("140 грн/шт", "140 грн/шт"),
+    ("1,200 грн", "1,200 грн"),
+    ("140.5 грн", "140.5 грн"),
+    ("1.200,00 грн", "1.200,00 грн"),
+    ("2 200 000", "2 200 000"),
+]
+
+
+@pytest.mark.parametrize("raw, want", PRICES)
+def test_price_is_tidied_only_where_it_is_recognised(raw, want):
+    assert draft_service.format_price(raw) == want
+
+
+def test_the_formatter_runs_on_products_of_the_profile():
+    """Форматтер стоит на пути товара в движок, а не сбоку от него."""
+    products = [{"name": "Ноутбук", "price": "24990.00 UAH"},
+                {"name": "Кабель", "price": "Ціна за домовленістю"}]
+
+    cleaned = draft_service._clean_products(products)
+
+    assert [item["price"] for item in cleaned] == [f"24{NB}990 грн",
+                                                   "Ціна за домовленістю"]
 
 
 # --- часы, вписанные в карточку одной строкой ---------------------------------

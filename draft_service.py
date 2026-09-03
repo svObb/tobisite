@@ -69,7 +69,7 @@ ENRICHMENT_FIELDS = (
     "has_booking_url", "booking_url", "review_count", "google_rating",
     "has_address", "address", "address_parts", "photo_count", "text_volume",
     "old_site_state", "brand_colors", "images", "products", "phone", "email",
-    "name", "city", "niche",
+    "name", "city", "niche", "rating",
 )
 
 # Готовые тексты free-слотов прямо в карточке лида: {«вариант.слот»: строка}.
@@ -101,8 +101,8 @@ SUMMARY_PARTS = {
     "svc_two_col_rule": {"uk": "послуги рядками",
                          "en": "services line by line"},
     "gallery_strip": {"uk": "смуга фотографій", "en": "a strip of photos"},
-    "proof_stats_bar": {"uk": "оцінка і відгуки з Google",
-                        "en": "the Google rating and reviews"},
+    "proof_stats_bar": {"uk": "оцінка і відгуки",
+                        "en": "the rating and reviews"},
     "about_note": {"uk": "абзац про компанію",
                    "en": "a note about the company"},
     "info_hours_card": {"uk": "години роботи таблицею",
@@ -953,8 +953,9 @@ def _clean_image(item) -> dict | None:
 def _clean_products(value) -> list[dict]:
     """Товары в форме движка: [{name, price?, image?}].
 
-    Товар без названия показать нечем; цена — строка ровно та, что пишет сам
-    бизнес; картинка проходит те же три поля, что и остальные снимки.
+    Товар без названия показать нечем; цена — строка того же бизнеса, только
+    причёсанная (format_price); картинка проходит те же три поля, что и
+    остальные снимки.
     """
     out = []
     for item in value or []:
@@ -966,12 +967,71 @@ def _clean_products(value) -> list[dict]:
         row = {"name": name}
         price = str(item.get("price") or "").strip()
         if price:
-            row["price"] = price
+            row["price"] = format_price(price)
         image = _clean_image(item.get("image"))
         if image:
             row["image"] = image
         out.append(row)
     return out
+
+
+# Цена в том виде, в каком её пишут на сайте: «140.00 UAH», «UAH 1200»,
+# «₴149,50». На странице клиента это выглядит машинным, поэтому узнанное
+# приводится к одной форме: «140 грн», «1 200 грн» — тысячи неразрывным
+# пробелом, копейки только ненулевые: «149,50 грн».
+NBSP = "\u00a0"
+# Разделители тысяч, которые встречаются во входной строке. Запятой среди
+# них нет намеренно: «1,200 грн» — это и тысяча двести, и одна целая две
+# десятых, а гадать о чужой цене нельзя.
+_GROUP_SPACE = r"[ \u00a0\u202f]"
+_NUMBER = rf"\d{{1,3}}(?:{_GROUP_SPACE}\d{{3}})*|\d+"
+_UAH = r"(?:UAH|грн\.?|₴)"
+_HRYVNIA = re.compile(
+    rf"^(?:{_UAH}\s*(?P<before>{_NUMBER})(?P<before_frac>[.,]\d\d)?"
+    rf"|(?P<after>{_NUMBER})(?P<after_frac>[.,]\d\d)?\s*{_UAH})$",
+    re.I,
+)
+# Чужая валюта: у неё срезаются только нулевые копейки. Пересчитывать её и
+# подставлять свой знак мы не вправе — это была бы выдуманная цифра.
+_ZERO_KOPECKS = (
+    re.compile(r"^(?P<head>[$€]\s?\d+)[.,]00$"),
+    re.compile(r"^(?P<head>\d+)[.,]00(?P<tail>\s?[$€])$"),
+)
+
+
+def format_price(price: str) -> str:
+    """Цена товара человеческой строкой. Не узнали формат — вернули как было.
+
+    Узнаём только то, в чём нет сомнений: число с гривной в любом порядке и
+    число с нулевыми копейками при чужом знаке валюты. Всё прочее — «від 140
+    грн», «Ціна за домовленістю», «140 грн/шт» — уходит на страницу байт в
+    байт: додумывать за бизнес его же цену мы не станем.
+    """
+    price = price.strip()
+    match = _HRYVNIA.match(price)
+    if match:
+        digits = match.group("before") or match.group("after")
+        frac = match.group("before_frac") or match.group("after_frac") or ""
+        return f"{_grouped(digits)}{_kopecks(frac)} грн"
+    for pattern in _ZERO_KOPECKS:
+        match = pattern.match(price)
+        if match:
+            return match.group("head") + (match.groupdict().get("tail") or "")
+    return price
+
+
+def _grouped(digits: str) -> str:
+    """Целая часть тысячами через NBSP: «1200» -> «1 200», «140» -> «140»."""
+    plain = re.sub(_GROUP_SPACE, "", digits)
+    head = len(plain) % 3 or 3
+    parts = [plain[:head]] + [plain[i:i + 3]
+                              for i in range(head, len(plain), 3)]
+    return NBSP.join(parts)
+
+
+def _kopecks(frac: str) -> str:
+    """Копейки, если они не нулевые. «.00» на странице — машинный след."""
+    return "" if not frac or frac[1:] == "00" else "," + frac[1:]
 
 
 # Кусок расписания стоит отдельной строкой, если сам называет свой день:

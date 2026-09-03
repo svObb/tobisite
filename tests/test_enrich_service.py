@@ -74,6 +74,7 @@ def result(**kw) -> site_scrape.ScrapeResult:
                     "parts": {"street": "вулиця Вигадана, 4",
                               "locality": "Вигаданськ"}},
         "hours": ["Пн–Пт: 09:00–19:00"],
+        "rating": {"value": 4.8, "count": 127, "source": "jsonld"},
         "services": ["Продаж ноутбуків", "Заміна екрана"],
         "products": [{"name": "Промінь 14", "price": "24 990 грн",
                       "image": BOX_URL}],
@@ -495,6 +496,54 @@ async def test_two_taps_at_once_start_only_one_walk(site_lead, monkeypatch, r2):
     assert not es.enrich_busy(lead.id)
 
 
+# --- рейтинг ------------------------------------------------------------------
+
+async def test_the_rating_of_the_company_reaches_the_card(site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert (await enrichment_of(lead.id))["rating"] == {
+        "value": 4.8, "count": 127, "source": "jsonld"}
+    assert "rating" in got.written and got.rating == "4.8 (127 отзывов)"
+
+
+async def test_a_rating_written_by_hand_survives_a_second_scrape(site_lead,
+                                                                 scraped, r2):
+    """Рейтинг ведут те же три правила, что услуги и часы: правка человека выше."""
+    lead = await site_lead()
+    scraped(result(rating={}))
+    assert (await es.enrich_from_site(lead.id)).ok
+    await write_by_hand(lead.id, rating={"value": 4.9, "count": 30,
+                                         "source": "google"})
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert (await enrichment_of(lead.id))["rating"]["source"] == "google"
+    assert "rating" in got.kept and got.rating == "4.9 (30 отзывов)"
+
+
+async def test_a_site_without_a_rating_reports_it_as_not_found(site_lead,
+                                                               scraped, r2):
+    lead = await site_lead()
+    scraped(result(rating={}))
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert "rating" not in await enrichment_of(lead.id)
+    assert "рейтинг" in got.empty and got.rating == ""
+
+
+def test_the_rating_note_counts_reviews_in_words():
+    note = es.rating_note
+    assert note({"value": 4.0, "count": 1}) == "4 (1 отзыв)"
+    assert note({"value": 4.8, "count": 3}) == "4.8 (3 отзыва)"
+    assert note({"value": 5, "count": 127}) == "5 (127 отзывов)"
+    assert note({"value": 4.8}) == "" and note(None) == ""
+
+
 # --- цвета бренда -------------------------------------------------------------
 
 async def test_the_logo_gives_the_brand_colours_when_the_page_has_none(
@@ -538,6 +587,211 @@ async def test_without_a_logo_there_are_no_brand_colours(site_lead, scraped,
     await es.enrich_from_site(lead.id)
 
     assert "brand_colors" not in await enrichment_of(lead.id)
+
+
+# --- амбиент: картинка, которую положили мы, а не сайт ------------------------
+#
+# Фон первого экрана иногда дорисовывают руками, и до этой волны повторное
+# «Обогатить» стирало его вместе со всем стейджингом — так у боевого лида
+# vortex потеряли hero_bg.
+
+AMBIENT = {"src": "/img/hero_bg.webp", "width": 1920, "height": 1080}
+
+
+def ambient_card() -> dict:
+    """Карточка, в которой амбиент уже лежит: запись, счёт и служебный список."""
+    return {"images": {"hero_bg": dict(AMBIENT)}, "photo_count": 1,
+            es.AMBIENT_KEY: ["hero_bg"]}
+
+
+def put_ambient(r2, lead_id: int) -> str:
+    key = es.image_key(lead_id, "hero_bg.webp")
+    r2.objects[key] = b"nakres ambient"
+    return key
+
+
+async def test_the_ambient_survives_a_second_enrichment(site_lead, scraped, r2):
+    lead = await site_lead(enrichment=ambient_card())
+    key = put_ambient(r2, lead.id)
+    scraped(result(images=[], products=[]), blobs={LOGO_URL: BLOBS[LOGO_URL]})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert r2.objects.get(key) == b"nakres ambient"
+    data = await enrichment_of(lead.id)
+    assert data["images"]["hero_bg"] == AMBIENT
+    # счёт прежней семантики: контентные фото без логотипа
+    assert data["photo_count"] == 1 and set(data["images"]) == {"logo", "hero_bg"}
+    assert data[es.AMBIENT_KEY] == ["hero_bg"] and got.ambient == ["hero_bg"]
+
+
+async def test_a_real_photo_pushes_the_ambient_out(site_lead, scraped, r2):
+    """Настоящее фото компании лучше нарисованного — правило основателя."""
+    lead = await site_lead(enrichment=ambient_card())
+    key = put_ambient(r2, lead.id)
+    scraped(result())                             # у сайта своё широкое фото
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert r2.objects[key] != b"nakres ambient"
+    data = await enrichment_of(lead.id)
+    assert data["images"]["hero_bg"]["width"] != AMBIENT["width"]
+    assert data[es.AMBIENT_KEY] == [] and got.ambient == []
+
+
+async def test_without_the_ambient_key_the_staging_is_swept_as_before(site_lead,
+                                                                      scraped,
+                                                                      r2):
+    lead = await site_lead()
+    scraped(result())
+    assert (await es.enrich_from_site(lead.id)).ok
+    stray = es.image_key(lead.id, "hero_bg-by-hand.webp")
+    r2.objects[stray] = b"ne ambient"
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert stray not in r2.objects and got.ambient == []
+    assert es.AMBIENT_KEY not in await enrichment_of(lead.id)
+
+
+async def test_closing_the_lead_takes_the_ambient_down_too(site_lead, scraped,
+                                                           r2):
+    """Амбиент лежит в том же префиксе — уборка закрытого лида сносит и его."""
+    lead = await site_lead(enrichment=ambient_card(), status="rejected")
+    key = put_ambient(r2, lead.id)
+    scraped(result(images=[], products=[]), blobs={LOGO_URL: BLOBS[LOGO_URL]})
+    assert (await es.enrich_from_site(lead.id)).ok
+    assert key in r2.objects
+
+    swept = await draft_service.sweep_staging()
+
+    assert lead.id in swept
+    assert not [k for k in r2.objects
+                if k.startswith(es.staging_prefix(lead.id))]
+
+
+def test_the_ambient_key_does_not_reach_the_engine_profile():
+    """Служебный ключ с подчёркиванием в профиль не проходит — как и _scrape."""
+    assert es.AMBIENT_KEY.startswith("_")
+    assert es.AMBIENT_KEY not in draft_service.ENRICHMENT_FIELDS
+
+
+# --- стейджинг не состоялся ---------------------------------------------------
+#
+# Ровно тот же инцидент с другой стороны: R2 не ответил, скрейп картинок не
+# видел — и старое правило «прошлый скрейп писал, нынешний не видит» стирало из
+# карточки фотографии, которые в бакете живы. Не видел и не смотрел — разное.
+
+BLIND = RuntimeError("бакет недоступен")
+
+
+def walked_card() -> dict:
+    """Карточка после удачного обогащения: амбиент плюс журнал скрейпа."""
+    return ambient_card() | {
+        es.SCRAPE_KEY: {"written": ["images", "photo_count"]}}
+
+
+async def test_a_failed_staging_keeps_the_pictures_of_the_card(site_lead,
+                                                               scraped, r2):
+    lead = await site_lead(enrichment=walked_card())
+    key = put_ambient(r2, lead.id)
+    scraped(result())
+    r2.fail = BLIND
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and got.staged == []
+    data = await enrichment_of(lead.id)
+    assert data["images"] == {"hero_bg": AMBIENT} and data["photo_count"] == 1
+    assert data[es.AMBIENT_KEY] == ["hero_bg"]
+    # принадлежность скрейпу переносится вперёд: иначе следующий удачный
+    # прогон счёл бы уцелевшее ручной правкой и больше не переписал
+    assert "images" in data[es.SCRAPE_KEY]["written"]
+    assert r2.objects[key] == b"nakres ambient"
+
+
+async def test_without_r2_keys_the_pictures_of_the_card_stay_too(site_lead,
+                                                                 scraped,
+                                                                 monkeypatch):
+    for name in draft_service.R2_ENV:
+        monkeypatch.delenv(name, raising=False)
+    lead = await site_lead(enrichment=walked_card())
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and got.staged == []
+    data = await enrichment_of(lead.id)
+    assert data["images"] == {"hero_bg": AMBIENT} and data["photo_count"] == 1
+    assert "images" in data[es.SCRAPE_KEY]["written"]
+
+
+async def test_a_good_run_after_a_failed_one_rewrites_as_usual(site_lead,
+                                                               scraped, r2):
+    lead = await site_lead(enrichment=walked_card())
+    put_ambient(r2, lead.id)
+    scraped(result())
+    r2.fail = BLIND
+    assert (await es.enrich_from_site(lead.id)).ok
+    r2.fail = None
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and "hero_bg" in got.staged
+    data = await enrichment_of(lead.id)
+    assert data["images"]["hero_bg"]["width"] != AMBIENT["width"]
+    assert data[es.AMBIENT_KEY] == []
+
+
+async def test_a_good_run_after_a_failed_one_brings_the_ambient_back(site_lead,
+                                                                     scraped,
+                                                                     r2):
+    lead = await site_lead(enrichment=walked_card())
+    key = put_ambient(r2, lead.id)
+    scraped(result(images=[], products=[]), blobs={LOGO_URL: BLOBS[LOGO_URL]})
+    r2.fail = BLIND
+    assert (await es.enrich_from_site(lead.id)).ok
+    r2.fail = None
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ok and r2.objects.get(key) == b"nakres ambient"
+    data = await enrichment_of(lead.id)
+    assert data["images"]["hero_bg"] == AMBIENT
+    assert set(data["images"]) == {"logo", "hero_bg"}
+    assert data["photo_count"] == 1 and got.ambient == ["hero_bg"]
+
+
+async def test_the_report_says_what_survived_the_failed_staging(site_lead,
+                                                                scraped, r2):
+    """Без этой строки отчёт молчит о том, цела ли работа предыдущих прогонов."""
+    from handlers_admin import enrich_report
+
+    lead = await site_lead(enrichment=walked_card())
+    put_ambient(r2, lead.id)
+    scraped(result())
+    r2.fail = BLIND
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert "прежнее в карточке сохранено: картинки, число фото" in got.images_reason
+    assert "прежнее в карточке сохранено" in enrich_report(got)
+
+
+def test_an_unexamined_key_is_neither_written_nor_dropped():
+    current = {"products": [{"name": "Промінь 14"}],
+               "_scrape": {"written": ["products"]}}
+
+    merged = es.merge_enrichment(current, {}, unexamined=es.SCRAPER_OWNED)
+
+    assert merged.enrichment["products"] == current["products"]
+    assert merged.written == ["products"] and merged.kept == []
+
+
+def test_an_unexamined_key_the_card_never_had_stays_absent():
+    merged = es.merge_enrichment({}, {}, unexamined=es.SCRAPER_OWNED)
+
+    assert merged.enrichment == {} and merged.written == []
 
 
 # --- логотип, нарисованный прямо в HTML ---------------------------------------
@@ -773,6 +1027,28 @@ async def test_a_long_answer_is_capped(site_lead, scraped, r2, enrich_model):
     data = await enrichment_of(lead.id)
     assert len(data["services"]) == site_scrape.MAX_SERVICES
     assert len(data["hours"]) == site_scrape.MAX_HOURS
+
+
+# --- отчёт админу -------------------------------------------------------------
+
+def test_the_report_shows_the_rating_with_its_numbers():
+    """«рейтинг» одним словом не даёт сверить оценку с сайтом глазами."""
+    from handlers_admin import enrich_report
+
+    text = enrich_report(es.EnrichResult(
+        ok=True, pages=2, written=["hours", "rating"],
+        rating="4.8 (127 отзывов)"))
+
+    assert "Записано: часы, рейтинг 4.8 (127 отзывов)" in text
+
+
+def test_the_report_says_when_the_ambient_was_kept():
+    from handlers_admin import enrich_report
+
+    text = enrich_report(es.EnrichResult(ok=True, pages=1, staged=["logo"],
+                                         ambient=["hero_bg"]))
+
+    assert "Амбиент сохранён: hero_bg" in text
 
 
 # --- контракты ----------------------------------------------------------------

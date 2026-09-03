@@ -428,7 +428,6 @@ SLOT_LINES = {
     "secondary_label": "Написати",
     "reassurance": "Відповідаємо вдень",
     "section_title": "Наші послуги",
-    "source_note": "Дані з Google.",
     "address_label": "Адреса",
     "hours_label": "Години",
     "map_alt": "Карта розташування",
