@@ -1,6 +1,6 @@
 # Базовый образ прибит по digest, а не по тегу: тег 3.12-slim перевыпускают
 # при каждом обновлении Debian, и «тот же Dockerfile» собирал бы разные образы.
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
