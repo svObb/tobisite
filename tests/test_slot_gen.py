@@ -182,7 +182,7 @@ def test_the_dictionary_names_every_free_slot_of_the_library():
                for spec in sf_slots.group_free_specs(contract)
                if spec["name"] not in slot_gen.FACT_BOUND_GROUP_SLOTS}
     assert kinds and (kinds | grouped) <= listed, sorted((kinds | grouped) - listed)
-    assert slot_gen.PROMPT_VERSION == "s4"
+    assert slot_gen.PROMPT_VERSION == "s5"
 
 
 async def test_the_label_of_a_google_figure_is_never_asked_of_the_model(

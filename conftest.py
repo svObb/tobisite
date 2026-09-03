@@ -425,7 +425,6 @@ SLOT_LINES = {
     "headline": "Запис на прийом",
     "lede": "Зателефонуйте нам.",
     "call_label": "Зателефонувати",
-    "secondary_label": "Написати",
     "reassurance": "Відповідаємо вдень",
     "section_title": "Наші послуги",
     "address_label": "Адреса",
