@@ -108,6 +108,16 @@ function notFound(): Response {
   });
 }
 
+/**
+ * Кэш по типу файла. html перепроверяется всегда: публикация кладёт новую
+ * версию под тем же ключом, посетитель должен увидеть её сразу. Медиа под
+ * слагом живёт час — republish перезаписывает те же имена, но черновик
+ * смотрят разово, ревалидация каждой картинки только тормозила LCP.
+ */
+function cacheControl(path: string): string {
+  return path.endsWith(".html") ? "no-cache" : "public, max-age=3600";
+}
+
 // Лимит живёт в памяти изолята. Изолятов у Cloudflare много и они
 // перезапускаются, так что честного глобального «5 в минуту» здесь нет: это
 // заслон от простого флуда с одного адреса, а не гарантия. Глобальный счётчик
@@ -276,7 +286,17 @@ async function serveAsset(request: Request, env: Env, url: URL): Promise<Respons
   const inner = new URL(url);
   inner.pathname = url.pathname.slice("/assets".length) || "/";
   const response = await env.ASSETS.fetch(new Request(inner, request));
-  return response.status === 404 ? notFound() : response;
+  if (response.status === 404) return notFound();
+  // Имена файлов не версионированы, а пока max-age не истёк, браузер к
+  // серверу не ходит вовсе — css-фикс после деплоя ждал бы весь срок кэша.
+  // Час устаревания на общий бандл всех превью — потолок, который терпим.
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "public, max-age=3600");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 async function servePreview(request: Request, env: Env, url: URL, slug: string): Promise<Response> {
@@ -306,6 +326,7 @@ async function servePreview(request: Request, env: Env, url: URL, slug: string):
     meta.writeHttpMetadata(headers);
     headers.set("etag", meta.httpEtag);
     headers.set("content-length", String(meta.size));
+    headers.set("cache-control", cacheControl(path));
     return new Response(null, { headers });
   }
 
@@ -314,6 +335,7 @@ async function servePreview(request: Request, env: Env, url: URL, slug: string):
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
+  headers.set("cache-control", cacheControl(path));
   if (!("body" in object)) return new Response(null, { status: 304, headers });
   return new Response(object.body, { headers });
 }
