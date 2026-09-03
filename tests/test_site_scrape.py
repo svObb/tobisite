@@ -167,6 +167,57 @@ def test_emails_come_from_mailto_first(shop):
     assert ss.emails(shop)[0] == "shop@lihtaryk.example"
 
 
+def obfuscated(body: str):
+    return ss.soup_of(f"<html><body>{body}</body></html>".encode())
+
+
+def test_an_address_hidden_behind_cyrillic_lookalikes_is_found_and_repaired():
+    """«а» и «е» здесь — U+0430 и U+0435: так сайт прячет почту от сборщиков.
+
+    Прежний ASCII-регэксп такой адрес не видел вовсе, и почта на странице
+    была, а мы отчитывались, что её нет.
+    """
+    soup = obfuscated('<a href="mailto:sаlеs@vortex.dp.ua">пошта</a>')
+
+    assert ss.emails(soup) == ["sales@vortex.dp.ua"]
+
+
+def test_a_lookalike_in_the_domain_is_repaired_too():
+    soup = obfuscated("<p>пишіть на info@vоrtex.dp.uа</p>")
+
+    assert ss.emails(soup) == ["info@vortex.dp.ua"]
+
+
+def test_an_address_we_cannot_transliterate_is_skipped():
+    """«інфо» — не двойники, а настоящая кириллица: угадывать её нельзя."""
+    soup = obfuscated("<p>інфо@vortex.dp.ua, shop@vortex.dp.ua</p>")
+
+    assert ss.emails(soup) == ["shop@vortex.dp.ua"]
+
+
+def test_a_latin_address_is_returned_byte_for_byte():
+    soup = obfuscated("<p>Пишіть: a.b-c+tag@sub.example.co.uk</p>")
+
+    assert ss.emails(soup) == ["a.b-c+tag@sub.example.co.uk"]
+
+
+def test_an_address_glued_to_cyrillic_is_skipped_whole_not_truncated():
+    """Лукбехайд только на кириллицу движок обходил, стартуя на символ правее:
+    «звонитеinfo@…» отдавался как «nfo@…» — чисто-ASCII огрызок, который
+    проходил все фильтры до mailto. Слипшийся адрес пропускаем целиком."""
+    soup = obfuscated("<p>звонитеinfo@vortex.dp.ua або пишіть</p>")
+
+    assert ss.emails(soup) == []
+
+
+def test_uppercase_lookalikes_survive_the_lowering():
+    """У В/К/М/Н/Т двойники только заглавные: почини мы адрес после lower(),
+    строчная форма выпала бы из таблицы и адрес терялся уже починимым."""
+    soup = obfuscated('<a href="mailto:ВООКІNG@vortex.dp.ua">бронь</a>')
+
+    assert ss.emails(soup) == ["booking@vortex.dp.ua"]
+
+
 # --- адрес и часы -------------------------------------------------------------
 
 def test_address_parts_come_only_from_json_ld(shop):

@@ -3,6 +3,9 @@
 Сети нет: резолвер подменяется целиком, а автоматическая фикстура _no_dns из
 conftest не пускает в интернет ни один тест прогона. Настоящая функция модуля
 взята до подмены — именно её проверяет тест кэша.
+
+Последний раздел — про адрес, который эту проверку проходит и всё равно мёртв:
+кириллические двойники латинских букв ловятся только на вводе.
 """
 from datetime import datetime, timedelta
 
@@ -14,7 +17,7 @@ from sqlalchemy import select
 import config
 import email_gen
 import email_verify
-from handlers_worker import save_contact_value
+from handlers_worker import clean_contact, save_contact_value
 from models import VERIFY_TTL_DAYS, Contact, Session
 from test_email_gen import UK_DRAFT, UK_JSON
 
@@ -280,3 +283,53 @@ async def test_second_letter_does_not_ask_dns_again(monkeypatch, model,
     await email_gen.build_email(lead, UK_DRAFT)
 
     assert len(calls) == 1  # вердикт лежит на контакте, срок ещё не вышел
+
+
+# --- кириллические двойники в адресе ------------------------------------------
+
+# Адрес с сайта лида vortex: «а» и «е» — U+0430 и U+0435.
+HOMOGLYPH = "sаlеs@vortex.dp.ua"
+
+
+def test_a_lookalike_address_passes_this_check_and_is_still_dead():
+    """Почему двойники чинятся на записи, а не здесь.
+
+    Синтаксис у адреса безупречный, домен настоящий и почту принимает —
+    проверке получателя придраться не к чему. Мёртвый он по кодам символов
+    локальной части, и увидеть это может только нормализатор.
+    """
+    assert email_verify.SYNTAX_RE.match(HOMOGLYPH)
+
+
+def test_a_lookalike_address_is_repaired_on_input():
+    assert clean_contact("email", HOMOGLYPH) == ("sales@vortex.dp.ua", None)
+
+
+def test_a_latin_address_reaches_the_row_byte_for_byte():
+    value, err = clean_contact("email", "Office@Example.COM")
+    assert (value, err) == ("Office@Example.COM", None)
+
+
+def test_an_address_we_cannot_transliterate_is_refused():
+    value, err = clean_contact("email", "інфо@vortex.dp.ua")
+    assert value == "інфо@vortex.dp.ua"
+    assert "не-латинские символы" in err
+
+
+def test_a_national_domain_is_not_refused():
+    """.укр — законный IDN: отвергать такой адрес на вводе не за что."""
+    assert clean_contact("email", "пошта@пошта.укр") == ("пошта@пошта.укр", None)
+
+
+async def test_the_repaired_address_is_what_the_contact_row_gets(gap_lead):
+    lead = await gap_lead()
+    await _email_contact(lead)
+    contact, = await _contacts_of(lead)
+
+    value, err = clean_contact("email", HOMOGLYPH)
+    assert err is None
+    await save_contact_value(lead.id, contact.id, "email", None, value, None,
+                             ACTOR)
+
+    contact, = await _contacts_of(lead)
+    assert contact.value == "sales@vortex.dp.ua" and contact.value.isascii()

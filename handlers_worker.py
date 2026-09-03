@@ -19,7 +19,7 @@ import gap_validation as gv
 import keyboards as kb
 import notify
 import queue_service
-from dedup import normalize_domain, normalize_phone
+from dedup import normalize_domain, normalize_email, normalize_phone
 from models import (
     Contact, Lead, LeadEvent, Sale, Session, Worker, constraint_of, day_start,
     dup_message, gap_age_days, gap_repeated, gap_stale, log_event,
@@ -816,19 +816,32 @@ async def phone_dup_exists(session, value_norm: str | None,
     return row is not None
 
 
-def contact_error(ctype: str, value: str, region: str | None = None) -> str | None:
+def clean_contact(ctype: str, value: str,
+                  region: str | None = None) -> tuple[str, str | None]:
+    """(значение к записи, ошибка ввода). Ошибка None — значение можно писать.
+
+    Почта возвращается с починенными кириллическими двойниками: адрес,
+    скопированный с сайта-донора, выглядит латинским, но письмо по нему не
+    уходит, а mailto на странице клиента ведёт в никуда (dedup.normalize_email).
+    """
     # region обязан быть тем же, с каким номер потом ляжет в value_norm, иначе
     # проверка и запись разойдутся и дубликат пройдёт мимо уникального индекса
     if ctype == "phone":
         if not normalize_phone(value, region):
-            return ("Не разобрал номер. Введите в международном формате, "
-                    "например +380501234567:")
+            return value, ("Не разобрал номер. Введите в международном формате, "
+                           "например +380501234567:")
     elif ctype == "email":
         if not is_email(value):
-            return "Email должен содержать @ и домен. Повторите:"
+            return value, "Email должен содержать @ и домен. Повторите:"
+        fixed = normalize_email(value)
+        if fixed is None:
+            return value, ("В адресе не-латинские символы — письмо по нему не "
+                           "уйдёт. Наберите адрес латиницей:")
+        return fixed, None
     elif value.startswith("http") and not is_url(value):
-        return "Ссылка должна начинаться с http:// или https:// и содержать точку:"
-    return None
+        return value, ("Ссылка должна начинаться с http:// или https:// "
+                       "и содержать точку:")
+    return value, None
 
 
 @add_router.message(Add.c_value)
@@ -844,7 +857,7 @@ async def add_contact_value(message: Message, state: FSMContext, is_admin: bool)
         await message.answer(STALE, reply_markup=kb.menu(is_admin))
         return
     region = config.COUNTRY_ISO.get(d.get("country"))
-    err = contact_error(ctype, val, region)
+    val, err = clean_contact(ctype, val, region)
     if err:
         await message.answer(err, reply_markup=kb.cancel_kb())
         return
@@ -1822,9 +1835,9 @@ async def contact_value(message: Message, state: FSMContext, worker, is_admin: b
         await state.clear()
         await message.answer("Редактирование больше недоступно.")
         return
-    # регион нужен до проверки: contact_error и value_norm обязаны считать одинаково
+    # регион нужен до проверки: clean_contact и value_norm обязаны считать одинаково
     region = config.COUNTRY_ISO.get(lead.country)
-    err = contact_error(ctype, val, region)
+    val, err = clean_contact(ctype, val, region)
     if err:
         await message.answer(err, reply_markup=kb.cancel_kb())
         return

@@ -48,6 +48,7 @@ import costs
 import draft_service
 import site_images
 import site_scrape
+from dedup import normalize_email
 from models import Contact, Lead, Session, log_event
 from site_factory.engine import color
 
@@ -310,8 +311,14 @@ def found_fields(scrape, staged: dict, colors: dict, *,
         found["old_site_state"] = scrape.old_site_state
     if scrape.phones:
         found["phone"] = scrape.phones[0]
-    if scrape.emails:
-        found["email"] = scrape.emails[0]
+    for value in scrape.emails:
+        # скрейп чинит двойники сам, но в карточку лида этот ключ уходит
+        # напрямую в mailto клиентской страницы — берём первый адрес, который
+        # точно латинский, а не первый по списку
+        email = normalize_email(value)
+        if email:
+            found["email"] = email
+            break
     if colors:
         found["brand_colors"] = dict(colors)
     if looked_at_images:

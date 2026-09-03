@@ -226,6 +226,30 @@ def test_keys_of_other_owners_are_left_alone():
     assert merged.enrichment["review_count"] == 24
 
 
+# --- почта с сайта ------------------------------------------------------------
+
+def found_email(*emails) -> str | None:
+    found = es.found_fields(result(emails=list(emails)), {}, {},
+                            looked_at_images=False)
+    return found.get("email")
+
+
+def test_an_address_hidden_behind_cyrillic_lookalikes_reaches_the_card_latin():
+    """Ключ уходит прямиком в mailto клиентской страницы: чинить надо здесь."""
+    assert found_email("shоp@lihtaryk.example") == "shop@lihtaryk.example"
+
+
+def test_the_card_takes_the_first_address_that_is_really_latin():
+    # «інфо» — не двойники, а кириллица: такой адрес пропускаем целиком
+    assert found_email("інфо@lihtaryk.example",
+                       "shop@lihtaryk.example") == "shop@lihtaryk.example"
+
+
+def test_a_site_without_a_readable_address_gives_the_card_none():
+    assert found_email("інфо@lihtaryk.example") is None
+    assert found_email() is None
+
+
 # --- прогон целиком -----------------------------------------------------------
 
 async def test_an_empty_card_gets_everything(site_lead, scraped, r2):

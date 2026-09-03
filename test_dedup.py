@@ -1,4 +1,4 @@
-from dedup import normalize_domain, normalize_phone
+from dedup import normalize_domain, normalize_email, normalize_phone
 
 assert normalize_domain("https://www.Example.com/") == "example.com"
 assert normalize_domain("Example.COM") == "example.com"
@@ -41,5 +41,31 @@ assert normalize_phone("050 123 45 67", None) is None
 # если region берётся из страны лида одинаково при проверке и при сохранении.
 assert normalize_phone("050 123 45 67", "UA") == normalize_phone("+380501234567", "UA")
 assert normalize_phone("0905 123 456", "SK") == normalize_phone("+421905123456", "SK")
+
+# Адрес с сайта-донора: «а» и «е» — кириллические (U+0430, U+0435). На вид
+# он правильный, поэтому и доехал до карточки лида, но письмо по нему вернётся,
+# а mailto на странице клиента ведёт в никуда.
+assert normalize_email("sаlеs@vortex.dp.ua") == "sales@vortex.dp.ua"
+assert normalize_email("SАLЕS@Vortex.dp.ua") == "SALES@Vortex.dp.ua"
+assert normalize_email("info@vоrtex.dp.uа") == "info@vortex.dp.ua"
+
+# Латинский адрес не трогаем вовсе: ни регистра, ни пробелов
+assert normalize_email("sales@vortex.dp.ua") == "sales@vortex.dp.ua"
+assert normalize_email(" Office@Example.COM ") == " Office@Example.COM "
+assert normalize_email("") is None
+assert normalize_email(None) is None
+
+# Кириллица вне таблицы двойников — чужую почту не угадываем
+assert normalize_email("інфо@vortex.dp.ua") is None
+assert normalize_email("почта@vortex.dp.ua") is None
+
+# Заглавные двойники (В/К/М/Н/Т/Ј есть только в верхнем регистре)
+assert normalize_email("info@НОТМАІL.com") == "info@HOTMAIL.com"
+assert normalize_email("ВООКІNG@vortex.dp.ua") == "BOOKING@vortex.dp.ua"
+assert normalize_email("јohn@example.com") == "john@example.com"
+
+# Домен в национальном алфавите — законный IDN, а не обфускация
+assert normalize_email("пошта@пошта.укр") == "пошта@пошта.укр"
+assert normalize_email("office@сайт.рф") == "office@сайт.рф"
 
 print("smoke ok")

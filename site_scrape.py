@@ -42,6 +42,7 @@ import phonenumbers
 from bs4 import BeautifulSoup, UnicodeDammit
 
 import config
+from dedup import EMAIL_HOMOGLYPHS, normalize_email
 from scout.site_probe import analyze_html
 
 log = logging.getLogger(__name__)
@@ -90,7 +91,21 @@ BLOCK_MARKERS = ("cf-chl", "just a moment", "challenge-platform",
 
 _SCHEME = re.compile(r"^[a-z+]+://", re.I)
 _SPACES = re.compile(r"\s+")
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# Двойники в классах символов обязательны: адрес вроде «sаlеs@vortex.dp.ua»
+# (кириллические «а» и «е») сайт печатает именно затем, чтобы его не собрали, —
+# и без них почта на странице есть, а мы честно отчитываемся, что не нашли.
+# Лукбехайд требует стартовать с границы прогона: перед первой буквой ни
+# кириллицы («інфо@…» — не повод собрать «о@…»), ни символа адресного класса.
+# Второе обязательно: лукбехайд только на кириллицу движок обходит, стартуя
+# на символ правее, — «звонитеinfo@…» превращался в «nfo@…», чисто-ASCII огрызок
+# проходил все фильтры до mailto. Слипшийся с кириллицей адрес теперь честно
+# пропускается целиком: недостающий контакт заметен, откушенный — нет.
+_HOMOGLYPHS = "".join(EMAIL_HOMOGLYPHS)
+_CYRILLIC = "Ѐ-ӿ"
+_EMAIL = re.compile(
+    rf"(?<![A-Za-z0-9._%+\-{_CYRILLIC}])[A-Za-z0-9._%+{_HOMOGLYPHS}-]+@"
+    rf"[A-Za-z0-9.{_HOMOGLYPHS}-]+\.[A-Za-z{_HOMOGLYPHS}]{{2,}}"
+)
 _TIME_RANGE = re.compile(r"\d{1,2}[:.]\d{2}\s*[–—−-]\s*\d{1,2}[:.]\d{2}")
 _HEX = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
 _CSS_BRAND_VAR = re.compile(
@@ -351,7 +366,12 @@ def phones(text: str, region: str | None = None) -> list[str]:
 
 
 def emails(soup, text: str = "") -> list[str]:
-    """Почты страницы: сперва mailto-ссылки, потом текст."""
+    """Почты страницы: сперва mailto-ссылки, потом текст. Латиницей.
+
+    Адреса, спрятанные кириллическими двойниками, ловятся наравне с обычными
+    и возвращаются починенными: их выкладывают на сайт ровно для того, чтобы
+    сборщик прошёл мимо.
+    """
     found: list[str] = []
     for tag in soup.find_all("a", href=True):
         href = tag["href"].strip()
@@ -360,7 +380,14 @@ def emails(soup, text: str = "") -> list[str]:
     found += _EMAIL.findall(text or visible_text(soup))
     out: list[str] = []
     for value in found:
-        value = value.lower().strip(".")
+        # адрес мог быть спрятан двойниками; нечинимый пропускаем — чужую почту
+        # мы не угадываем, а недостающий контакт заметен, в отличие от битого.
+        # Чинить до lower(): у В/К/М/Н/Т двойники только заглавные, строчная
+        # форма из таблицы выпадает и адрес терялся бы уже починимым.
+        value = normalize_email(value.strip("."))
+        if not value:
+            continue
+        value = value.lower()
         if value not in out:
             out.append(value)
         if len(out) >= MAX_EMAILS:
