@@ -2,18 +2,31 @@
     пустой alt и aria-hidden: озвучивать одно и то же дважды нечем и незачем,
     а описать чужой снимок движку нечем вовсе.
 
+    Название разрезано на имя и хвост прайса (артикул в скобках, пометка
+    состояния) — engine/naming.split_product_name. Обе части на странице:
+    разрез только представление, данные не теряются.
+
     line-clamp-3 у заголовка карточки — вёрстка, а не правка данных: названия
     в прайсах магазинов бывают на строку с описанием, и в сетке они рвут ряд.
-    Название остаётся в разметке целиком: обрезает CSS, читалка читает всё. -#}
+    Название остаётся в разметке целиком: обрезает CSS, читалка читает всё.
+
+    Снимки товаров сняты с чужого сайта и обрезаны по-разному: object-contain
+    на общей подложке показывает товар целиком, а не его середину. -#}
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-paper py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="w-full px-gutter">
     <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
     <ul class="mt-flow grid grid-cols-2 gap-x-6 gap-y-flow lg:grid-cols-3">
       {%- for item in s.products %}
-      <li class="grid gap-3">
-        <img src="{{ item.image.src }}" alt="" aria-hidden="true" width="{{ item.image.width }}" height="{{ item.image.height }}" class="aspect-square w-full rounded-preset bg-surface object-cover" loading="lazy" decoding="async">
-        <h3 class="line-clamp-3 font-title text-base leading-snug break-words sm:text-lg">{{ item.name }}</h3>
+      {%- set head, tail = split_product_name(item.name) %}
+      <li class="grid gap-3" data-reveal="item">
+        <img src="{{ item.image.src }}" alt="" aria-hidden="true" width="{{ item.image.width }}" height="{{ item.image.height }}" class="panel aspect-square w-full rounded-preset object-contain p-3" loading="lazy" decoding="async">
+        <div>
+          <h3 class="line-clamp-3 font-title text-base leading-snug break-words sm:text-lg">{{ head }}</h3>
+          {%- if tail %}
+          <p class="mt-1 line-clamp-2 text-sm leading-snug break-words text-muted">{{ tail }}</p>
+          {%- endif %}
+        </div>
         {%- if item.price %}
         <p class="text-sm font-medium text-accent-ink sm:text-base">{{ item.price }}</p>
         {%- endif %}

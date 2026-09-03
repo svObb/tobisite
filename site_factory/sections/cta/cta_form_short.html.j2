@@ -4,31 +4,34 @@
 
     Ширину здесь задаёт не контейнер, а сама форма: поле ввода во всю ширину
     экрана заполнять неудобно, поэтому колонка формы ограничена, а колонка
-    текста — нет. -#}
+    текста — нет.
+
+    Поля прозрачные с рамкой по линейке: подложка формы меняется вместе с
+    полосой секции (.panel), и заливка полей от неё не зависит. -#}
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-surface py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="grid w-full gap-flow px-gutter lg:grid-cols-2 lg:items-start">
     <div>
       <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
       <p class="mt-4 max-w-[var(--measure)] text-lede text-muted" data-reveal="after">{{ s.lede }}</p>
       <a href="{{ s.phone_href }}" class="mt-6 inline-block text-lede font-medium break-words text-accent-ink underline decoration-line underline-offset-4" data-hit="cta_click">{{ s.phone }}</a>
     </div>
-    <form action="/api/lead" method="post" class="grid w-full gap-4 rounded-preset-lg border border-line bg-paper p-6 lg:max-w-[34rem] lg:justify-self-end">
+    <form action="/api/lead" method="post" class="panel grid w-full gap-4 rounded-preset-lg border border-line p-6 lg:max-w-[34rem] lg:justify-self-end">
       <div class="hidden" aria-hidden="true">
         <label for="{{ section.id }}-company">{{ s.honeypot_label }}</label>
         <input id="{{ section.id }}-company" name="company_website" type="text" tabindex="-1" autocomplete="off">
       </div>
       <label class="grid gap-2" for="{{ section.id }}-name">
         <span class="text-sm font-medium">{{ s.name_label }}</span>
-        <input id="{{ section.id }}-name" name="name" type="text" required autocomplete="name" class="rounded-preset border border-line bg-paper px-4 py-3 text-base text-ink">
+        <input id="{{ section.id }}-name" name="name" type="text" required autocomplete="name" class="rounded-preset border border-line bg-transparent px-4 py-3 text-base text-ink">
       </label>
       <label class="grid gap-2" for="{{ section.id }}-phone">
         <span class="text-sm font-medium">{{ s.phone_label }}</span>
-        <input id="{{ section.id }}-phone" name="phone" type="tel" required autocomplete="tel" class="rounded-preset border border-line bg-paper px-4 py-3 text-base text-ink">
+        <input id="{{ section.id }}-phone" name="phone" type="tel" required autocomplete="tel" class="rounded-preset border border-line bg-transparent px-4 py-3 text-base text-ink">
       </label>
       <label class="grid gap-2" for="{{ section.id }}-message">
         <span class="text-sm font-medium">{{ s.message_label }}</span>
-        <textarea id="{{ section.id }}-message" name="message" rows="4" class="rounded-preset border border-line bg-paper px-4 py-3 text-base text-ink"></textarea>
+        <textarea id="{{ section.id }}-message" name="message" rows="4" class="rounded-preset border border-line bg-transparent px-4 py-3 text-base text-ink"></textarea>
       </label>
       <button type="submit" class="btn w-full" data-hit="cta_click">{{ s.submit_label }}</button>
       <p class="text-sm leading-relaxed text-muted">{{ s.privacy_note }}</p>

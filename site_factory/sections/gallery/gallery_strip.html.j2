@@ -10,7 +10,7 @@
 <section id="{{ section.id }}" class="bg-line">
   <ul class="grid grid-cols-3 gap-px">
     {%- for photo in section.images.values() %}
-    <li class="bg-paper">
+    <li class="bg-paper" data-reveal="item">
       <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="aspect-square w-full object-cover sm:aspect-[4/3]" loading="lazy" decoding="async">
     </li>
     {%- endfor %}

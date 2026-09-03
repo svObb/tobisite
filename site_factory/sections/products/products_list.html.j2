@@ -1,11 +1,15 @@
+{#- Прайс строками. Название разрезано на имя и хвост (артикул в скобках,
+    пометка состояния) тем же правилом, что и в витрине, —
+    engine/naming.split_product_name: обе части на странице, данные целы. -#}
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-paper py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="w-full px-gutter">
     <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
-    <ul class="mt-flow grid border-t border-line lg:grid-cols-2 lg:gap-x-flow">
+    <ul class="mt-flow grid lg:grid-cols-2 lg:gap-x-flow">
       {%- for item in s.products %}
+      {%- set head, tail = split_product_name(item.name) %}
       <li class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line py-4">
-        <span class="font-title text-lg leading-snug break-words">{{ item.name }}</span>
+        <span class="min-w-0 font-title text-lg leading-snug break-words">{{ head }}{% if tail %}<span class="block text-sm font-normal text-muted">{{ tail }}</span>{% endif %}</span>
         {%- if item.price %}
         <span class="font-medium text-accent-ink">{{ item.price }}</span>
         {%- endif %}

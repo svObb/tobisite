@@ -1,10 +1,10 @@
 {#- Значок нарисован инлайном: у превью нет своего спрайта, а внешний файл —
     лишний запрос на страницу, которая живёт один экран. -#}
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-paper py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="w-full px-gutter">
     <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
-    <ul class="mt-flow grid gap-x-flow border-t border-line lg:grid-cols-2">
+    <ul class="mt-flow grid gap-x-flow lg:grid-cols-2">
       {%- for item in s.services %}
       <li class="flex gap-4 border-b border-line py-5">
         <svg class="mt-1 h-5 w-5 shrink-0 text-accent-ink" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">

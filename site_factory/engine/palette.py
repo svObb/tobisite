@@ -21,6 +21,10 @@ muted), и стоит подменить бумагу цветом с чужог
 Палитра бренда причину тоже несёт: chroma_capped значит, что цвет взят, но
 его насыщенность пришлось срезать до потолка.
 
+Здесь же живут тона контрастной секции (contrast_tones): они выводятся из той
+же палитры тем же гардом, и держать их в другом модуле значило бы завести
+второе правило для одного контраста.
+
 Детерминизм: ни одного случайного числа, шаг сдвига фиксирован, ответ зависит
 только от аргументов.
 """
@@ -28,8 +32,9 @@ from __future__ import annotations
 
 import re
 
-from .color import (AA_TEXT, PIVOT_LUMINANCE, chroma, from_oklab, lightness,
-                    luminance, ratio, srgb, to_hex, to_oklab, with_chroma)
+from .color import (AA_TEXT, LINE_MIX, MUTED_MIX, PIVOT_LUMINANCE, SURFACE_MIX,
+                    chroma, from_oklab, lightness, luminance, mix_oklab, ratio,
+                    srgb, to_hex, to_oklab, with_chroma)
 
 # Ниже этой насыщенности в oklab цвет неотличим от серого. #808080 даёт 0,
 # приглушённая пыльная терракота (#b98a74) — около 0.05.
@@ -67,6 +72,12 @@ PRESET = "preset"
 BRAND = "brand"
 CHROMA_CAPPED = "chroma_capped"
 
+# Доля ink в подложке контрастной секции. Не сам ink: чистая заливка ink даёт
+# плоское чёрное (или, на тёмных пресетах, плоское белое) полотно, а подмешанная
+# бумага оставляет в нём тон палитры — блок читается как часть страницы, а не
+# как вставка из чужого макета.
+CONTRAST_MIX = 0.94
+
 
 def brand_palette(brand_colors, preset_palette: dict) -> tuple[dict, str, str]:
     """(палитра, откуда, причина). У пресетной палитры причина — почему не бренд."""
@@ -89,6 +100,34 @@ def brand_palette(brand_colors, preset_palette: dict) -> tuple[dict, str, str]:
     capped = accent != to_hex(srgb(color))
     return (dict(palette, accent=accent, accent_ink=accent_ink,
                  accent_on=accent_on), BRAND, CHROMA_CAPPED if capped else "")
+
+
+def contrast_tones(palette: dict) -> dict:
+    """Тона одной контрастной секции страницы — из той же семьи, что ink.
+
+    Подложка — ink, подмешанный к бумаге; текст по ней — сама бумага. Пара
+    ink/paper контрастна в любом пресете (её проверяет checks/a11y.py), поэтому
+    гард нужен только подложке: если подмешанная бумага увела её до AA, берётся
+    чистый ink. Акцент доводится до AA по новой подложке той же функцией, что
+    и бренд-цвет по бумаге, — двух правил для одного контраста нет.
+
+    Производные (surface, line, muted) считаются здесь, а не в CSS: внутри
+    секции подменяются --paper и --ink, а @theme подставляет var() один раз на
+    :root, и пересчитать их каскадом уже нечем.
+    """
+    paper, ink = srgb(palette["paper"]), srgb(palette["ink"])
+    ground = mix_oklab(ink, paper, CONTRAST_MIX)
+    if ratio(paper, ground) < AA_TEXT:
+        ground = ink
+    accent = readable(palette["accent"], to_hex(ground))
+    return {
+        "bg": to_hex(ground),
+        "ink": to_hex(paper),
+        "surface": to_hex(mix_oklab(paper, ground, SURFACE_MIX)),
+        "line": to_hex(mix_oklab(paper, ground, LINE_MIX)),
+        "muted": to_hex(mix_oklab(paper, ground, MUTED_MIX)),
+        "accent": accent or to_hex(paper),
+    }
 
 
 def cap_chroma(color: str) -> str:

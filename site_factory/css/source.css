@@ -42,7 +42,8 @@
   --spacing-gutter: clamp(1.15rem, 3.5vw, 4rem);
 
   /* Кегли заголовков приходят от type_scale пресета: одна шкала на страницу,
-     а не набор произвольных sm:text-5xl в каждом шаблоне. */
+     а не набор произвольных sm:text-5xl в каждом шаблоне. Шаг между h1 и h2
+     не меньше 1.25× — это проверяет tests/test_render.py. */
   --text-h1: var(--h1);
   --text-h1--line-height: 1.08;
   --text-h2: var(--h2);
@@ -83,6 +84,74 @@
 }
 
 @layer components {
+  /* Тональный ритм страницы.
+
+     Полосу секции задаёт её позиция, а не класс в шаблоне: какая секция куда
+     попадёт, решает композитор, и фиксированный bg-paper в разметке спорил бы
+     с ним — на живых лидах подряд вставало по три одинаковых полосы. Секция,
+     у которой свой фон есть по смыслу (кадр под первым экраном, полоса
+     галереи), оставляет утилиту bg-* в разметке и выбывает отсюда сама:
+     утилиты лежат слоем выше компонентов. */
+  main > section {
+    background-color: var(--color-paper);
+  }
+
+  main > section:nth-of-type(even) {
+    background-color: var(--color-surface);
+  }
+
+  /* Одна секция страницы идёт по чернилам палитры. Это не «тёмная вставка в
+     светлую страницу»: вместе с фоном подменяется вся семья тонов, включая
+     акцент, доведённый до AA по новой подложке (engine/palette.contrast_tones),
+     — секция остаётся той же страницей на её тёмном конце, а не куском чужого
+     макета. Тона приходят посчитанными с Python: @theme подставляет var() один
+     раз на :root, и пересчитать surface/line/muted каскадом здесь нечем.
+
+     Какая именно секция — решает compose.CONTRAST_ROLES (about > proof > info):
+     первый экран и форму на контраст не сажаем. */
+  main > section[data-tone="contrast"] {
+    --paper: var(--contrast-bg);
+    --ink: var(--contrast-ink);
+    --accent: var(--contrast-accent);
+    --accent-ink: var(--contrast-accent);
+    --accent-on: var(--contrast-bg);
+    --color-paper: var(--contrast-bg);
+    --color-ink: var(--contrast-ink);
+    --color-accent: var(--contrast-accent);
+    --color-accent-ink: var(--contrast-accent);
+    --color-accent-on: var(--contrast-bg);
+    --color-surface: var(--contrast-surface);
+    --color-line: var(--contrast-line);
+    --color-muted: var(--contrast-muted);
+    background-color: var(--contrast-bg);
+    color: var(--contrast-ink);
+  }
+
+  /* Подложка внутри полосы: всегда на шаг от фона своей секции, а не «всегда
+     surface» — в полосе surface такая карточка была бы невидима. */
+  main > section .panel {
+    background-color: var(--color-surface);
+  }
+
+  main > section:nth-of-type(even) .panel {
+    background-color: var(--color-paper);
+  }
+
+  main > section[data-tone="contrast"] .panel {
+    background-color: var(--color-surface);
+  }
+
+  /* Надстрочная подпись секции. Одна на всю страницу: пока каждая секция
+     набирала её своим кеглем и своим трекингом, подписи переставали читаться
+     как один уровень. Трекинг умеренный — капитель разгоняют, а не растаскивают. */
+  .eyebrow {
+    font-size: clamp(0.72rem, 1.05vw, 0.82rem);
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    line-height: 1.25;
+    text-transform: uppercase;
+  }
+
   /* Кнопка. Форма у всех пресетов одна, заливку выбирает токен button
      атрибутом data-btn на <html> — одна точка стиля вместо трёх наборов
      классов в шаблонах (решение F). */
@@ -141,6 +210,38 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0.75rem;
+  }
+
+  /* Меню на узком экране. Раскрытие держит <details>, а не скрипт: CSP превью
+     разрешает только свои файлы, инлайнового обработчика на странице быть не
+     может, а заводить третий скрипт ради одной кнопки незачем. Список
+     открывается поверх содержимого, а не раздвигает шапку. */
+  .nav-collapse {
+    position: relative;
+  }
+
+  .nav-collapse > summary {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem;
+    margin: -0.4rem;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .nav-collapse > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .nav-collapse > ul {
+    position: absolute;
+    top: calc(100% + 0.6rem);
+    right: 0;
+    z-index: 20;
+    min-width: 13rem;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background-color: var(--paper);
   }
 
   /* Карточка: коробка с рамкой по линейке и тенью пресета. Границу рисует
@@ -209,6 +310,29 @@
 
     [data-motion="on"] [data-reveal="after"] {
       transition-delay: 0.12s;
+    }
+
+    /* Лестница внутри одной сетки: карточки проявляются в порядке чтения, а не
+       все разом. Шаг мелкий и с потолком — задержка длиннее трети секунды
+       читается уже не как порядок, а как подвисшая страница. */
+    [data-motion="on"] [data-reveal="item"]:nth-child(2) {
+      transition-delay: 0.06s;
+    }
+
+    [data-motion="on"] [data-reveal="item"]:nth-child(3) {
+      transition-delay: 0.12s;
+    }
+
+    [data-motion="on"] [data-reveal="item"]:nth-child(4) {
+      transition-delay: 0.18s;
+    }
+
+    [data-motion="on"] [data-reveal="item"]:nth-child(5) {
+      transition-delay: 0.24s;
+    }
+
+    [data-motion="on"] [data-reveal="item"]:nth-child(n + 6) {
+      transition-delay: 0.3s;
     }
 
     [data-motion="on"] [data-reveal].is-visible {

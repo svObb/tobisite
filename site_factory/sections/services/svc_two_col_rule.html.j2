@@ -1,8 +1,8 @@
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-paper py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="w-full px-gutter">
     <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
-    <ul class="mt-flow grid border-t border-line">
+    <ul class="mt-flow grid">
       {%- for item in s.services %}
       <li class="grid gap-2 border-b border-line py-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-flow">
         <h3 class="font-title text-lg leading-snug break-words sm:text-xl">{{ item.name }}</h3>

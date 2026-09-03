@@ -1,10 +1,10 @@
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-surface py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="w-full px-gutter">
     <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
     <ul class="mt-flow grid gap-flow sm:grid-cols-2 lg:grid-cols-3">
       {%- for item in s.services %}
-      <li class="card rounded-preset-lg bg-paper p-6">
+      <li class="card panel rounded-preset-lg p-6" data-reveal="item">
         <h3 class="font-title text-lg leading-snug break-words sm:text-xl">{{ item.name }}</h3>
         {%- if item.blurb %}
         <p class="mt-3 leading-relaxed text-muted">{{ item.blurb }}</p>

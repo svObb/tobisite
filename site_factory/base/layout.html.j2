@@ -7,6 +7,7 @@
                palette{paper, ink, accent, accent_ink, accent_on},
                fonts{display{family, gwfh_id, stack}, body{...}},
                space{section_py, flow, measure}, scale{h1, h2, lede},
+               contrast{bg, ink, surface, line, muted, accent},
                shadow, button, align
     site     — lang, title, description, assets_base, scripts[],
                ui{skip_to_content, nav_label}
@@ -38,6 +39,12 @@
   '--h2:' ~ preset.scale.h2,
   '--lede:' ~ preset.scale.lede,
   '--shadow:' ~ preset.shadow,
+  '--contrast-bg:' ~ preset.contrast.bg,
+  '--contrast-ink:' ~ preset.contrast.ink,
+  '--contrast-surface:' ~ preset.contrast.surface,
+  '--contrast-line:' ~ preset.contrast.line,
+  '--contrast-muted:' ~ preset.contrast.muted,
+  '--contrast-accent:' ~ preset.contrast.accent,
 ] | join(';') -%}
 <!doctype html>
 <html lang="{{ site.lang }}" style="{{ css_vars }}" data-preset="{{ preset.id }}" data-btn="{{ preset.button }}" data-align="{{ preset.align }}" data-elev="{{ preset.elevation }}">

@@ -1,13 +1,15 @@
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="border-b border-line bg-paper py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="align-hero w-full px-gutter">
-    <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm" data-reveal>{{ s.eyebrow }}</p>
+    <p class="eyebrow text-accent-ink" data-reveal>{{ s.eyebrow }}</p>
     <h1 class="mt-4 max-w-[16ch] font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
     <div class="mt-6 h-px w-24 bg-accent" aria-hidden="true"></div>
     <p class="mt-6 max-w-[var(--measure)] text-lede text-muted" data-reveal="after">{{ s.lede }}</p>
     <div class="btn-row mt-flow" data-reveal="after">
       <a href="{{ s.phone_href }}" class="btn" data-hit="cta_click">{{ s.call_label }}</a>
+      {%- if s.secondary_label %}
       <a href="#{{ s.secondary_target }}" class="btn btn-quiet">{{ s.secondary_label }}</a>
+      {%- endif %}
     </div>
   </div>
 </section>

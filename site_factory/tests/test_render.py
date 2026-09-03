@@ -61,13 +61,31 @@ def test_preset_comes_from_the_pool_of_the_niche():
             assert preset_for(profile)["id"] == pool[digest % len(pool)]
 
 
-def test_library_is_version_four_with_sixteen_presets():
-    """Первые восемь пресетов заморожены — слот-ключи лидов считают их по месту."""
+def test_library_is_version_five_with_sixteen_presets():
+    """Первые восемь пресетов заморожены — слот-ключи лидов считают их по месту.
+
+    Версия библиотеки — пятая: шкала кеглей, тональный ритм и разметка секций
+    сменились разом, и черновики, собранные на четвёртой, обязаны стать stale
+    (draft_service._stale_library), а не публиковаться вперемешку с новыми.
+    """
     ids = preset_ids()
-    assert load_tokens()["version"] == 4
+    assert load_tokens()["version"] == 5
     assert len(ids) == 16
     assert ids[:len(FROZEN_PRESETS)] == FROZEN_PRESETS
     assert len(set(ids)) == len(ids)
+
+
+def test_the_type_scale_keeps_a_step_between_the_headings():
+    """Шаг шкалы не меньше 1.25×: h1 и h2 одного кегля — это документ, а не сайт.
+
+    Проверяются оба конца clamp'а: на телефоне шкала сжимается сильнее всего,
+    и сходятся кегли именно там.
+    """
+    for name, scale in load_tokens()["type_scale"].items():
+        h1, h2 = _clamp(scale["h1"]), _clamp(scale["h2"])
+        assert h1[0] / h2[0] >= 1.25, f"{name}: нижний конец шкалы"
+        assert h1[2] / h2[2] >= 1.25, f"{name}: верхний конец шкалы"
+        assert h2[0] > _clamp(scale["lede"])[0], f"{name}: h2 не крупнее лида"
 
 
 def test_every_preset_is_reachable():
@@ -191,18 +209,28 @@ def test_every_page_gets_the_base_scripts(buildable_profile):
     assert all("application/ld+json" in tag for tag in tags if "src=" not in tag)
 
 
-def test_parallax_script_comes_only_with_the_section_that_asks(lawyer_rich,
+def test_parallax_script_comes_only_with_the_section_that_asks(lawyer_light,
+                                                               lawyer_rich,
                                                                brand_shop):
-    """Скрипт секции просит сама секция — флагом js в контракте."""
-    plain, plain_trace = render(lawyer_rich)
+    """Скрипт секции просит сама секция — флагом js в контракте.
+
+    Просят его оба первых экрана со снимком: и фон (hero_bg_photo), и кадр
+    слева (hero_photo_left). Страница без единой картинки не просит ничего.
+    """
+    plain, plain_trace = render(lawyer_light)
     assert plain is not None
-    assert "hero_bg_photo" not in plain_trace["sections"]
+    assert not [v for v in plain_trace["sections"] if v.startswith("hero_")
+                and v != "hero_type_only"]
     assert "/assets/parallax.js" not in plain
 
     photo, photo_trace = render(brand_shop)
     assert photo is not None
     assert "hero_bg_photo" in photo_trace["sections"]
     assert '<script defer src="/assets/parallax.js"></script>' in photo
+
+    framed, framed_trace = render(lawyer_rich)
+    assert "hero_photo_left" in framed_trace["sections"]
+    assert '<script defer src="/assets/parallax.js"></script>' in framed
 
 
 def test_the_background_photo_is_preloaded_before_the_stylesheet(brand_shop):
@@ -290,6 +318,13 @@ def test_library_survives_roles_without_variants():
     library = load_library()
     assert {contract["role"] for contract in library.values()} <= set(SECTION_ROLES)
     assert "footer_nap" in library
+
+
+def _clamp(value: str) -> tuple[float, float, float]:
+    """«clamp(2.4rem, 6.5vw, 5.25rem)» -> (2.4, 6.5, 5.25)."""
+    inside = value[value.index("(") + 1:value.rindex(")")]
+    return tuple(float(re.sub(r"[a-z]+$", "", part.strip()))
+                 for part in inside.split(","))
 
 
 def _key(niche: str) -> str:

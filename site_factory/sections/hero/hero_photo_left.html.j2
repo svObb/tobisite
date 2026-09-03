@@ -1,14 +1,19 @@
 {#- Снимок держит левую треть первого экрана: он часть композиции, а не
-    полоса картинки во всю страницу — та бывает только фоном (hero_bg_photo). -#}
+    полоса картинки во всю страницу — та бывает только фоном (hero_bg_photo).
+
+    Кадр живой: снимок выше рамки на 12% и поднят на 6%, и внутри этого запаса
+    /assets/parallax.js двигает его от прокрутки и от указателя (js: parallax
+    в контракте). Скрипта нет или включён prefers-reduced-motion — снимок
+    просто стоит, и первый экран от этого не меняется. -#}
 {%- set s = section.slots -%}
 {%- set portrait = section.images.portrait -%}
-<section id="{{ section.id }}" class="border-b border-line bg-paper py-section">
+<section id="{{ section.id }}" class="py-section">
   <div class="grid w-full gap-flow px-gutter lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
-    <figure class="overflow-hidden rounded-preset-lg bg-surface">
-      <img src="{{ portrait.src }}" alt="{{ s.portrait_alt }}" width="{{ portrait.width }}" height="{{ portrait.height }}" class="aspect-[4/3] w-full object-cover lg:aspect-[4/5]" loading="eager" decoding="async" fetchpriority="high">
+    <figure class="panel relative isolate aspect-[4/3] overflow-hidden rounded-preset-lg lg:aspect-[4/5]" data-parallax>
+      <img src="{{ portrait.src }}" alt="{{ s.portrait_alt }}" width="{{ portrait.width }}" height="{{ portrait.height }}" class="absolute inset-x-0 top-[-6%] h-[112%] w-full object-cover" data-parallax-layer loading="eager" decoding="async" fetchpriority="high">
     </figure>
     <div class="align-hero">
-      <p class="text-xs font-medium tracking-[0.18em] text-accent-ink uppercase sm:text-sm" data-reveal>{{ s.eyebrow }}</p>
+      <p class="eyebrow text-accent-ink" data-reveal>{{ s.eyebrow }}</p>
       <h1 class="mt-4 font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
       <p class="mt-5 max-w-[var(--measure)] text-lede text-muted" data-reveal="after">{{ s.lede }}</p>
       <div class="btn-row mt-flow" data-reveal="after">

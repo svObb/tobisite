@@ -9,23 +9,24 @@ accent_ink).
 повторено на Python (engine/color.py), иначе проверять текст цвета muted было
 бы нечем. Числа процентов обязаны совпадать с css/source.css: разъедутся —
 разъедется и проверка. line не проверяется: это линейка, текста он не несёт.
+
+Контрастная секция страницы (data-tone="contrast") подменяет внутри себя всю
+эту семью тонов, поэтому её пары проверяются отдельно и тем же порогом:
+цвета считает engine/palette.contrast_tones, и на страницу уходят ровно они.
 """
 from __future__ import annotations
 
 import re
 
-from ..color import AA_TEXT, mix_oklab, ratio, srgb
-
-# Проценты ink в производных тонах — копия из css/source.css.
-SURFACE_MIX = 0.05
-MUTED_MIX = 0.72
+from ..color import AA_TEXT, MUTED_MIX, SURFACE_MIX, mix_oklab, ratio, srgb
+from ..palette import contrast_tones
 
 # Акцент, подмешанный в бумагу под кнопкой data-btn="soft". Тоже копия из
 # css/source.css: подложка кнопки несёт текст, значит её надо проверять.
 BUTTON_SOFT_MIX = 0.14
 
 __all__ = ["AA_TEXT", "BUTTON_SOFT_MIX", "MUTED_MIX", "SURFACE_MIX", "check",
-           "contrast_problems", "derived", "ratio"]
+           "contrast_problems", "contrast_tones", "derived", "ratio"]
 
 HEADING = re.compile(r"<h([1-6])\b")
 IMG = re.compile(r"<img\b([^>]*)>")
@@ -50,6 +51,10 @@ def contrast_problems(palette: dict) -> list[str]:
         ("muted/surface", tones["muted"], tones["surface"]),
         ("paper/ink", tones["paper"], tones["ink"]),
         ("ink/btn-soft", tones["ink"], tones["btn_soft"]),
+        ("tone ink/bg", tones["tone_ink"], tones["tone_bg"]),
+        ("tone muted/bg", tones["tone_muted"], tones["tone_bg"]),
+        ("tone muted/surface", tones["tone_muted"], tones["tone_surface"]),
+        ("tone accent/bg", tones["tone_accent"], tones["tone_bg"]),
     )
     return [f"контраст {name}: {ratio(a, b):.2f}:1 при норме {AA_TEXT}:1"
             for name, a, b in pairs if ratio(a, b) < AA_TEXT]
@@ -61,6 +66,8 @@ def derived(palette: dict) -> dict:
     tones["surface"] = mix_oklab(tones["ink"], tones["paper"], SURFACE_MIX)
     tones["muted"] = mix_oklab(tones["ink"], tones["paper"], MUTED_MIX)
     tones["btn_soft"] = mix_oklab(tones["accent"], tones["paper"], BUTTON_SOFT_MIX)
+    tones.update({f"tone_{name}": srgb(value)
+                  for name, value in contrast_tones(palette).items()})
     return tones
 
 

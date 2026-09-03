@@ -1,14 +1,27 @@
 {#- NAP побайтово совпадает с профилем — это проверяет engine/checks/nap.py.
-    Ни одно поле здесь не переписывается моделью. -#}
+    Ни одно поле здесь не переписывается моделью.
+
+    Когда на странице есть секция «когда и где нас найти», подвал сокращается
+    до названия и строки о черновике: адрес, телефон и часы уже стоят выше
+    целым блоком, и повторять их четвёртый раз — не забота о читателе, а шум.
+    Секции info на странице нет — подвал остаётся полным, иначе контакты
+    пропали бы вовсе. -#}
 {%- set s = section.slots -%}
+{%- set info_on_page = sections | selectattr('role', 'equalto', 'info') | list -%}
 <footer id="{{ section.id }}" class="border-t border-line bg-paper py-section">
+  {%- if info_on_page %}
+  <div class="flex w-full flex-wrap items-baseline justify-between gap-x-8 gap-y-2 px-gutter">
+    <p class="font-title text-lg break-words sm:text-xl">{{ s.business_name }}</p>
+    <p class="text-sm text-muted">{{ s.legal_line }}</p>
+  </div>
+  {%- else %}
   <div class="grid w-full gap-flow px-gutter sm:grid-cols-2 lg:grid-cols-3">
     <div>
       <p class="font-title text-lg break-words sm:text-xl">{{ s.business_name }}</p>
       <address class="mt-3 leading-relaxed text-muted not-italic">{{ s.address }}</address>
     </div>
     <div>
-      <h2 class="text-xs font-medium tracking-[0.14em] text-accent-ink uppercase">{{ s.contacts_title }}</h2>
+      <h2 class="eyebrow text-accent-ink">{{ s.contacts_title }}</h2>
       <ul class="mt-3 grid gap-2">
         <li><a href="{{ s.phone_href }}" class="break-words underline decoration-line underline-offset-4" data-hit="cta_click">{{ s.phone }}</a></li>
         {%- if s.email %}
@@ -18,7 +31,7 @@
     </div>
     {%- if s.hours %}
     <div>
-      <h2 class="text-xs font-medium tracking-[0.14em] text-accent-ink uppercase">{{ s.hours_title }}</h2>
+      <h2 class="eyebrow text-accent-ink">{{ s.hours_title }}</h2>
       <ul class="mt-3 grid gap-2 text-muted">
         {%- for row in s.hours %}
         <li>{{ row }}</li>
@@ -28,4 +41,5 @@
     {%- endif %}
   </div>
   <p class="mt-flow w-full px-gutter text-sm text-muted">{{ s.legal_line }}</p>
+  {%- endif %}
 </footer>

@@ -1,9 +1,13 @@
+# Первый экран со снимком слева. Кадр живой: /assets/parallax.js двигает его
+# внутри рамки от прокрутки и от указателя — большая картинка на странице
+# бывает либо фоном секции, либо живой, третьего варианта нет.
 id: hero_photo_left
 role: hero
 requires: {photo_count: ">=1"}
 prefers: {photo_count: "3..", niche: [lawyer, dental]}
 image_slots: 1
 image_names: [portrait]
+js: parallax
 slots:
   - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}
   - {name: headline, type: free, max_chars: 56, lang: from_lead}

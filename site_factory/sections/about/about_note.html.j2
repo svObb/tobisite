@@ -1,5 +1,6 @@
 {%- set s = section.slots -%}
-<section id="{{ section.id }}" class="bg-paper py-section">
+{%- set tone = section.get('tone') -%}
+<section id="{{ section.id }}" class="py-section"{% if tone %} data-tone="{{ tone }}"{% endif %}>
   <div class="grid w-full gap-flow px-gutter lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
     <div>
       <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
@@ -7,11 +8,11 @@
     </div>
     <dl class="grid gap-5 border-t border-line pt-5 lg:mt-0 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-flow">
       <div>
-        <dt class="text-xs font-medium tracking-[0.14em] text-muted uppercase">{{ s.company_label }}</dt>
+        <dt class="eyebrow text-muted">{{ s.company_label }}</dt>
         <dd class="mt-1 font-title text-lg break-words">{{ s.business_name }}</dd>
       </div>
       <div>
-        <dt class="text-xs font-medium tracking-[0.14em] text-muted uppercase">{{ s.address_label }}</dt>
+        <dt class="eyebrow text-muted">{{ s.address_label }}</dt>
         <dd class="mt-1 leading-relaxed break-words">{{ s.address }}</dd>
       </div>
     </dl>

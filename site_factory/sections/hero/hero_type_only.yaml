@@ -9,7 +9,9 @@ slots:
   - {name: lede, type: free, max_chars: 180, lang: from_lead}
   - {name: call_label, type: free, max_chars: 24, lang: from_lead}
   - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
-  - {name: secondary_label, type: free, max_chars: 24, lang: from_lead}
+  # Подпись второй кнопки — заголовок секции, к которой она ведёт: её пишет
+  # композитор (compose.link_sections), а не модель. См. hero_bg_photo.yaml.
+  - {name: secondary_label, type: fact, source: composer, max_chars: 42, optional: true}
   - {name: secondary_target, type: fact, source: composer, max_chars: 32}
 perf: {est_dom_nodes: 12, images: 0}
 a11y: {heading_level: 1}

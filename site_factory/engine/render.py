@@ -42,8 +42,9 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from . import niches, slots
 from .color import PIVOT_LUMINANCE, luminance, srgb
-from .compose import apply_free_texts, compose, enough
-from .palette import brand_palette
+from .compose import apply_free_texts, compose, enough, link_sections
+from .naming import split_product_name
+from .palette import brand_palette, contrast_tones
 from .profile import Profile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -87,7 +88,8 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
     chosen = preset_for(profile, tokens, root)
     palette, palette_source, palette_reason = brand_palette(_brand_colors(profile),
                                                             chosen["palette"])
-    preset = dict(resolve_preset(chosen, tokens), palette=palette)
+    preset = dict(resolve_preset(chosen, tokens), palette=palette,
+                  contrast=contrast_tones(palette))
     composition = compose(profile, recipe, library, seed, recent_variants)
 
     trace = {
@@ -107,6 +109,7 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
         "recent_variants": list(recent_variants),
         "roles": composition.roles,
         "sections": [s["variant"] for s in composition.sections],
+        "tone": _tone(composition.sections),
         "needs_enrichment": composition.needs_enrichment,
     }
     if not composition.ok:
@@ -120,6 +123,10 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
             # текста нет — секции нет; страницы из двух секций не бывает
             trace["failed"] = f"секции без текста: {', '.join(dropped)}"
             return Draft(None, trace)
+        # заголовки секций теперь от модели, а часть секций выбыла: якорь
+        # второй кнопки и контрастный тон пересчитываются по тому, что осталось
+        link_sections(composition.sections)
+        trace["tone"] = _tone(composition.sections)
 
     lang = str(profile.lang.value)
     html = environment(root).get_template("base/layout.html.j2").render(
@@ -129,6 +136,12 @@ def render(profile: Profile, recent_variants=(), root: pathlib.Path = ROOT,
         sections=composition.sections,
     )
     return Draft(html, trace)
+
+
+def _tone(sections) -> str | None:
+    """Роль секции, которая идёт в контрастном тоне. None — такой на странице нет."""
+    return next((section["role"] for section in sections if section.get("tone")),
+                None)
 
 
 def seed_for(domain_norm: str) -> int:
@@ -208,7 +221,10 @@ def resolve_preset(preset: dict, tokens: dict) -> dict:
     return dict(preset, **options, fonts=fonts,
                 space=tokens["density_scale"][preset["density"]],
                 scale=tokens["type_scale"][options["type_scale"]],
-                shadow=tokens["elevation_scale"][options["elevation"]])
+                shadow=tokens["elevation_scale"][options["elevation"]],
+                # тона контрастной секции считаются от палитры пресета; у лида
+                # с бренд-цветами render пересчитывает их по его палитре
+                contrast=contrast_tones(preset["palette"]))
 
 
 def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict:
@@ -295,6 +311,9 @@ def environment(root: pathlib.Path = ROOT) -> Environment:
         keep_trailing_newline=True,
     )
     env.globals.pop("lipsum", None)  # генератор lorem ipsum рядом с запретом на lorem
+    # Разрез названия товара — чистая функция, и шаблон зовёт именно её, а не
+    # свою цепочку фильтров: правило разреза одно на всю библиотеку.
+    env.globals["split_product_name"] = split_product_name
     return env
 
 

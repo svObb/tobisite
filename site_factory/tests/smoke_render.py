@@ -156,7 +156,12 @@ PROOF = {
 
 def section(role, template, slots, images=None):
     return {"id": role, "role": role, "template": template,
-            "images": images or {}, "slots": slots}
+            "images": images or {}, "slots": slots, "tone": None}
+
+
+def toned(part: dict) -> dict:
+    """Копия секции в контрастном тоне. На странице такая ровно одна."""
+    return dict(part, tone="contrast")
 
 
 HEADER_LOGO = section("header", "sections/header/header_logo.html.j2",
@@ -184,7 +189,8 @@ PAGES = {
                  "lede": "Супровід договорів, спорів і перевірок — від першої "
                          "консультації до рішення суду.",
                  "call_label": "Зателефонувати", "phone_href": PHONE_HREF,
-                 "secondary_label": "Послуги", "secondary_target": "services"},
+                 "secondary_label": "Напрями роботи",
+                 "secondary_target": "services"},
                 {"hero_bg": HERO_BG}),
         section("products", "sections/products/products_grid.html.j2",
                 {"section_title": "Послуги за прайсом", "products": GOODS_ROWS}),
@@ -192,7 +198,7 @@ PAGES = {
                 {"section_title": "Напрями роботи", "services": SERVICES}),
         section("gallery", "sections/gallery/gallery_strip.html.j2", {}, PHOTOS),
         PROOF_SECTION,
-        ABOUT_SECTION,
+        toned(ABOUT_SECTION),
         INFO,
         CTA,
         FOOTER_SECTION,
@@ -205,7 +211,8 @@ PAGES = {
                  "lede": "Супровід договорів, спорів і перевірок — від першої "
                          "консультації до рішення суду.",
                  "call_label": "Зателефонувати", "phone_href": PHONE_HREF,
-                 "secondary_label": "Послуги", "secondary_target": "services"}),
+                 "secondary_label": "Напрями роботи",
+                 "secondary_target": "services"}),
         section("products", "sections/products/products_list.html.j2",
                 {"section_title": "Послуги за прайсом",
                  "products": [{"name": row["name"], "price": row["price"]}
@@ -213,7 +220,7 @@ PAGES = {
                              [{"name": "Консультація", "price": None}]}),
         section("services", "sections/services/svc_list_icons.html.j2",
                 {"section_title": "Напрями роботи", "services": SERVICES}),
-        INFO,
+        toned(INFO),
         CTA,
         FOOTER_SECTION,
     ],
@@ -232,7 +239,7 @@ PAGES = {
         section("services", "sections/services/svc_cards_3.html.j2",
                 {"section_title": "Напрями роботи", "services": SERVICES}),
         PROOF_SECTION,
-        ABOUT_SECTION,
+        toned(ABOUT_SECTION),
         CTA,
         FOOTER_SECTION,
     ],

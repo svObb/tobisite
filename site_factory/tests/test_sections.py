@@ -8,15 +8,21 @@ import re
 import yaml
 
 from site_factory.engine import slots
-from site_factory.engine.compose import compose
+from site_factory.engine.compose import CONTRAST_ROLES, compose, link_sections
+from site_factory.engine.naming import split_product_name
+from site_factory.engine.palette import contrast_tones
 from site_factory.engine.profile import GRID_CAP, GRID_MIN, Profile
 from site_factory.engine.render import (ROOT, environment, load_library,
-                                        load_recipe, load_tokens,
+                                        load_recipe, load_tokens, palette_for,
                                         recipe_id_for, render, resolve_preset,
                                         seed_for)
 
 from . import smoke_render
-from .conftest import BRAND_SHOP, GALLERY, PRODUCTS
+from .conftest import BRAND_SHOP, GALLERY, LAWYER_RICH, PRODUCTS
+
+# Название из настоящего прайса запчастей: имя товара, артикулы в скобках и
+# пометка состояния — три разных сообщения в одной строке.
+SHELF_NAME = "Динаміки для ноутбука Dell Latitude E5470 (PK23000RB00 0CGDGM) бу"
 
 IMG_SRC = re.compile(r'<img[^>]+\bsrc="([^"]+)"')
 
@@ -271,6 +277,149 @@ def test_a_lead_without_products_has_no_products_link(lawyer_rich):
     html, trace = render(lawyer_rich)
     assert not any(v.startswith("products_") for v in trace["sections"])
     assert 'href="#products"' not in html[:html.index("</header>")]
+
+
+def test_exactly_one_section_of_the_page_takes_the_contrast_tone(buildable_profile):
+    """Тональный ритм: одна контрастная секция, и не первый экран и не форма."""
+    html, trace = render(buildable_profile)
+    assert html.count('data-tone="contrast"') == (1 if trace["tone"] else 0)
+    assert trace["tone"] in CONTRAST_ROLES
+    assert f'id="{trace["tone"]}"' in html
+    marked = section_html(html, trace["tone"])
+    assert 'data-tone="contrast"' in marked[:marked.index(">")]
+
+
+def test_the_contrast_tones_come_from_the_palette_of_the_page(brand_shop):
+    """Тона считаны с палитры лида, а не вшиты в разметку чёрным по белому."""
+    html, _ = render(brand_shop)
+    tones = contrast_tones(palette_for(brand_shop))
+    for name, value in tones.items():
+        assert f"--contrast-{name}:{value}" in html
+
+
+def test_the_bands_of_the_page_come_from_position_not_from_the_markup(
+        buildable_profile):
+    """Полосу секции задаёт её место на странице: класса bg-* в разметке нет.
+
+    Исключение одно и оно видно глазом: секция, у которой свой фон есть по
+    смыслу, — кадр под первым экраном и полоса галереи.
+    """
+    html, trace = render(buildable_profile)
+    own_ground = {"hero_bg_photo", "gallery_strip"}
+    for variant in trace["sections"]:
+        role = load_library()[variant]["role"]
+        if role in ("header", "footer") or variant in own_ground:
+            continue
+        opening = section_html(html, role)
+        opening = opening[:opening.index(">")]
+        assert "bg-" not in opening, f"{variant}: {opening}"
+
+
+def test_the_footer_stops_repeating_what_the_info_section_already_says(brand_shop):
+    """Адрес и телефон на странице по одному блоку, а не по четыре раза."""
+    html, trace = render(brand_shop)
+    assert "info_hours_card" in trace["sections"]
+    footer = section_html(html, "footer")
+    assert brand_shop.name.value in footer
+    assert "Чернетка" in footer
+    assert brand_shop.address.value not in footer
+    assert brand_shop.phone.value not in footer
+    assert html.count(brand_shop.address.value) == 2   # первый экран и info
+
+
+def test_without_the_info_section_the_footer_keeps_the_contacts(lawyer_rich):
+    """Секции info нет — подвал остаётся полным, иначе контакты пропали бы."""
+    profile = Profile.from_dict(dict(LAWYER_RICH, hours=[]))
+    html, trace = render(profile)
+    assert "info_hours_card" not in trace["sections"]
+    footer = section_html(html, "footer")
+    assert profile.address.value in footer
+    assert profile.phone.value in footer
+
+
+def test_the_menu_of_a_narrow_screen_collapses_without_a_line_of_script(brand_shop):
+    """CSP превью разрешает только свои файлы: раскрытие держит <details>."""
+    html, _ = render(brand_shop)
+    header = html[html.index("<header"):html.index("</header>")]
+    assert '<details class="nav-collapse' in header
+    assert "<summary" in header and 'aria-label="' in header
+    assert "<svg" in header and "onclick" not in header
+    # пункты одни и те же, просто нарисованы дважды
+    anchors = re.findall(r'<a href="#([a-z]+)"', header)
+    assert anchors[:len(anchors) // 2] == anchors[len(anchors) // 2:]
+
+
+def test_the_second_button_of_the_hero_says_where_it_leads(generic_light):
+    """Подпись кнопки — заголовок секции, к которой она ведёт, а не «Написати»."""
+    html, _ = render(generic_light)
+    hero = section_html(html, "hero")
+    target, label = re.search(r'<a href="#([a-z]+)" class="btn btn-quiet">([^<]+)<',
+                              hero).groups()
+    assert target == "products"
+    assert label == _text_of(section_html(html, target), "text-h2")
+
+
+def test_the_second_button_follows_the_section_that_dropped_out(generic_light):
+    """Секция выбыла на текстах модели — кнопка ведёт к следующей, не в никуда."""
+    variant = variant_of(generic_light, "products")
+    texts = free_texts_for(generic_light, {f"{variant}.section_title": ""})
+
+    html, trace = render(generic_light, free_texts=texts)
+
+    assert variant not in trace["sections"]
+    assert 'href="#products"' not in html
+    hero = section_html(html, "hero")
+    target, label = re.search(r'<a href="#([a-z]+)" class="btn btn-quiet">([^<]+)<',
+                              hero).groups()
+    assert target == "about"
+    assert label == _text_of(section_html(html, target), "text-h2")
+
+
+def test_without_a_named_section_the_hero_keeps_no_second_button():
+    """Называть кнопку нечем — её нет: подписи «Написати» в никуда не будет."""
+    library = load_library()
+    hero = {"id": "hero", "role": "hero", "variant": "hero_type_only",
+            "slots": {}, "contract": library["hero_type_only"]}
+    footer = {"id": "footer", "role": "footer", "variant": "footer_nap",
+              "slots": {}, "contract": library["footer_nap"]}
+
+    link_sections([hero, footer])
+
+    assert hero["slots"]["secondary_label"] is None
+    assert hero["slots"]["secondary_target"] == "footer"
+
+
+def test_a_shelf_name_is_split_but_never_shortened():
+    """Артикулы уезжают второй строкой, но остаются на странице целиком."""
+    head, tail = split_product_name(SHELF_NAME)
+    assert head == "Динаміки для ноутбука Dell Latitude E5470"
+    assert tail == "(PK23000RB00 0CGDGM) бу"
+    assert f"{head} {tail}" == SHELF_NAME
+
+
+def test_a_plain_name_stays_on_one_line():
+    for name in ("Гальмівні колодки", "Sourdough loaf", "Амортизатор передній"):
+        assert split_product_name(name) == (name, "")
+
+
+def test_a_used_marker_leaves_the_name_alone():
+    assert split_product_name("Клавіатура Acer Aspire бу") == \
+        ("Клавіатура Acer Aspire", "бу")
+    # голова короче слова — резать нечего
+    assert split_product_name("бу") == ("бу", "")
+
+
+def test_both_halves_of_the_shelf_name_reach_the_card():
+    """Разрез — вёрстка: на странице обе части, в профиле название нетронуто."""
+    profile = Profile.from_dict(dict(
+        BRAND_SHOP, products=[dict(PRODUCTS[0], name=SHELF_NAME)] + PRODUCTS[1:]))
+    html, trace = render(profile)
+    products = section_html(html, "products")
+
+    assert "products_grid" in trace["sections"]
+    assert "Динаміки для ноутбука Dell Latitude E5470</h3>" in products
+    assert "(PK23000RB00 0CGDGM) бу</p>" in products
+    assert profile.products.value[0]["name"] == SHELF_NAME
 
 
 def test_smoke_pages_render_on_every_preset():

@@ -1,0 +1,35 @@
+{#- Меню шапки. Пункт — заголовок секции этой же страницы и её якорь: ролей
+    без заголовка (первый экран, галерея, футер) в меню нет, придуманных
+    пунктов — тоже.
+
+    Список рисуется дважды. Строкой — от 768px, как и был. Ниже строки на него
+    не хватает ширины, и меню уезжало за кромку экрана; вместо строки там
+    стоит кнопка с выпадающим списком тех же пунктов. Держит его <details>:
+    скрипта у шапки нет и быть не может — CSP превью разрешает только свои
+    файлы, а инлайнового обработчика на странице нет ни одного. -#}
+{%- set nav_items = [] -%}
+{%- for target in sections if target.role in ('products', 'services', 'about', 'info', 'cta') -%}
+  {%- set title = target.slots.get('section_title') -%}
+  {%- if title %}{% set _ = nav_items.append((target.id, title)) %}{% endif -%}
+{%- endfor -%}
+{%- if nav_items %}
+    <nav aria-label="{{ site.ui.nav_label }}" class="order-4 hidden w-full overflow-x-auto md:block lg:order-2 lg:w-auto">
+      <ul class="flex items-center gap-x-6 whitespace-nowrap text-sm">
+        {%- for anchor, label in nav_items %}
+        <li><a href="#{{ anchor }}" class="text-muted underline-offset-4 hover:text-ink hover:underline">{{ label }}</a></li>
+        {%- endfor %}
+      </ul>
+    </nav>
+    <details class="nav-collapse order-2 md:hidden">
+      <summary aria-label="{{ site.ui.nav_label }}">
+        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round" />
+        </svg>
+      </summary>
+      <ul class="grid p-2">
+        {%- for anchor, label in nav_items %}
+        <li><a href="#{{ anchor }}" class="block rounded-preset px-3 py-2 hover:bg-surface">{{ label }}</a></li>
+        {%- endfor %}
+      </ul>
+    </details>
+{%- endif %}

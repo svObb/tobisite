@@ -17,7 +17,11 @@ slots:
   - {name: lede, type: free, max_chars: 160, lang: from_lead}
   - {name: call_label, type: free, max_chars: 24, lang: from_lead}
   - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
-  - {name: secondary_label, type: free, max_chars: 24, lang: from_lead}
+  # Подпись второй кнопки — заголовок секции, к которой она ведёт: обещание
+  # кнопки и результат клика обязаны совпадать, поэтому её пишет не модель, а
+  # композитор (compose.link_sections). Секции с заголовком на странице нет —
+  # кнопки нет тоже.
+  - {name: secondary_label, type: fact, source: composer, max_chars: 42, optional: true}
   - {name: secondary_target, type: fact, source: composer, max_chars: 32}
 perf: {est_dom_nodes: 16, images: 1}
 a11y: {heading_level: 1}

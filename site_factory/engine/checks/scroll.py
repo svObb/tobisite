@@ -25,7 +25,7 @@ VIEWPORT_PX = 360
 
 MEDIA_TAGS = ("img", "video", "iframe")
 CONTAINER_TAGS = ("div", "section", "figure", "picture", "ul", "ol", "form",
-                  "main", "footer", "dl")
+                  "main", "footer", "dl", "nav", "details")
 
 TAG = re.compile(r"<(?P<name>[a-z]+)(?P<attrs>[^>]*)>")
 STYLE_WIDTH = re.compile(r"(?:min-)?width\s*:\s*(\d+(?:\.\d+)?)px", re.I)

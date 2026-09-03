@@ -40,6 +40,17 @@ from .score import choose, score
 
 FALLBACK_HINT = "_fallback"
 
+# Куда ведёт вторая кнопка первого экрана: первый содержательный раздел
+# страницы, а не форма. Подпись кнопки — заголовок той же секции (см.
+# link_sections), поэтому обещание кнопки и результат клика совпадают всегда.
+SECONDARY_ROLES = ("products", "services", "about", "info", "cta")
+
+# Роль, которая идёт в контрастном тоне. Ровно одна на страницу: две таких
+# секции — уже не ритм, а вторая тема внутри одной страницы. Первый экран и
+# форму не берём: у первого свой фон, у формы — кнопка, заливка которой
+# считается от бумаги пресета.
+CONTRAST_ROLES = ("about", "proof", "info")
+
 
 @dataclass
 class Composition:
@@ -97,7 +108,7 @@ def compose(profile: Profile, recipe: dict, library: dict, seed: int,
     if blocking or short:
         return Composition([], trace, _enrichment(recipe, blocking or unfilled))
 
-    _link_sections(sections)
+    link_sections(sections)
     return Composition(sections, trace, [])
 
 
@@ -169,17 +180,31 @@ def _fill(role: str, profile: Profile, recipe: dict, library: dict,
     return section, record
 
 
-def _link_sections(sections: list[dict]) -> None:
-    """Composer-слоты: куда ведёт вторая кнопка hero.
+def link_sections(sections: list[dict]) -> None:
+    """Связи между секциями: якорь и подпись второй кнопки, контрастный тон.
 
-    Всегда на форму. Роль cta обязательна в каждом рецепте, поэтому якорь не
-    зависит от того, какие секции выжили, — а значит и подпись кнопки из
-    заготовок рецепта не разойдётся с тем, куда кнопка ведёт.
+    Считается по составу страницы, а не по рецепту, поэтому вызывается ещё раз
+    после того, как тексты модели вывели часть секций из состава: и якорь, и
+    тон обязаны указывать на секцию, которая на странице осталась.
+
+    Подпись второй кнопки — заголовок секции, к которой она ведёт. Своей
+    заготовки у неё нет и модель её не пишет: кнопка, обещающая одно и
+    прокручивающая к другому, — это баг, а не текст.
     """
+    if not sections:
+        return
+    titles = {section["role"]: section["slots"].get("section_title")
+              for section in sections}
     anchors = {section["role"]: section["id"] for section in sections}
-    anchor = anchors.get("cta", sections[-1]["id"])
+    role = next((name for name in SECONDARY_ROLES
+                 if anchors.get(name) and titles.get(name)), None)
+    values = {"secondary_target": anchors.get(role) or sections[-1]["id"],
+              "secondary_label": titles.get(role)}
+
+    tone = next((name for name in CONTRAST_ROLES if name in anchors), None)
     for section in sections:
-        slots.apply_composer(section, {"secondary_target": anchor})
+        section["tone"] = "contrast" if section["role"] == tone else None
+        slots.apply_composer(section, values)
 
 
 def _rejection(variant: str, stage: str, reasons) -> dict:
