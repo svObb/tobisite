@@ -166,13 +166,32 @@ class MergeResult:
     kept: list[str] = field(default_factory=list)
 
 
-# Один прогон на лида: обогащение сносит и перекладывает его картинки, и два
+# Одно дело на лида: обогащение сносит и перекладывает его картинки, и два
 # параллельных нажатия оставили бы в бакете половину старых, половину новых.
+# Занятость общая на весь стейджинг лида, а не только на кнопку: тем же
+# файлам хозяин и ambient_stage.
 _running: set[int] = set()
 
 
 def enrich_busy(lead_id: int) -> bool:
     return lead_id in _running
+
+
+def hold_lead(lead_id: int) -> bool:
+    """Занять лида под работу с его стейджингом. False — он уже занят.
+
+    Проверка и захват одним куском без единого await между: в однопоточном
+    asyncio такой кусок не прерывается, и второе нажатие кнопки упирается в
+    занятость, а не проскакивает, пока первое ждёт ответа базы.
+    """
+    if lead_id in _running:
+        return False
+    _running.add(lead_id)
+    return True
+
+
+def release_lead(lead_id: int) -> None:
+    _running.discard(lead_id)
 
 
 def staging_prefix(lead_id: int) -> str:
@@ -183,17 +202,17 @@ def image_key(lead_id: int, filename: str) -> str:
     return f"{staging_prefix(lead_id)}{IMG_DIR}/{filename}"
 
 
+def ambient_names(enrichment: dict) -> list[str]:
+    """Имена картинок, которые в стейджинг положили мы, а не скрейп."""
+    return [str(name) for name in (enrichment or {}).get(AMBIENT_KEY) or []
+            if str(name)]
+
+
 async def enrich_from_site(lead_id: int, *,
                            actor_tg_id: int = config.ADMIN_TG_ID) -> EnrichResult:
-    """Обойти сайт лида и дописать его карточку. Проверка лида не требуется.
-
-    Занятость проверяется и занимается одним куском без единого await между:
-    в однопоточном asyncio такой кусок не прерывается, и второе нажатие кнопки
-    упирается в занятость, а не проскакивает, пока первое ждёт ответа базы.
-    """
-    if lead_id in _running:
+    """Обойти сайт лида и дописать его карточку. Проверка лида не требуется."""
+    if not hold_lead(lead_id):
         return EnrichResult(reason="этот лид уже обогащается", lead_id=lead_id)
-    _running.add(lead_id)
     try:
         async with Session() as s:
             lead = await s.get(Lead, lead_id)
@@ -209,7 +228,7 @@ async def enrich_from_site(lead_id: int, *,
             return EnrichResult(reason="у лида нет сайта", lead_id=lead_id)
         return await _run(lead_id, url, country, enrichment, types, actor_tg_id)
     finally:
-        _running.discard(lead_id)
+        release_lead(lead_id)
 
 
 def merge_enrichment(current: dict, found: dict, *,
@@ -369,7 +388,7 @@ async def _run(lead_id, url, country, enrichment, contact_types,
             return EnrichResult(reason=scrape.reason or "сайт не открылся",
                                 lead_id=lead_id, url=url)
         scrape, ai_note = await _ask_model(scrape, lead_id)
-        ambient = _ambient_names(enrichment)
+        ambient = ambient_names(enrichment)
         staged, images_reason, looked, logo_note = await _stage(
             session, lead_id, scrape, keep=ambient)
 
@@ -422,12 +441,6 @@ async def _run(lead_id, url, country, enrichment, contact_types,
         logo_note=logo_note, rating=rating_note(merged.enrichment.get("rating")),
         ambient=survived,
     )
-
-
-def _ambient_names(enrichment: dict) -> list[str]:
-    """Имена картинок, которые в стейджинг положили мы, а не скрейп."""
-    return [str(name) for name in (enrichment or {}).get(AMBIENT_KEY) or []
-            if str(name)]
 
 
 def _with_ambient(found: dict, previous: dict, survived: list[str]) -> dict:
