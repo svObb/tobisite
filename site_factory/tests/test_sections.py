@@ -18,7 +18,7 @@ from site_factory.engine.render import (ROOT, environment, load_library,
                                         seed_for)
 
 from . import smoke_render
-from .conftest import BRAND_SHOP, GALLERY, LAWYER_RICH, PRODUCTS
+from .conftest import BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH, PRODUCTS
 
 # Название из настоящего прайса запчастей: имя товара, артикулы в скобках и
 # пометка состояния — три разных сообщения в одной строке.
@@ -289,6 +289,27 @@ def test_exactly_one_section_of_the_page_takes_the_contrast_tone(buildable_profi
     assert 'data-tone="contrast"' in marked[:marked.index(">")]
 
 
+def test_a_page_without_about_proof_or_info_wears_no_contrast_tone():
+    """Контрастной секции может не быть вовсе — тон это свойство состава.
+
+    Часов и показателей профиль не дал, поэтому info и proof отсеяли гейты;
+    about держится на адресе, без которого не собрать обязательный футер, и
+    увести его со страницы может только пустой текст модели.
+    """
+    profile = Profile.from_dict(dict(LAWYER_LIGHT, hours=[], review_count=None,
+                                     google_rating=None))
+    variant = variant_of(profile, "about")
+    texts = free_texts_for(profile, {f"{variant}.about_text": ""})
+
+    html, trace = render(profile, free_texts=texts)
+
+    library = load_library()
+    roles = {library[chosen]["role"] for chosen in trace["sections"]}
+    assert not roles & set(CONTRAST_ROLES)
+    assert trace["tone"] is None
+    assert 'data-tone="contrast"' not in html
+
+
 def test_the_contrast_tones_come_from_the_palette_of_the_page(brand_shop):
     """Тона считаны с палитры лида, а не вшиты в разметку чёрным по белому."""
     html, _ = render(brand_shop)
@@ -377,16 +398,27 @@ def test_the_second_button_follows_the_section_that_dropped_out(generic_light):
 
 def test_without_a_named_section_the_hero_keeps_no_second_button():
     """Называть кнопку нечем — её нет: подписи «Написати» в никуда не будет."""
-    library = load_library()
-    hero = {"id": "hero", "role": "hero", "variant": "hero_type_only",
-            "slots": {}, "contract": library["hero_type_only"]}
-    footer = {"id": "footer", "role": "footer", "variant": "footer_nap",
-              "slots": {}, "contract": library["footer_nap"]}
+    hero = bare_section("hero", "hero_type_only")
+    page = [hero, bare_section("footer", "footer_nap")]
 
-    link_sections([hero, footer])
+    link_sections(page)
 
     assert hero["slots"]["secondary_label"] is None
     assert hero["slots"]["secondary_target"] == "footer"
+
+
+def test_the_second_button_reads_the_page_order_not_the_list_of_roles():
+    """«Первый раздел» — первый сверху: about выше прайса, кнопка ведёт к нему."""
+    hero = bare_section("hero", "hero_type_only")
+    page = [hero,
+            bare_section("about", "about_note", "Про майстерню"),
+            bare_section("products", "products_list", "Прайс"),
+            bare_section("footer", "footer_nap")]
+
+    link_sections(page)
+
+    assert hero["slots"]["secondary_target"] == "about"
+    assert hero["slots"]["secondary_label"] == "Про майстерню"
 
 
 def test_a_shelf_name_is_split_but_never_shortened():
@@ -407,6 +439,30 @@ def test_a_used_marker_leaves_the_name_alone():
         ("Клавіатура Acer Aspire", "бу")
     # голова короче слова — резать нечего
     assert split_product_name("бу") == ("бу", "")
+
+
+def test_a_short_head_hands_the_cut_over_to_the_marker():
+    """Скобка с короткой головой уступает пометке, а не отменяет разрез.
+
+    «TB (Samsung)» — одно название, головы из двух букв не бывает; но пометка
+    состояния в конце строки режет ту же строку честно.
+    """
+    assert split_product_name("TB (Samsung) used") == ("TB (Samsung)", "used")
+    assert split_product_name("Fan (120mm) бу") == ("Fan (120mm)", "бу")
+    # пометки нет — резать нечем, название идёт одной строкой
+    assert split_product_name("TB (Samsung)") == ("TB (Samsung)", "")
+
+
+def test_a_line_that_opens_with_a_bracket_has_no_head_at_all():
+    """«(2 шт) бу» — количество и состояние: товара в строке нет, головы тоже."""
+    assert split_product_name("(2 шт) бу") == ("(2 шт) бу", "")
+
+
+def test_both_halves_carry_the_name_even_without_a_space_to_rejoin_them():
+    """Пробела на месте разреза не было — склейка идёт без него, но целиком."""
+    head, tail = split_product_name("Dell(PK123)")
+    assert (head, tail) == ("Dell", "(PK123)")
+    assert head + tail == "Dell(PK123)"
 
 
 def test_both_halves_of_the_shelf_name_reach_the_card():
@@ -456,6 +512,13 @@ def _shop_with_product_photos(names, pool=5):
                  for item in PRODUCTS[len(names):]]
     return Profile.from_dict(dict(BRAND_SHOP, products=products,
                                   images=dict(BRAND_SHOP["images"], **photos)))
+
+
+def bare_section(role, variant, title=None):
+    """Секция без данных: link_sections смотрит только на роль и заголовок."""
+    return {"id": role, "role": role, "variant": variant,
+            "slots": {"section_title": title} if title else {},
+            "contract": load_library()[variant]}
 
 
 def variant_of(profile, role):

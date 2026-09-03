@@ -41,9 +41,10 @@ from .score import choose, score
 FALLBACK_HINT = "_fallback"
 
 # Куда ведёт вторая кнопка первого экрана: первый содержательный раздел
-# страницы, а не форма. Подпись кнопки — заголовок той же секции (см.
+# страницы, а не форма. Какой из них первый, решает порядок секций на странице,
+# а не порядок в этом множестве. Подпись кнопки — заголовок той же секции (см.
 # link_sections), поэтому обещание кнопки и результат клика совпадают всегда.
-SECONDARY_ROLES = ("products", "services", "about", "info", "cta")
+SECONDARY_ROLES = frozenset({"products", "services", "about", "info", "cta"})
 
 # Роль, которая идёт в контрастном тоне. Ровно одна на страницу: две таких
 # секции — уже не ритм, а вторая тема внутри одной страницы. Первый экран и
@@ -185,7 +186,9 @@ def link_sections(sections: list[dict]) -> None:
 
     Считается по составу страницы, а не по рецепту, поэтому вызывается ещё раз
     после того, как тексты модели вывели часть секций из состава: и якорь, и
-    тон обязаны указывать на секцию, которая на странице осталась.
+    тон обязаны указывать на секцию, которая на странице осталась. Якорь ищется
+    в порядке самих секций — «первый раздел» это первый сверху, а не первый в
+    списке ролей.
 
     Подпись второй кнопки — заголовок секции, к которой она ведёт. Своей
     заготовки у неё нет и модель её не пишет: кнопка, обещающая одно и
@@ -193,15 +196,16 @@ def link_sections(sections: list[dict]) -> None:
     """
     if not sections:
         return
-    titles = {section["role"]: section["slots"].get("section_title")
-              for section in sections}
-    anchors = {section["role"]: section["id"] for section in sections}
-    role = next((name for name in SECONDARY_ROLES
-                 if anchors.get(name) and titles.get(name)), None)
-    values = {"secondary_target": anchors.get(role) or sections[-1]["id"],
-              "secondary_label": titles.get(role)}
+    target = next((section for section in sections
+                   if section["role"] in SECONDARY_ROLES
+                   and section["slots"].get("section_title")), None)
+    values = {
+        "secondary_target": target["id"] if target else sections[-1]["id"],
+        "secondary_label": target["slots"]["section_title"] if target else None,
+    }
 
-    tone = next((name for name in CONTRAST_ROLES if name in anchors), None)
+    roles = {section["role"] for section in sections}
+    tone = next((name for name in CONTRAST_ROLES if name in roles), None)
     for section in sections:
         section["tone"] = "contrast" if section["role"] == tone else None
         slots.apply_composer(section, values)

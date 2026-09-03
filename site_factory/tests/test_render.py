@@ -29,6 +29,14 @@ FROZEN_PRESETS = ("corporate-trust", "editorial-warm", "clinical-light",
                   "deep-premium", "bold-trade", "warm-table",
                   "salon-monochrome", "friendly-pop")
 
+# Ширины экрана, на которых меряется шкала кеглей: от узкого телефона до
+# широкого ноутбука.
+VIEWPORTS = range(320, 1681, 80)
+
+# Корневой кегль страница не переопределяет (css/source.css), значит rem — это
+# дефолтные 16 px браузера, и vw с rem сравнимы.
+REM_PX = 16
+
 
 def preset_ids():
     return tuple(preset["id"] for preset in load_tokens()["presets"])
@@ -78,14 +86,17 @@ def test_library_is_version_five_with_sixteen_presets():
 def test_the_type_scale_keeps_a_step_between_the_headings():
     """Шаг шкалы не меньше 1.25×: h1 и h2 одного кегля — это документ, а не сайт.
 
-    Проверяются оба конца clamp'а: на телефоне шкала сжимается сильнее всего,
-    и сходятся кегли именно там.
+    Меряется на всей ширине экрана, а не по концам clamp'а: из своих минимумов
+    h1 и h2 выходят на разных ширинах и в максимумы упираются на разных, так
+    что сойтись они могут посреди диапазона, где оба конца ещё в порядке.
     """
     for name, scale in load_tokens()["type_scale"].items():
-        h1, h2 = _clamp(scale["h1"]), _clamp(scale["h2"])
-        assert h1[0] / h2[0] >= 1.25, f"{name}: нижний конец шкалы"
-        assert h1[2] / h2[2] >= 1.25, f"{name}: верхний конец шкалы"
-        assert h2[0] > _clamp(scale["lede"])[0], f"{name}: h2 не крупнее лида"
+        for width in VIEWPORTS:
+            h1 = _font_size(scale["h1"], width)
+            h2 = _font_size(scale["h2"], width)
+            assert h1 / h2 >= 1.25, f"{name}: шаг шкалы на {width}px"
+            assert h2 > _font_size(scale["lede"], width), \
+                f"{name}: h2 не крупнее лида на {width}px"
 
 
 def test_every_preset_is_reachable():
@@ -325,6 +336,12 @@ def _clamp(value: str) -> tuple[float, float, float]:
     inside = value[value.index("(") + 1:value.rindex(")")]
     return tuple(float(re.sub(r"[a-z]+$", "", part.strip()))
                  for part in inside.split(","))
+
+
+def _font_size(value: str, viewport: int) -> float:
+    """Кегль clamp'а в пикселях на экране такой ширины."""
+    low, vw, high = _clamp(value)
+    return min(max(low * REM_PX, vw * viewport / 100), high * REM_PX)
 
 
 def _key(niche: str) -> str:
