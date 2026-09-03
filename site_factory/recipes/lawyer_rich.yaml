@@ -121,11 +121,12 @@ free_defaults:
       section_title: "Що варто знати до дзвінка"
       about_text: "Тут зібрано те, з чим до нас звертаються найчастіше: напрями роботи, години прийому та адреса офісу. Якщо ваше питання ширше — зателефонуйте або опишіть ситуацію у формі, і ми скажемо, з чого почати."
     proof_stats_bar:
-      section_title: "Показники профілю"
+      # Подписи не называют источник: оценка приходит и из карточки Google, и из
+      # разметки сайта лида. Откуда цифры — говорит факт rating_source_note.
+      section_title: "Оцінка і відгуки"
       stat_label:
-        rating: "Оцінка в Google"
-        reviews: "Відгуків у Google"
-      source_note: "Дані з профілю Google Business."
+        rating: "Оцінка"
+        reviews: "Відгуків"
     cta_form_short:
       section_title: "Залишити звернення"
       lede: "Опишіть питання — зателефонуємо або напишемо у відповідь."
@@ -180,11 +181,10 @@ free_defaults:
       section_title: "What to know before you call"
       about_text: "This page gathers what people come to the office with most often: the practice areas, the office hours and the address. If your matter is wider than that, call or describe it in the form and we will say where to start."
     proof_stats_bar:
-      section_title: "Google profile"
+      section_title: "Rating and reviews"
       stat_label:
-        rating: "Google rating"
-        reviews: "Google reviews"
-      source_note: "Figures from the Google Business profile."
+        rating: "Rating"
+        reviews: "Reviews"
     cta_form_short:
       section_title: "Send an enquiry"
       lede: "Describe the matter — we will call or write back."

@@ -221,9 +221,28 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
         "description": page.get("description"),
         "assets_base": ASSETS_BASE,
         "scripts": scripts_for(sections),
+        "preload_images": preload_for(sections),
         "ui": {"skip_to_content": page.get("skip_to_content", ""),
                "nav_label": page.get("nav_label", "")},
     }
+
+
+def preload_for(sections) -> list[str]:
+    """Картинки, за которыми браузер обязан пойти до разбора CSS.
+
+    Фоновое фото первого экрана — LCP-элемент страницы, но <img> внутри секции
+    браузер находит только после stylesheet, и запрос уходит на треть времени
+    LCP позже, чем мог бы. Список собирается из тех секций, что реально попали
+    на страницу: секция без ключа preload_images не кладёт в него ничего.
+    """
+    sources: list[str] = []
+    for section in sections:
+        names = (section.get("contract") or {}).get("preload_images") or []
+        for name in names:
+            image = (section.get("images") or {}).get(name)
+            if image and image["src"] not in sources:
+                sources.append(image["src"])
+    return sources
 
 
 def scripts_for(sections) -> list[str]:
@@ -253,11 +272,15 @@ def facts_context(profile: Profile, recipe: dict) -> dict:
     facts = {"business_type": recipe.get("schema_type", "LocalBusiness")}
     for key, feature in (("name", profile.name),
                          ("telephone", profile.phone),
-                         ("email", profile.email),
-                         ("rating", profile.google_rating),
-                         ("review_count", profile.review_count)):
+                         ("email", profile.email)):
         if feature.known and feature.value is not None:
             facts[key] = feature.value
+    # Оценка берётся там же, где её берёт proof-полоса: иначе на одной
+    # странице стояли бы две разные оценки одного бизнеса.
+    stats = {row["key"]: row["value"] for row in profile.proof_stats()}
+    for key, source in (("rating", "rating"), ("review_count", "reviews")):
+        if source in stats:
+            facts[key] = stats[source]
     if profile.address_parts.known and profile.address_parts.value:
         facts["address"] = dict(profile.address_parts.value)
     return facts

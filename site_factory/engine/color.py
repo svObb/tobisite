@@ -75,9 +75,29 @@ def mix_oklab(first, second, weight: float):
 
 
 def chroma(color) -> float:
-    """Насыщенность в oklab. У серого, чёрного и белого — ноль."""
+    """Насыщенность в oklab (она же C в oklch). У серого, чёрного и белого — ноль."""
     _, green_red, blue_yellow = to_oklab(color)
     return (green_red ** 2 + blue_yellow ** 2) ** 0.5
+
+
+def lightness(color) -> float:
+    """Светлота L в oklab (она же L в oklch): 0 — чёрный, 1 — белый."""
+    return to_oklab(color)[0]
+
+
+def with_chroma(color, value: float):
+    """Тот же цвет с другой насыщенностью: L и тон oklch остаются на месте.
+
+    Срез хромы в palette.py — шаг вдоль радиуса oklch: направление (тон) и
+    светлота не меняются, короче становится только вектор (a, b). У серого
+    направления нет, и менять ему нечего.
+    """
+    lightness_, green_red, blue_yellow = to_oklab(color)
+    current = (green_red ** 2 + blue_yellow ** 2) ** 0.5
+    if not current:
+        return from_oklab((lightness_, green_red, blue_yellow))
+    scale = value / current
+    return from_oklab((lightness_, green_red * scale, blue_yellow * scale))
 
 
 def _to_linear(channel: float) -> float:

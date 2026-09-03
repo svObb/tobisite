@@ -110,11 +110,12 @@ free_defaults:
       section_title: "Що варто знати до дзвінка"
       about_text: "Тут зібрано те, про що питають найчастіше: чим ми займаємось, коли працюємо і як нас знайти. Якщо потрібної відповіді немає — зателефонуйте або залиште звернення, відповімо в робочі години."
     proof_stats_bar:
-      section_title: "Показники профілю"
+      # Подписи не называют источник: оценка приходит и из карточки Google, и из
+      # разметки сайта лида. Откуда цифры — говорит факт rating_source_note.
+      section_title: "Оцінка і відгуки"
       stat_label:
-        rating: "Оцінка в Google"
-        reviews: "Відгуків у Google"
-      source_note: "Дані з профілю Google Business."
+        rating: "Оцінка"
+        reviews: "Відгуків"
     cta_form_short:
       section_title: "Залишити звернення"
       lede: "Напишіть кілька слів про завдання — звʼяжемося у відповідь."
@@ -169,11 +170,10 @@ free_defaults:
       section_title: "What to know before you call"
       about_text: "This page gathers what people ask most often: what we do, when we work and how to find us. If the answer you need is not here, call us or leave an enquiry and we will reply during working hours."
     proof_stats_bar:
-      section_title: "Google profile"
+      section_title: "Rating and reviews"
       stat_label:
-        rating: "Google rating"
-        reviews: "Google reviews"
-      source_note: "Figures from the Google Business profile."
+        rating: "Rating"
+        reviews: "Reviews"
     cta_form_short:
       section_title: "Send an enquiry"
       lede: "Write a few lines about the task — we will get back to you."

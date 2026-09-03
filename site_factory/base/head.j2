@@ -4,7 +4,10 @@
     - шрифты только самохостные: @font-face живёт в bundle.css (его собирает
       tools/build_css.py из build/fonts/fonts.css), ссылок на fonts.googleapis.com
       здесь нет и быть не может — Landgericht München I, 3 O 17493/20;
-    - preload только двух начертаний 400, которыми набран первый экран;
+    - preload только двух начертаний 400, которыми набран первый экран, и тех
+      картинок, которые секция объявила ключом preload_images: фон первого
+      экрана это LCP страницы, а внутри секции браузер находит его лишь после
+      разбора CSS. Оба preload стоят до stylesheet — иначе смысла в них нет;
     - скрипты только defer: без них страница обязана работать целиком, JS
       добавляет движение и счётчик, а не смысл. Общие для всех превью
       перечислены в engine/render.BASE_SCRIPTS, свои секция просит флагом js
@@ -27,6 +30,9 @@
 {%- if preset.fonts.display.gwfh_id != preset.fonts.body.gwfh_id %}
 <link rel="preload" as="font" type="font/woff2" crossorigin href="{{ site.assets_base }}/fonts/{{ preset.fonts.display.gwfh_id }}-400.woff2">
 {%- endif %}
+{%- for src in site.preload_images %}
+<link rel="preload" as="image" href="{{ src }}" fetchpriority="high">
+{%- endfor %}
 <link rel="stylesheet" href="{{ site.assets_base }}/bundle.css">
 {%- for script in site.scripts %}
 <script defer src="{{ script }}"></script>

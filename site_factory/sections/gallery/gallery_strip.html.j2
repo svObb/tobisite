@@ -3,11 +3,13 @@
     а не иллюстрацией к тексту.
 
     Описать чужие фотографии движку нечем, поэтому alt пустой, а полоса
-    спрятана от скринридера: она ничего не сообщает сверх соседних секций. -#}
+    спрятана от скринридера: она ничего не сообщает сверх соседних секций.
+
+    Имён снимков разметка не знает: их выбирает движок из свободного пула
+    (image_pool контракта), а гейт следит, чтобы их было ровно три. -#}
 <section id="{{ section.id }}" class="bg-line">
   <ul class="grid grid-cols-3 gap-px">
-    {%- for name in ['photo-2', 'photo-3', 'photo-4'] %}
-    {%- set photo = section.images[name] %}
+    {%- for photo in section.images.values() %}
     <li class="bg-paper">
       <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="aspect-square w-full object-cover sm:aspect-[4/3]" loading="lazy" decoding="async">
     </li>

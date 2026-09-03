@@ -15,6 +15,8 @@
       </div>
       {%- endfor %}
     </dl>
-    <p class="mt-flow text-xs text-paper/80">{{ s.source_note }}</p>
+    {%- if s.rating_source_note %}
+    <p class="mt-flow text-xs text-paper/80">{{ s.rating_source_note }}</p>
+    {%- endif %}
   </div>
 </section>

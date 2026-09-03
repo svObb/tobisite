@@ -1,7 +1,7 @@
 """Профиль лида из leads + contacts + leads.enrichment (13-шаблоны §3 шаг 1).
 
 Признаки: photo_count, service_count, has_prices, has_hours, has_booking_url,
-review_count, google_rating, has_address, text_volume, old_site_state,
+review_count, google_rating, rating, has_address, text_volume, old_site_state,
 brand_colors, products, ниша, язык, страна.
 
 Главное правило: у каждого поля отдельный флаг known, и unknown != false.
@@ -15,8 +15,9 @@ brand_colors, products, ниша, язык, страна.
 Кроме сырых полей профиль отдаёт производные признаки (`feature`), которыми
 оперируют контракты секций: has_phone, has_address, service_count из списка
 услуг, product_count и products_with_images, has_logo, has_brand_colors,
-proof_stats_count, нормализованная ниша. Производные считаются в одном месте,
-чтобы гейт и скоринг не разошлись в трактовке.
+has_rating, proof_stats_count, nonproduct_photo_count, нормализованная ниша.
+Производные считаются в одном месте, чтобы гейт и скоринг не разошлись в
+трактовке.
 
 from_lead (сборка из БД) появится вместе с этапом 6 — здесь только from_dict
 для фикстур: пакет не импортирует ни моделей бота, ни драйвера базы.
@@ -52,6 +53,24 @@ def known(value: Any) -> Feature:
 TEXT_VOLUME_ORDER = ("none", "short", "medium", "long")
 OLD_SITE_STATE_ORDER = ("none", "broken", "not_mobile", "outdated", "ok")
 ORDERED_ENUMS = (TEXT_VOLUME_ORDER, OLD_SITE_STATE_ORDER)
+
+# Картинки белого списка, у которых на странице своё место: логотип в шапке,
+# hero_bg под первым экраном, portrait и map — в своих первых экранах. Полоса
+# галереи берёт снимки пулом и эти имена не трогает: иначе фон первого экрана
+# встал бы на страницу вторым экземпляром.
+NAMED_IMAGES = ("logo", "hero_bg", "portrait", "map")
+
+# Порог и потолок товарной сетки — копия контракта
+# sections/products/products_grid.yaml (requires products_with_images ">=3",
+# repeat "3..6" у слота product_name). Резерв снимков под витрину считается
+# ровно по ним: их расхождение с контрактом ловит тест-заслон в test_sections.
+GRID_MIN = 3
+GRID_CAP = 6
+
+# Карточку лида наполняет выгрузка Google Maps, поэтому у карточных оценки и
+# числа отзывов источник ровно один. У скрейпа источник свой и приходит вместе
+# с цифрами (site_scrape.rating).
+CARD_RATING_SOURCE = "google"
 
 # Ниша лида приходит словом на языке работника; рецепты и контракты знают
 # только ключи. Таблица переехала в tokens/niches.yaml — ниш скоро полсотни,
@@ -92,13 +111,17 @@ class Profile:
     booking_url: Feature = UNKNOWN
     review_count: Feature = UNKNOWN
     google_rating: Feature = UNKNOWN
+    # Оценка со страницы лида (разметка JSON-LD): {value, count, source?}.
+    # Она старше карточной google_rating — её снял скрейп с самого сайта.
+    rating: Feature = UNKNOWN
     has_address: Feature = UNKNOWN
     text_volume: Feature = UNKNOWN
     old_site_state: Feature = UNKNOWN
     brand_colors: Feature = UNKNOWN
 
-    # Белый список готовых картинок: имя из image_names контракта ->
-    # {src, width, height}. Чего здесь нет — того на странице не будет.
+    # Белый список готовых картинок: имя из image_names контракта (или любое
+    # photo-N для пула) -> {src, width, height}. Чего здесь нет — того на
+    # странице не будет.
     images: Feature = UNKNOWN
 
     # Товары со страниц лида: [{name, price?, image?{src, width, height}}].
@@ -114,6 +137,10 @@ class Profile:
         unexpected = set(raw) - allowed
         if unexpected:
             raise ValueError(f"неизвестные поля профиля: {sorted(unexpected)}")
+        if "rating" in raw:
+            rating = clean_rating(raw.pop("rating"))
+            if rating is not None:
+                raw["rating"] = rating
         return cls(domain_norm=domain_norm,
                    **{name: known(value) for name, value in raw.items()})
 
@@ -125,13 +152,56 @@ class Profile:
         return niches.key_for(self.niche.value)
 
     def proof_stats(self) -> list[dict]:
-        """Показатели для proof-секции. Только цифры из профиля Google."""
+        """Показатели для proof-секции. Только цифры, которые лид уже показывает.
+
+        Рейтинг со страницы лида старше карточного google_rating: скрейп снял
+        его вместе с числом отзывов и источником, а карточку работник
+        заполняет по памяти. Оба поля читаются здесь и только здесь — иначе
+        proof-секция и JSON-LD одной страницы назвали бы разные оценки.
+        """
+        rating, reviews = self._rating_pair()
         stats = []
-        if self.google_rating.known and self.google_rating.value is not None:
-            stats.append({"key": "rating", "value": self.google_rating.value})
-        if self.review_count.known and self.review_count.value is not None:
-            stats.append({"key": "reviews", "value": self.review_count.value})
+        if rating is not None:
+            stats.append({"key": "rating", "value": rating})
+        if reviews is not None:
+            stats.append({"key": "reviews", "value": reviews})
         return stats
+
+    def stats_source(self) -> str | None:
+        """Откуда взяты цифры proof_stats(). None — сказать нечего.
+
+        Подпись под показателями называет источник, поэтому его выбирает та же
+        ветка, что и сами цифры: подпись «дані з профілю Google» под оценкой,
+        снятой с сайта лида, была бы враньём на странице клиента.
+        """
+        if self.feature("has_rating").value:
+            return str(self.rating.value.get("source") or "") or None
+        return CARD_RATING_SOURCE if self.proof_stats() else None
+
+    def free_photos(self) -> list[str]:
+        """Контентные снимки, свободные под полосу галереи, — по номеру.
+
+        Свободный значит: не логотип, не занят именованной ролью (NAMED_IMAGES)
+        и не встанет в товарную сетку. Товары стейджинг кладёт под теми же
+        именами photo-N, и без этого отбора полоса повторяла бы витрину.
+
+        Занятыми считаются только снимки, которые сетка реально покажет
+        (product_image_names): товар с картинкой за её потолком — и тем более
+        витрина, не набравшая товаров на гейт, — снимок не держит.
+
+        Товары неизвестны — все снимки считаются свободными: без известных
+        товаров на странице нет и товарной секции, повторять нечего.
+        """
+        taken = self.feature("product_image_names").value or frozenset()
+        names = [name for name in (self.images.value or {})
+                 if name not in NAMED_IMAGES and name not in taken]
+        return sorted(names, key=_photo_order)
+
+    def _rating_pair(self):
+        if self.feature("has_rating").value:
+            return self.rating.value["value"], self.rating.value["count"]
+        return (self.google_rating.value if self.google_rating.known else None,
+                self.review_count.value if self.review_count.known else None)
 
     def feature(self, name: str) -> Feature:
         """Признак по имени из контракта секции: сырое поле или производное."""
@@ -148,6 +218,39 @@ class Profile:
                 continue
             out[f.name] = getattr(self, f.name).as_dict()
         return out
+
+
+def clean_rating(value) -> dict | None:
+    """Рейтинг лида в форме движка или None, если показывать нечего.
+
+    Контракт скрейпа — {"value": 0<v<=5, "count": >=1, "source": строка}.
+    Оценка вне шкалы и ноль отзывов — это не «плохой рейтинг», а сломанный
+    разбор разметки: такую пару лучше не знать вовсе, чем поставить цифру на
+    страницу клиента. Ключи оставляем только известные — по тому же правилу,
+    по которому from_dict не пускает в профиль неизвестное поле.
+    """
+    if not isinstance(value, dict):
+        return None
+    # bool в питоне число: без этого отказа True дал бы «оценку 1,0» и «один
+    # отзыв» из мусора. Тот же гард стоит в site_scrape._float — контракт на
+    # обоих концах обязан совпадать побайтово.
+    if isinstance(value.get("value"), bool) or isinstance(value.get("count"), bool):
+        return None
+    try:
+        rating, count = float(value.get("value")), int(value.get("count"))
+    except (TypeError, ValueError):
+        return None
+    if not 0 < rating <= 5 or count < 1:
+        return None
+    source = str(value.get("source") or "").strip()
+    return dict({"value": rating, "count": count},
+                **({"source": source} if source else {}))
+
+
+def _photo_order(name: str) -> tuple:
+    """photo-2, photo-3, …, photo-10 — по числу снимка, а не по алфавиту."""
+    number = name.rpartition("-")[2]
+    return (0, int(number), name) if number.isdigit() else (1, 0, name)
 
 
 def _flag(source: Feature) -> Feature:
@@ -180,6 +283,45 @@ def _has_logo(p: Profile) -> Feature:
     return known("logo" in (p.images.value or {}))
 
 
+def _product_image_names(p: Profile) -> Feature:
+    """Имена файлов, занятых витриной: «/img/photo-3.webp» -> «photo-3».
+
+    Снимок товара попадает в стейджинг под общим именем photo-N, поэтому
+    единственная связь товара с картинкой белого списка — имя файла.
+
+    Занято ровно то, что способна показать товарная сетка: первые GRID_CAP
+    товаров с картинкой, и только когда их набралось хотя бы GRID_MIN. Ниже
+    порога сетка не проходит гейт, а products_list картинок не выводит вовсе:
+    резервировать нечего, и снимки уходят полосе галереи.
+
+    Допущение осознанное: резерв считает, что сетка выигрывает роль всегда,
+    когда проходит гейт. Остаток — «сетка гейт прошла, но по score победил
+    список» — оставляет снимки зря занятыми, и это принято.
+    """
+    if not p.products.known:
+        return UNKNOWN
+    with_images = [item for item in (p.products.value or [])
+                   if (item or {}).get("image")]
+    if len(with_images) < GRID_MIN:
+        return known(frozenset())
+    names = {_image_stem(item["image"].get("src"))
+             for item in with_images[:GRID_CAP]}
+    return known(frozenset(names - {""}))
+
+
+def _image_stem(src) -> str:
+    return str(src or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+def _has_rating(p: Profile) -> Feature:
+    """Рейтинг показуем: оценка задана и отзыв хотя бы один."""
+    if not p.rating.known:
+        return UNKNOWN
+    rating = p.rating.value or {}
+    return known(rating.get("value") is not None
+                 and (rating.get("count") or 0) >= 1)
+
+
 _DERIVED: dict[str, Callable[[Profile], Feature]] = {
     "niche": lambda p: known(p.niche_key) if p.niche.known else UNKNOWN,
     "has_phone": lambda p: _flag(p.phone),
@@ -191,6 +333,10 @@ _DERIVED: dict[str, Callable[[Profile], Feature]] = {
     "product_count": lambda p: (known(len(p.products.value or []))
                                 if p.products.known else UNKNOWN),
     "products_with_images": _products_with_images,
+    "product_image_names": _product_image_names,
+    "nonproduct_photo_count": lambda p: (known(len(p.free_photos()))
+                                         if p.images.known else UNKNOWN),
+    "has_rating": _has_rating,
     # Сколько показателей мы реально знаем — знаем всегда, поэтому known=True.
     "proof_stats_count": lambda p: known(len(p.proof_stats())),
 }

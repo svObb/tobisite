@@ -8,6 +8,8 @@ requires: {photo_count: ">=1"}
 prefers: {photo_count: "3..", text_volume: ">=short"}
 image_slots: 1
 image_names: [hero_bg]
+# Этот кадр — LCP страницы, и ждать разбора CSS ему нельзя (base/head.j2).
+preload_images: [hero_bg]
 js: parallax
 slots:
   - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}

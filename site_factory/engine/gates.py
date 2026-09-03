@@ -9,8 +9,9 @@
   получит секцию, для которой у нас нет данных, — а именно от этого
   предостерегает §3 шаг 1 (unknown != false).
 * **Картинки — тоже requires.** Вариант с image_names требует, чтобы каждая
-  картинка лежала в белом списке профиля. Секции с пустой рамкой вместо фото
-  не бывает: это ступень 5 лестницы, запрет на подмену.
+  картинка лежала в белом списке профиля; вариант с image_pool — чтобы
+  свободных снимков хватило на все его image_slots. Секции с пустой рамкой
+  вместо фото не бывает: это ступень 5 лестницы, запрет на подмену.
 
 Язык условий (он же используется в score.py для prefers):
 
@@ -51,6 +52,7 @@ HINT_FIELDS = {
     "service_count": "services",
     "product_count": "products",
     "products_with_images": "products",
+    "nonproduct_photo_count": "photo_count",
     "proof_stats_count": "proof_stats",
 }
 
@@ -89,12 +91,26 @@ def check(contract: dict, profile: Profile) -> Verdict:
 
 
 def _image_reasons(contract: dict, profile: Profile) -> list[Reason]:
+    if contract.get("image_pool"):
+        return _pool_reasons(contract, profile)
     names = contract.get("image_names") or []
     if not names:
         return []
     available = profile.images.value if profile.images.known else {}
     return [Reason("images", MISSING_IMAGE, f"нет картинки {name!r} в профиле")
             for name in names if name not in (available or {})]
+
+
+def _pool_reasons(contract: dict, profile: Profile) -> list[Reason]:
+    """Секция берёт картинки пулом: важно их число, а не имена."""
+    if not profile.images.known:
+        return [Reason("images", UNKNOWN_FIELD, "картинки лида неизвестны")]
+    needed = contract.get("image_slots") or 0
+    free = len(profile.free_photos())
+    if free >= needed:
+        return []
+    return [Reason("images", MISSING_IMAGE,
+                   f"свободных фотографий {free}, нужно {needed}")]
 
 
 def satisfies(condition, feature: Feature) -> bool:

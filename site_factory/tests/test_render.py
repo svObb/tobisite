@@ -11,7 +11,8 @@ from site_factory.engine.render import (BASE_SCRIPTS, PRESET_DEFAULTS,
                                         render, resolve_preset, seed_for,
                                         track_for)
 
-from .conftest import GENERIC_LIGHT, GENERIC_RICH, LAWYER_POOR, LAWYER_RICH
+from .conftest import (BRAND_SHOP, GENERIC_LIGHT, GENERIC_RICH, LAWYER_POOR,
+                       LAWYER_RICH)
 
 # Домены-однодневки, на которых видно, что пресет меняется вместе с доменом.
 DOMAINS = ["alfa.example", "beta.example", "gamma.example", "delta.example",
@@ -60,10 +61,10 @@ def test_preset_comes_from_the_pool_of_the_niche():
             assert preset_for(profile)["id"] == pool[digest % len(pool)]
 
 
-def test_library_is_version_three_with_sixteen_presets():
+def test_library_is_version_four_with_sixteen_presets():
     """Первые восемь пресетов заморожены — слот-ключи лидов считают их по месту."""
     ids = preset_ids()
-    assert load_tokens()["version"] == 3
+    assert load_tokens()["version"] == 4
     assert len(ids) == 16
     assert ids[:len(FROZEN_PRESETS)] == FROZEN_PRESETS
     assert len(set(ids)) == len(ids)
@@ -202,6 +203,41 @@ def test_parallax_script_comes_only_with_the_section_that_asks(lawyer_rich,
     assert photo is not None
     assert "hero_bg_photo" in photo_trace["sections"]
     assert '<script defer src="/assets/parallax.js"></script>' in photo
+
+
+def test_the_background_photo_is_preloaded_before_the_stylesheet(brand_shop):
+    """Фон первого экрана — LCP страницы: запрос за ним обязан уйти до CSS."""
+    html, _ = render(brand_shop)
+    preload = re.search(r'<link rel="preload" as="image"[^>]*>', html)
+    assert preload, "фонового фото нет в preload"
+    assert 'href="/img/hero_bg.webp"' in preload.group(0)
+    assert 'fetchpriority="high"' in preload.group(0)
+    assert preload.start() < html.index('<link rel="stylesheet"')
+
+
+def test_a_page_without_a_background_photo_preloads_no_image(lawyer_rich):
+    """Ключ preload_images необязателен: у секции без него ничего не меняется."""
+    html, trace = render(lawyer_rich)
+    assert "hero_bg_photo" not in trace["sections"]
+    assert 'rel="preload" as="image"' not in html
+
+
+def test_derived_features_read_the_new_enrichment(brand_shop):
+    """Производные, на которых стоят полоса галереи и proof: имена и рейтинг."""
+    photos = Profile.from_dict(dict(
+        BRAND_SHOP,
+        images={f"photo-{n}": {"src": f"/img/photo-{n}.webp", "width": 1200,
+                               "height": 900} for n in range(2, 7)},
+        products=[{"name": f"Товар {n}",
+                   "image": {"src": f"/img/photo-{n}.webp", "width": 800,
+                             "height": 800}} for n in (3, 5, 6)]))
+    assert photos.feature("product_image_names").value == \
+        frozenset({"photo-3", "photo-5", "photo-6"})
+    assert photos.feature("nonproduct_photo_count").value == 2
+    assert photos.free_photos() == ["photo-2", "photo-4"]
+    # товары не спрашивали — снимки свободны все: товарной секции всё равно нет
+    assert brand_shop.feature("product_image_names").known
+    assert not Profile.from_dict(LAWYER_RICH).feature("product_image_names").known
 
 
 def test_recent_variants_lower_the_score(lawyer_rich):

@@ -147,10 +147,10 @@ FOOTER = {
 }
 
 PROOF = {
-    "section_title": "Показники профілю",
-    "stats": [{"value": "4,8", "label": "Оцінка в Google"},
-              {"value": "34", "label": "Відгуків у Google"}],
-    "source_note": "Дані з профілю Google Business.",
+    "section_title": "Оцінка і відгуки",
+    "stats": [{"value": "4,8", "label": "Оцінка"},
+              {"value": "34", "label": "Відгуків"}],
+    "rating_source_note": "Дані з профілю Google Business.",
 }
 
 
@@ -240,7 +240,11 @@ PAGES = {
 
 
 def site_for(sections: list) -> dict:
-    """site.scripts — готовые адреса: их подставляет base/head.j2 как есть."""
+    """site.scripts — готовые адреса: их подставляет base/head.j2 как есть.
+
+    Контрактов у здешних секций нет, поэтому preload фона собирается по самой
+    картинке: страницы смоука обязаны выглядеть так же, как страницы движка.
+    """
     names = list(BASE_SCRIPTS)
     if any(s["template"].endswith("hero_bg_photo.html.j2") for s in sections):
         names.append("parallax")
@@ -250,6 +254,8 @@ def site_for(sections: list) -> dict:
         "description": "Фікстура для смоук-рендера site_factory.",
         "assets_base": ASSETS_BASE,
         "scripts": [f"{ASSETS_BASE}/{name}.js" for name in names],
+        "preload_images": [s["images"]["hero_bg"]["src"] for s in sections
+                           if "hero_bg" in s["images"]],
         "ui": {"skip_to_content": "Перейти до вмісту",
                "nav_label": "Розділи сторінки"},
     }

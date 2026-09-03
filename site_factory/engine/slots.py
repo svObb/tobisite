@@ -21,6 +21,10 @@
 * group_filter на слоте-драйвере отсеивает элементы до проверки repeat: у
   товарной сетки без картинок нет смысла, и лучше пусть выбудет весь вариант,
   чем встанут пустые рамки.
+* image_names перечисляет картинки поимённо, и каждая обязана лежать в белом
+  списке профиля. image_pool: free_photos, наоборот, просит image_slots любых
+  свободных снимков — тех, что не заняты ни именованной ролью, ни товарной
+  сеткой. Так полоса галереи не повторяет фотографии витрины.
 * max_chars — ограничение для генератора слотов, не для вёрстки. Молча резать
   текст нельзя: если заготовка или факт не влезли, вариант выбывает по гейту
   с причиной too_long, и роль берёт следующую ступень лестницы. Словарь
@@ -45,6 +49,8 @@ from .profile import Profile
 COMMON = "_common"        # заготовки, общие для всех вариантов рецепта
 PAGE = "_page"            # заготовки уровня страницы: title/description/ui
 RESERVED = (COMMON, PAGE)
+
+FREE_PHOTOS = "free_photos"   # единственный пул картинок (image_pool контракта)
 
 _MISSING = object()
 
@@ -299,9 +305,45 @@ def _stats(profile: Profile, lang: str):
 
 def _stat_text(stat: dict, lang: str) -> str:
     if stat["key"] == "rating":
-        text = f"{float(stat['value']):.1f}"
-        return text if lang == "en" else text.replace(".", ",")
+        return _decimal(stat["value"], lang)
     return str(int(stat["value"]))
+
+
+def _decimal(value, lang: str) -> str:
+    """Оценка с одним знаком: «4.8» латиницей, «4,8» на украинском."""
+    text = f"{float(value):.1f}"
+    return text if lang == "en" else text.replace(".", ",")
+
+
+def _rating(profile: Profile) -> dict | None:
+    """Рейтинг со страницы лида. None — его нет или он не показуем."""
+    return profile.rating.value if profile.feature("has_rating").value else None
+
+
+# Подпись под показателями: у каждого источника своя формулировка. Источника
+# в таблице нет — подписи не будет вовсе: назвать гугловскими цифры, снятые
+# с сайта лида, нельзя, а обтекаемое «за відкритими даними» не сообщает ничего.
+RATING_SOURCE_NOTES: dict[str, dict[str, str]] = {
+    "google": {"uk": "Дані з профілю Google Business.",
+               "en": "Figures from the Google Business profile."},
+    "jsonld": {"uk": "Дані з сайту компанії.",
+               "en": "Figures from the company's own website."},
+}
+
+
+def _rating_source_note(profile: Profile, lang: str):
+    source = profile.stats_source() or ""
+    return RATING_SOURCE_NOTES.get(source, {}).get(lang)
+
+
+def _rating_value(profile: Profile, lang: str):
+    rating = _rating(profile)
+    return None if rating is None else _decimal(rating["value"], lang)
+
+
+def _rating_count(profile: Profile, lang: str):
+    rating = _rating(profile)
+    return None if rating is None else str(int(rating["count"]))
 
 
 FACT_SOURCES: dict[str, FactSource] = {
@@ -314,6 +356,11 @@ FACT_SOURCES: dict[str, FactSource] = {
     "product_name": FactSource("products", _products),
     "hour_day": FactSource("hours", _hour_days),
     "stat_value": FactSource("proof_stats", _stats),
+    # Оценка и число отзывов поштучно: proof-полоса берёт их списком через
+    # stat_value, а секции, которой нужна одна цифра, — этими двумя слотами.
+    "rating_value": FactSource("rating", _rating_value),
+    "rating_count": FactSource("rating", _rating_count),
+    "rating_source_note": FactSource("rating", _rating_source_note),
 }
 
 # Отборы элементов группы. Имя из group_filter слота-драйвера; фильтр видит
@@ -505,6 +552,14 @@ def _repeat_range(spec) -> tuple[int, int]:
 
 
 def _images(contract: dict, profile: Profile) -> dict:
-    names = contract.get("image_names") or []
+    """Картинки секции: поимённо из image_names или пулом из image_pool.
+
+    Пул отдаёт первые image_slots свободных снимков в порядке profile —
+    он детерминирован, как и весь остальной подбор.
+    """
     available = (profile.images.value if profile.images.known else {}) or {}
+    if contract.get("image_pool") == FREE_PHOTOS:
+        names = profile.free_photos()[:contract.get("image_slots") or 0]
+    else:
+        names = contract.get("image_names") or []
     return {name: available[name] for name in names if name in available}

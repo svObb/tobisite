@@ -9,9 +9,11 @@ import colorsys
 import pytest
 
 from site_factory.engine.checks import a11y
-from site_factory.engine.color import chroma, luminance, ratio, srgb
-from site_factory.engine.palette import (MIN_CHROMA, brand_color, brand_palette,
-                                         readable)
+from site_factory.engine.color import chroma, lightness, luminance, ratio, srgb
+from site_factory.engine.palette import (CHROMA_CAPPED, HK_CHROMA, LIGHT_ZONE,
+                                         LIGHT_ZONE_CHROMA, MAX_CHROMA,
+                                         MIN_CHROMA, brand_color, brand_palette,
+                                         cap_chroma, readable)
 from site_factory.engine.render import load_tokens
 
 # Двадцать цветов по кругу оттенков плюс серые: так выглядит то, что реально
@@ -20,7 +22,10 @@ WHEEL = tuple("#" + "".join(f"{round(channel * 255):02x}" for channel in
                             colorsys.hsv_to_rgb(step / 20, 0.75, 0.8))
               for step in range(20))
 GREYS = ("#ffffff", "#000000", "#808080", "#3a3d40", "#e8e8e8")
-COLORS = WHEEL + GREYS
+# Кислотные логотипы: неон выше потолка хромы и насыщенный красный средней
+# светлоты — на нём и виден эффект Гельмгольца–Кольрауша.
+HOT = ("#ff0040", "#ff1493", "#e53e3e", "#39ff14")
+COLORS = WHEEL + GREYS + HOT
 
 PRESETS = [preset for preset in load_tokens()["presets"]]
 PALETTES = {preset["id"]: preset["palette"] for preset in PRESETS}
@@ -34,7 +39,8 @@ def test_every_brand_color_leaves_the_page_readable(preset_id):
         problems = a11y.contrast_problems(palette)
         if source == "brand":
             assert problems == [], f"{preset_id} + {color}: {problems}"
-            assert reason == ""
+            assert reason in ("", CHROMA_CAPPED)
+            assert chroma(srgb(palette["accent"])) <= MAX_CHROMA + 1e-3
         else:
             assert palette == preset, f"{preset_id} + {color}: палитра не пресетная"
             assert reason in ("low_chroma", "aa_unreachable")
@@ -83,6 +89,55 @@ def test_accent_that_already_passes_stays_itself():
     assert palette["accent"] == palette["accent_ink"] == "#35506f"
 
 
+def test_an_oversaturated_brand_colour_is_cut_to_the_ceiling():
+    """Кислотный логотип не отменяет бренд: срезаем хрому, тон оставляем."""
+    preset = PALETTES["clinical-light"]
+    palette, source, reason = brand_palette({"accent": "#ff0040"}, preset)
+    assert (source, reason) == ("brand", CHROMA_CAPPED)
+    accent = srgb(palette["accent"])
+    assert chroma(srgb("#ff0040")) > MAX_CHROMA
+    assert round(chroma(accent), 3) <= MAX_CHROMA
+    assert round(lightness(accent), 2) == round(lightness(srgb("#ff0040")), 2)
+    assert a11y.contrast_problems(palette) == []
+
+
+def test_the_light_zone_has_a_lower_ceiling():
+    """Выше L 0.78 флуоресцентным выглядит уже 0.18, а не 0.23."""
+    pale = "#ffe600"
+    assert lightness(srgb(pale)) > LIGHT_ZONE
+    assert round(chroma(srgb(cap_chroma(pale))), 3) <= LIGHT_ZONE_CHROMA
+
+
+def test_a_saturated_fill_takes_the_light_text():
+    """Гельмгольц–Кольрауш: тёмный текст формально проходит, а выглядит грязным.
+
+    Чернила пресетов чуть светлее чистого чёрного и до 4.5 по такой заливке
+    не дотягивают — чтобы тёмный вариант формально проходил и правило было
+    видно, чернила здесь чёрные.
+    """
+    preset = dict(PALETTES["clinical-light"], ink="#000000")
+    palette, source, _ = brand_palette({"accent": "#ff4d4d"}, preset)
+    fill = srgb(palette["accent_ink"])
+
+    assert source == "brand"
+    assert ratio(srgb(preset["ink"]), fill) >= a11y.AA_TEXT
+    assert ratio(srgb(preset["ink"]), fill) > ratio(srgb(preset["paper"]), fill)
+    assert palette["accent_on"] == preset["paper"]
+    assert a11y.contrast_problems(palette) == []
+
+
+def test_a_muted_fill_keeps_the_old_rule():
+    """Вне зоны эффекта побеждает контраст, а не светлота."""
+    preset = dict(PALETTES["clinical-light"], ink="#000000")
+    palette, source, _ = brand_palette({"accent": "#b28686"}, preset)
+    fill = srgb(palette["accent_ink"])
+
+    assert source == "brand"
+    assert MIN_CHROMA <= chroma(fill) < HK_CHROMA
+    assert palette["accent_on"] == max((preset["paper"], preset["ink"]),
+                                       key=lambda color: ratio(srgb(color), fill))
+
+
 def test_grey_brand_falls_back_to_the_preset():
     """Логотип чёрно-белый: акцента в нём нет, и выдумывать его нечем."""
     preset = PALETTES["warm-table"]
@@ -116,10 +171,14 @@ def test_short_hex_is_expanded():
 
 
 def test_preset_palettes_are_their_own_fixed_point():
-    """Пресет, поданный сам себе как бренд-цвет, обязан остаться собой."""
+    """Пресет, поданный сам себе как бренд-цвет, обязан остаться собой.
+
+    Ровно до потолка хромы: акцент неонового пресета ярче гарда, и гард
+    срезает его так же, как срезал бы тот же цвет с чужого логотипа.
+    """
     for preset in PRESETS:
-        palette, source, _ = brand_palette(preset["palette"]["accent"],
-                                           preset["palette"])
+        accent = preset["palette"]["accent"]
+        palette, source, _ = brand_palette(accent, preset["palette"])
         if source == "brand":
-            assert palette["accent"] == preset["palette"]["accent"]
+            assert palette["accent"] == cap_chroma(accent)
             assert a11y.contrast_problems(palette) == []

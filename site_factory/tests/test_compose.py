@@ -3,12 +3,15 @@ import random
 
 import pytest
 
-from site_factory.engine import gates
+from site_factory.engine import gates, slots
 from site_factory.engine.profile import Profile
 from site_factory.engine.render import load_library, render
 from site_factory.engine.score import Score, choose
 
-from .conftest import LAWYER_POOR, LAWYER_RICH
+from .conftest import GENERIC_RICH, LAWYER_POOR, LAWYER_RICH
+
+# Рейтинг со страницы лида: так его отдаёт скрейп разметки (site_scrape.rating).
+SCRAPED_RATING = {"value": 4.8, "count": 120, "source": "jsonld"}
 
 
 def role_record(trace, role):
@@ -18,6 +21,20 @@ def role_record(trace, role):
 def rejected_reasons(record, variant):
     rejection = next(r for r in record["rejected"] if r["variant"] == variant)
     return rejection["reasons"]
+
+
+def section_of(html, role):
+    """Кусок страницы одной роли: id секции — это её роль (engine/compose)."""
+    tail = html[html.index(f'id="{role}"'):]
+    end = tail.find("</section>")
+    return tail[:end if end > 0 else len(tail)]
+
+
+def _without_card_rating(**extra):
+    """Профиль, у которого оценки в карточке лида нет вовсе."""
+    data = {key: value for key, value in GENERIC_RICH.items()
+            if key not in ("google_rating", "review_count")}
+    return Profile.from_dict(dict(data, **extra))
 
 
 def test_gate_rejects_unknown_field():
@@ -97,6 +114,70 @@ def test_role_substitution(generic_light):
     assert services["substituted_by"] == "proof"
     assert role_record(trace, "proof")["status"] == "used_earlier"
     assert trace["sections"].count("proof_stats_bar") == 1
+
+
+def test_a_scraped_rating_keeps_the_proof_section_alive():
+    """Оценки в карточке нет вовсе — полоса показателей живёт на рейтинге сайта."""
+    profile = _without_card_rating(rating=SCRAPED_RATING)
+    html, trace = render(profile)
+
+    assert profile.feature("has_rating").value
+    assert "proof_stats_bar" in trace["sections"]
+    assert slots.FACT_SOURCES["rating_value"].build(profile, "uk") == "4,8"
+    assert slots.FACT_SOURCES["rating_value"].build(profile, "en") == "4.8"
+    assert slots.FACT_SOURCES["rating_count"].build(profile, "uk") == "120"
+    assert "4,8" in section_of(html, "proof")
+
+
+def test_without_any_rating_the_proof_section_leaves():
+    profile = _without_card_rating()
+    _, trace = render(profile)
+    assert "proof_stats_bar" not in trace["sections"]
+    assert role_record(trace, "proof")["status"] == "dropped"
+
+
+def test_a_broken_rating_never_reaches_the_profile():
+    """Оценка вне шкалы и ноль отзывов — сломанный разбор, а не «нет рейтинга»."""
+    for broken in ({"value": 7, "count": 30}, {"value": 4.8, "count": 0},
+                   {"count": 12}, {"value": 4.8}, "4.8", None,
+                   # bool числом не считается: float(True) дал бы «оценку 1,0».
+                   {"value": True, "count": 5}, {"value": 4.8, "count": True}):
+        profile = _without_card_rating(rating=broken)
+        assert not profile.rating.known, broken
+        assert not profile.feature("has_rating").known, broken
+
+
+def test_the_scraped_rating_wins_over_the_card():
+    """Одна страница — одна оценка: и в полосе, и в JSON-LD она с сайта лида."""
+    profile = Profile.from_dict(dict(GENERIC_RICH, rating=SCRAPED_RATING))
+    html, _ = render(profile)
+    assert profile.proof_stats() == [{"key": "rating", "value": 4.8},
+                                     {"key": "reviews", "value": 120}]
+    assert '"ratingValue": 4.8' in html and '"reviewCount": 120' in html
+    assert str(GENERIC_RICH["google_rating"]) not in html
+
+
+def test_the_note_names_the_site_when_the_rating_came_from_it():
+    """Оценку снял скрейп — подпись про профиль Google была бы враньём."""
+    profile = _without_card_rating(rating=SCRAPED_RATING)
+    proof = section_of(render(profile)[0], "proof")
+    assert "Дані з сайту компанії." in proof
+    assert "Google" not in proof
+
+
+def test_the_note_names_google_when_the_figures_came_from_the_card():
+    proof = section_of(render(Profile.from_dict(GENERIC_RICH))[0], "proof")
+    assert "Дані з профілю Google Business." in proof
+
+
+def test_an_unknown_source_leaves_the_figures_without_a_note():
+    """Источник не из таблицы — цифры остаются, подписи нет: врать нечем."""
+    profile = _without_card_rating(
+        rating=dict(SCRAPED_RATING, source="tripadvisor"))
+    html, trace = render(profile)
+    proof = section_of(html, "proof")
+    assert "proof_stats_bar" in trace["sections"]
+    assert "4,8" in proof and "Дані" not in proof
 
 
 def test_needs_enrichment_lists_what_to_ask(lawyer_poor):

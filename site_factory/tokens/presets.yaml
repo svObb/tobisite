@@ -31,7 +31,7 @@
 # необязательны; пропущенный берётся из PRESET_DEFAULTS в engine/render.py
 # (regular / fill / flat / left). Ниже выписаны только не-дефолтные значения.
 
-version: 3
+version: 4
 
 subsets: [latin, latin-ext, cyrillic]
 weights: [400, 700]

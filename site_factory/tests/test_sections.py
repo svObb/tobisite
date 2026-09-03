@@ -5,16 +5,18 @@
 """
 import re
 
+import yaml
+
 from site_factory.engine import slots
 from site_factory.engine.compose import compose
-from site_factory.engine.profile import Profile
+from site_factory.engine.profile import GRID_CAP, GRID_MIN, Profile
 from site_factory.engine.render import (ROOT, environment, load_library,
                                         load_recipe, load_tokens,
                                         recipe_id_for, render, resolve_preset,
                                         seed_for)
 
 from . import smoke_render
-from .conftest import BRAND_SHOP, PRODUCTS
+from .conftest import BRAND_SHOP, GALLERY, PRODUCTS
 
 IMG_SRC = re.compile(r'<img[^>]+\bsrc="([^"]+)"')
 
@@ -127,6 +129,76 @@ def test_gallery_is_edge_to_edge_and_silent(brand_shop):
     assert gallery.count('alt="" aria-hidden="true"') == 3
 
 
+def test_the_gallery_gives_up_when_the_products_took_the_photos():
+    """Пять снимков, три заняты витриной: полосе остаётся два — секции нет."""
+    profile = _shop_with_product_photos(("photo-2", "photo-3", "photo-4"))
+    html, trace = render(profile)
+    assert "products_grid" in trace["sections"]
+    assert "gallery_strip" not in trace["sections"]
+    assert 'id="gallery"' not in html
+
+
+def test_the_gallery_shows_only_the_photos_no_product_took():
+    """Три свободных снимка из шести — полоса живёт и повторов на странице нет."""
+    profile = _shop_with_product_photos(("photo-5", "photo-6", "photo-7"), pool=6)
+    html, trace = render(profile)
+    assert "products_grid" in trace["sections"]
+    assert "gallery_strip" in trace["sections"]
+    assert images_of(section_html(html, "gallery")) == \
+        ["/img/photo-2.webp", "/img/photo-3.webp", "/img/photo-4.webp"]
+    used = images_of(html)
+    assert len(used) == len(set(used))
+
+
+def test_a_single_product_photo_does_not_cost_the_gallery_its_strip():
+    """Товар с картинкой один: сетке до гейта далеко — снимок остаётся полосе.
+
+    Резерв под витрину, посчитанный по всем товарам с картинкой, отнимал у
+    полосы снимок, которого страница потом не показывала нигде.
+    """
+    products = [dict(PRODUCTS[0], image=GALLERY["photo-2"])]
+    products += [{key: value for key, value in item.items() if key != "image"}
+                 for item in PRODUCTS[1:3]]
+    profile = Profile.from_dict(dict(BRAND_SHOP, products=products))
+    html, trace = render(profile)
+
+    assert profile.feature("product_image_names").value == frozenset()
+    assert "products_list" in trace["sections"]
+    assert "gallery_strip" in trace["sections"]
+    assert images_of(section_html(html, "gallery")) == \
+        ["/img/photo-2.webp", "/img/photo-3.webp", "/img/photo-4.webp"]
+
+
+def test_the_reserve_stops_at_the_last_row_the_grid_can_show():
+    """Восемь товаров с фото, а витрина показывает шесть: остальное — полосе."""
+    photos = {f"photo-{number}": {"src": f"/img/photo-{number}.webp",
+                                  "width": 1200, "height": 900}
+              for number in range(2, 12)}
+    profile = Profile.from_dict(dict(
+        BRAND_SHOP,
+        products=[{"name": f"Товар {number}", "image": photos[f"photo-{number}"]}
+                  for number in range(2, 10)],
+        images=dict(BRAND_SHOP["images"], **photos)))
+    html, trace = render(profile)
+
+    assert "products_grid" in trace["sections"]
+    assert images_of(section_html(html, "products")) == \
+        [f"/img/photo-{number}.webp" for number in range(2, 8)]
+    assert profile.free_photos() == \
+        [f"photo-{number}" for number in range(8, 12)]
+    assert "gallery_strip" in trace["sections"]
+
+
+def test_the_photo_reserve_mirrors_the_grid_contract():
+    """Заслон: константы резерва — копия контракта витрины, дрейф ловится тут."""
+    contract = yaml.safe_load(
+        (ROOT / "sections" / "products" / "products_grid.yaml").read_text("utf-8"))
+    repeat = next(slot["repeat"] for slot in contract["slots"]
+                  if slot["name"] == "product_name")
+    minimum = int(contract["requires"]["products_with_images"].lstrip(">="))
+    assert (minimum, int(repeat.partition("..")[2])) == (GRID_MIN, GRID_CAP)
+
+
 def test_hours_become_a_table(brand_shop):
     html, _ = render(brand_shop)
     info = section_html(html, "info")
@@ -216,6 +288,25 @@ def test_smoke_pages_render_on_every_preset():
                                  facts=smoke_render.FACTS, sections=sections)
             assert "{{" not in html and "{%" not in html, preset["id"] + suffix
             assert html.count("<h1") == 1, preset["id"] + suffix
+
+
+def _shop_with_product_photos(names, pool=5):
+    """brand_shop, у которого снимки товаров лежат в общем пуле photo-N.
+
+    Так их и складывает стейджинг: у товарной картинки нет своего имени, она
+    такой же photo-N, как снимок витрины, — и по имени видно, что она занята.
+    Остальным товарам картинки не оставляем: пул профиля должен быть виден
+    целиком, без ссылок на файлы вне белого списка.
+    """
+    photos = {f"photo-{number}": {"src": f"/img/photo-{number}.webp",
+                                  "width": 1200, "height": 900}
+              for number in range(2, 2 + pool)}
+    products = [dict(item, image=photos[name])
+                for item, name in zip(PRODUCTS, names)]
+    products += [{key: value for key, value in item.items() if key != "image"}
+                 for item in PRODUCTS[len(names):]]
+    return Profile.from_dict(dict(BRAND_SHOP, products=products,
+                                  images=dict(BRAND_SHOP["images"], **photos)))
 
 
 def variant_of(profile, role):
