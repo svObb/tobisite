@@ -766,12 +766,18 @@ def version_stamp(versions: dict) -> str:
 
 
 def _stale_library(draft) -> str:
-    """Почему черновик нельзя выложить как есть. Пусто — версии те же."""
+    """Почему черновик нельзя выложить как есть. Пусто — версии те же.
+
+    Рецепт, покинувший библиотеку, держит публикацию сам по себе: его версия
+    неизвестна («—»), а неизвестное не равно ничему — даже такому же «—» в
+    сохранённом отпечатке.
+    """
     stored = draft.library_version or "—"
+    recipe = _recipe_version(draft.recipe_id)
     current = version_stamp({"library": render.load_tokens()["version"],
                              "engine": render.ENGINE_VERSION,
-                             "recipe": _recipe_version(draft.recipe_id)})
-    if stored == current:
+                             "recipe": recipe})
+    if recipe is not None and stored == current:
         return ""
     return (f"черновик собран на версиях {stored}, сейчас {current} — "
             "пересоберите черновик")
