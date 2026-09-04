@@ -793,6 +793,9 @@ class Draft(Base, TimesMixin):
     lead_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("leads.id"), nullable=False
     )
+    # Отпечаток версий сборки — пресеты/движок/рецепт одной строкой
+    # (draft_service.version_stamp). Имя колонки старше отпечатка: когда-то в
+    # ней лежала одна версия пресетов, и переименование стоило бы миграции.
     library_version: Mapped[str | None] = mapped_column(Text)
     seed: Mapped[int | None] = mapped_column(BigInteger)
     recipe_id: Mapped[str | None] = mapped_column(Text)

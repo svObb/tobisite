@@ -94,17 +94,26 @@ SUMMARY_PARTS = {
                         "en": "homepage with a photo and phone"},
     "hero_type_only": {"uk": "головна з телефоном угорі",
                        "en": "homepage with the phone on top"},
+    "hero_split_2": {"uk": "головна з двох полотен",
+                     "en": "homepage of two panels"},
     "products_grid": {"uk": "товари з фото", "en": "products with photos"},
     "products_list": {"uk": "перелік товарів", "en": "a list of products"},
+    "product_carousel": {"uk": "стрічка товарів", "en": "a carousel of products"},
     "svc_cards_3": {"uk": "картки послуг", "en": "service cards"},
     "svc_list_icons": {"uk": "перелік послуг", "en": "a list of services"},
     "svc_two_col_rule": {"uk": "послуги рядками",
                          "en": "services line by line"},
     "gallery_strip": {"uk": "смуга фотографій", "en": "a strip of photos"},
+    "gallery_statement": {"uk": "фото на весь екран",
+                          "en": "a photo across the screen"},
+    "gallery_collage": {"uk": "колаж із фотографій",
+                        "en": "a collage of photos"},
     "proof_stats_bar": {"uk": "оцінка і відгуки",
                         "en": "the rating and reviews"},
     "about_note": {"uk": "абзац про компанію",
                    "en": "a note about the company"},
+    "about_photo_split": {"uk": "про компанію з фото і фактами",
+                          "en": "about the company with a photo and facts"},
     "info_hours_card": {"uk": "години роботи таблицею",
                         "en": "opening hours in a table"},
     "cta_form_short": {"uk": "форма звернення", "en": "an enquiry form"},
@@ -743,18 +752,39 @@ async def _release_slug(draft_id: int):
         log.exception("черновик %s: статус publishing не снят", draft_id)
 
 
-def _stale_library(draft) -> str:
-    """Почему черновик нельзя выложить как есть. Пусто — версия та же.
+def version_stamp(versions: dict) -> str:
+    """Отпечаток сборки: версии пресетов, движка и рецепта одной строкой.
 
-    Версия библиотеки решает, какие варианты секций выиграют композицию, а
-    ключ сохранённого текста — это «вариант.слот». Разъехались версии —
-    разъедутся и ключи, и часть страницы соберётся из заготовок рецепта.
+    Все три решают, какие варианты секций выиграют композицию, а ключ
+    сохранённого текста — это «вариант.слот». Одной версии пресетов не
+    хватало: новые варианты приезжают с движком и рецептом, пресеты при этом
+    не меняются, и черновик прошлой сборки выкладывался бы как свежий — с
+    частью страницы, собранной из заготовок рецепта.
     """
-    current = str(render.load_tokens()["version"])
-    if (draft.library_version or "") == current:
+    return "/".join(str(versions.get(key) or "—")
+                    for key in ("library", "engine", "recipe"))
+
+
+def _stale_library(draft) -> str:
+    """Почему черновик нельзя выложить как есть. Пусто — версии те же."""
+    stored = draft.library_version or "—"
+    current = version_stamp({"library": render.load_tokens()["version"],
+                             "engine": render.ENGINE_VERSION,
+                             "recipe": _recipe_version(draft.recipe_id)})
+    if stored == current:
         return ""
-    return (f"черновик собран на библиотеке {draft.library_version or '—'}, "
-            f"сейчас {current} — пересоберите черновик")
+    return (f"черновик собран на версиях {stored}, сейчас {current} — "
+            "пересоберите черновик")
+
+
+def _recipe_version(recipe_id) -> int | None:
+    """Версия рецепта черновика. Рецепта больше нет — считай, что и сборки нет."""
+    if not recipe_id:
+        return None
+    try:
+        return render.load_recipe(str(recipe_id)).get("version", 1)
+    except (OSError, ValueError):
+        return None
 
 
 def _expire_reason(draft, lead, deadline: datetime) -> str:
@@ -841,7 +871,7 @@ def _fill_row(row, status, trace, checks, images, slots=None):
     versions = trace.get("versions") or {}
     row.status = status
     row.slots_json = dict(slots or {})
-    row.library_version = str(versions.get("library") or "")
+    row.library_version = version_stamp(versions)
     row.seed = trace.get("seed")
     row.recipe_id = trace.get("recipe")
     row.token_preset = trace.get("preset")

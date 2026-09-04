@@ -49,7 +49,7 @@ from .profile import Profile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS_BASE = "/assets"          # общий префикс превью; @font-face в бандле
-ENGINE_VERSION = 2
+ENGINE_VERSION = 3
 OVERLAY = "overlay"              # ключ header контракта: шапка ложится на секцию
 
 SECTION_ROLES = ("header", "hero", "products", "services", "gallery", "proof",

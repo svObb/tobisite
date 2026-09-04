@@ -489,6 +489,18 @@ async def test_a_ready_text_that_is_not_a_string_is_treated_as_empty(
     assert "reason" not in json.dumps(row.slots_json, ensure_ascii=False)
 
 
+def test_the_stamp_holds_every_version_that_shapes_the_page():
+    """Пресеты те же, движок новый — черновик прошлой сборки уже устарел."""
+    fresh = draft_service.version_stamp({"library": 5, "engine": 3, "recipe": 3})
+    assert fresh == "5/3/3"
+    assert draft_service.version_stamp({"library": 5, "engine": 2,
+                                        "recipe": 3}) != fresh
+    assert draft_service.version_stamp({"library": 5, "engine": 3,
+                                        "recipe": 2}) != fresh
+    # так выглядела колонка до отпечатка: одна версия пресетов и ничего больше
+    assert fresh != "5"
+
+
 def test_every_section_of_the_library_has_a_summary():
     """Вариант без формулы — секция, о которой письмо промолчит."""
     assert set(draft_service.SUMMARY_PARTS) == set(render.load_library())
