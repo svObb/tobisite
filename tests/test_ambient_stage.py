@@ -20,6 +20,7 @@ import draft_service
 import enrich_service as es
 import site_images
 from models import Lead, LeadEvent, Session
+from site_factory.engine import render
 
 SITE = "https://svitlo.example/"
 _domains = itertools.count(1)
@@ -167,6 +168,41 @@ async def test_a_tall_frame_that_shrinks_below_the_sections_is_refused(
         await ambient_stage.stage_ambient(lead.id, png(900, 3600))
 
     assert r2.objects == {}
+
+
+async def test_a_frame_that_shrinks_below_the_strictest_section_is_refused(
+        ambient_lead, r2):
+    """1000×1500 проходит входной порог, а после пережатия даёт 800px ширины.
+
+    Секции пула во всю ширину берут кадр от 900px, и порог выкладки считается
+    по их контрактам: иначе в бакете лежал бы файл, который страница не
+    покажет, а работник по сообщению бота считал бы кадр годным.
+    """
+    lead = await ambient_lead()
+
+    with pytest.raises(ValueError, match="после пережатия"):
+        await ambient_stage.stage_ambient(lead.id, png(1000, 1500),
+                                          role="ambient-1")
+
+    assert await enrichment_of(lead.id) == {} and r2.objects == {}
+
+
+def test_no_section_of_the_library_asks_for_more_than_the_staging_floor():
+    """Заслон: выложенный кадр обязан подойти любой секции пула, а не средней."""
+    least = ambient_stage._min_frame_width()
+
+    assert least >= site_images.BACKGROUND_MIN_WIDTH
+    for contract in render.load_library().values():
+        assert (contract.get("pool_min_width") or 0) <= least, contract["id"]
+
+
+def test_the_report_names_the_next_free_place_of_the_pool():
+    """Выкладка идёт поверх файла с именем роли: занятую роль предлагать нельзя."""
+    assert ambient_stage.free_pool_roles(count=2) == ["ambient-1", "ambient-2"]
+    assert ambient_stage.free_pool_roles(["hero_bg", "ambient-1"], 2) == \
+        ["ambient-2", "ambient-3"]
+    assert ambient_stage.free_pool_roles(ambient_stage.POOL_ROLES, 1) == []
+    assert ambient_stage.free_pool_roles(count=0) == []
 
 
 async def test_a_frame_of_the_pool_is_staged_under_its_own_name(ambient_lead, r2):

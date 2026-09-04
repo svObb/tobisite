@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
+import ambient_stage
 import billing
 import config
 import costs
@@ -1444,16 +1445,20 @@ def _ambient_ask(result) -> list[str]:
     и говорит о ней, но сам не рисует ничего и никуда за картинкой не ходит.
     Поэтому здесь и команда — строку из отчёта видно, а молча появившуюся на
     превью картинку работник заметил бы только глазами.
+
+    Команд столько, сколько кадров не хватает, и роль у каждой своя: выкладка
+    идёт поверх файла с именем роли, и повторный ambient-1 переписал бы уже
+    выложенный кадр вместо того, чтобы добавить новый.
     """
     if not result.ambient_need:
         return []
+    roles = ambient_stage.free_pool_roles(result.ambient, result.ambient_need)
     return [
         f"⚠️ Нужно {result.ambient_need} "
         f"{_frames_word(result.ambient_need)}, промпт: "
         f"{esc(result.ambient_brief)}",
-        f"Выложить: <code>python -m ambient_stage {result.lead_id} кадр.png "
-        f"--role ambient-1</code>",
-    ]
+    ] + [f"Выложить: <code>python -m ambient_stage {result.lead_id} кадр.png "
+         f"--role {role}</code>" for role in roles]
 
 
 def _frames_word(count: int) -> str:

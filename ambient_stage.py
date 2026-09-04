@@ -37,12 +37,35 @@ import draft_service
 import enrich_service
 import site_images
 from models import Lead, Session, log_event
+from site_factory.engine import photos, render
 
-AMBIENT_ROLES = ("hero_bg", "ambient-1", "ambient-2", "ambient-3")
-# Самый строгий pool_min_width библиотеки (sections/hero/hero_split_2.yaml).
-# Кадр уже этого секции пула не берут вовсе, и выложить его значило бы оставить
-# в бакете файл, которого страница никогда не покажет.
-MIN_FRAME_WIDTH = 700
+# Фон первого экрана и места пула. hero_bg вне пула: секции пула берут кадры
+# мимо него, и нехватку он не закрывает (enrich_service.ambient_gap).
+POOL_ROLES = ("ambient-1", "ambient-2", "ambient-3")
+AMBIENT_ROLES = ("hero_bg", *POOL_ROLES)
+
+
+def _min_frame_width() -> int:
+    """Самый строгий pool_min_width библиотеки, посчитанный по её контрактам.
+
+    Кадр уже этого не берёт ни одна секция пула, и выложить его значило бы
+    оставить в бакете файл, которого страница никогда не покажет. Число живёт в
+    контрактах секций и здесь не дублируется: разъедутся — и сообщение об
+    отказе начнёт врать работнику.
+    """
+    return photos.strictest_min_width(render.load_library())
+
+
+def free_pool_roles(occupied=(), count: int = 1) -> list[str]:
+    """Первые свободные места пула: под сколько кадров, столько и имён.
+
+    Имя роли — имя файла в стейджинге, и PUT идёт поверх прежнего (см. _put).
+    Поэтому второй кадр под тем же ambient-1 не добавляет странице снимок, а
+    переписывает уже выложенный: отчёт обязан называть следующее свободное
+    место, иначе работник ходит по кругу.
+    """
+    taken = set(occupied)
+    return [role for role in POOL_ROLES if role not in taken][:max(count, 0)]
 
 
 async def stage_ambient(lead_id: int, data: bytes, role: str = "hero_bg", *,
@@ -105,10 +128,11 @@ def _drawn_frame(data: bytes, role: str) -> dict:
     made = site_images.process_image(data, site_images.role_of(role))
     if made is None:
         raise ValueError("картинка не пережалась в webp")
-    if made["width"] < MIN_FRAME_WIDTH:
+    least = _min_frame_width()
+    if made["width"] < least:
         raise ValueError(f"{width}×{height} после пережатия даёт "
                          f"{made['width']}px ширины — секциям нужно от "
-                         f"{MIN_FRAME_WIDTH}px; кадр нужен не такой вытянутый")
+                         f"{least}px; кадр нужен не такой вытянутый")
     return made
 
 

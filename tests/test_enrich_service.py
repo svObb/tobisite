@@ -275,6 +275,15 @@ def test_frames_taken_by_the_shop_window_do_not_count_as_free():
     assert es.ambient_gap(card) == es.AMBIENT_TARGET - 1
 
 
+def test_a_frame_of_a_single_product_is_not_free_either():
+    """Витрина на один товар не собирается — предметный снимок всё равно занят."""
+    card = frames("photo-2", "photo-3")
+    card["products"] = [{"name": "Промінь 14",
+                         "image": {"src": "/img/photo-2.webp", "width": 900,
+                                   "height": 900}}]
+    assert es.ambient_gap(card) == es.AMBIENT_TARGET - 1
+
+
 def test_a_card_whose_pictures_were_never_examined_says_nothing():
     """Ключа images нет — сказать «кадров мало» не о чем: это не ноль кадров."""
     assert es.ambient_gap({"services": ["Заміна екрана"]}) == 0
@@ -333,15 +342,16 @@ async def test_images_are_staged_under_the_lead_prefix(site_lead, scraped, r2):
                for item in data["images"].values())
 
 
-async def test_a_site_with_one_pool_frame_is_asked_for_ambient(site_lead,
-                                                               scraped, r2):
-    """Фон и портрет пулу не достаются: свободный кадр один, и это видно."""
+async def test_a_site_without_a_single_free_frame_is_asked_for_ambient(site_lead,
+                                                                       scraped,
+                                                                       r2):
+    """Фон, портрет и снимок товара пулу не достаются — свободных кадров ноль."""
     lead = await site_lead()
     scraped(result())
 
     got = await es.enrich_from_site(lead.id)
 
-    assert got.ambient_need == es.AMBIENT_TARGET - 1
+    assert got.ambient_need == es.AMBIENT_TARGET
     # ниша лида — стоматология, и промпт говорит именно про её помещение
     assert "кабинет" in got.ambient_brief and es.AMBIENT_RULE in got.ambient_brief
 
@@ -1154,7 +1164,21 @@ def test_the_report_asks_for_the_frames_it_lacks_and_says_what_to_draw():
 
     assert "Нужно 2 амбиент-кадра, промпт:" in text
     assert "кресло у зеркала" in text
-    assert "python -m ambient_stage 417" in text
+    # команд столько, сколько кадров не хватает, и роль у каждой своя
+    assert text.count("python -m ambient_stage 417") == 2
+    assert "--role ambient-1" in text and "--role ambient-2" in text
+
+
+def test_the_report_does_not_send_the_worker_over_a_frame_already_staged():
+    """ambient-1 уже лежит: PUT идёт по имени роли, и повтор стёр бы этот кадр."""
+    from handlers_admin import enrich_report
+
+    text = enrich_report(es.EnrichResult(
+        ok=True, lead_id=417, pages=1, ambient=["hero_bg", "ambient-1"],
+        ambient_need=2, ambient_brief=es.ambient_brief("Салон красоты")))
+
+    assert "--role ambient-1" not in text
+    assert "--role ambient-2" in text and "--role ambient-3" in text
 
 
 def test_a_report_about_a_page_with_enough_frames_asks_for_nothing():

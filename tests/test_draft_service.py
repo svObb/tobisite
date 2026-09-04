@@ -5,6 +5,7 @@
 превью проверяется в test_preview_publish.py.
 """
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -499,6 +500,47 @@ def test_the_stamp_holds_every_version_that_shapes_the_page():
                                         "recipe": 2}) != fresh
     # так выглядела колонка до отпечатка: одна версия пресетов и ничего больше
     assert fresh != "5"
+
+
+def stamped(recipe_id="generic_light", **versions) -> SimpleNamespace:
+    """Черновик, собранный на сегодняшних версиях, — с точечной подменой одной."""
+    current = {"library": render.load_tokens()["version"],
+               "engine": render.ENGINE_VERSION,
+               "recipe": draft_service._recipe_version(recipe_id)}
+    return SimpleNamespace(recipe_id=recipe_id,
+                           library_version=draft_service.version_stamp(
+                               current | versions))
+
+
+def test_a_draft_built_on_todays_versions_publishes_as_it_is():
+    assert draft_service._stale_library(stamped()) == ""
+
+
+def test_any_of_the_three_versions_moving_holds_the_publish():
+    """Пресеты, движок и рецепт решают состав страницы — каждый по отдельности."""
+    for key in ("library", "engine", "recipe"):
+        reason = draft_service._stale_library(stamped(**{key: 999}))
+        assert "пересоберите черновик" in reason, key
+    # так выглядела колонка до отпечатка: одна версия пресетов и ничего больше
+    old = SimpleNamespace(recipe_id="generic_light", library_version="5")
+    assert draft_service._stale_library(old)
+
+
+def test_a_draft_whose_recipe_is_gone_never_publishes():
+    """Рецепта нет — версии сборки нет: страницу пересоберут на том, что есть."""
+    assert draft_service._recipe_version("recipe_that_left_the_library") is None
+    assert draft_service._recipe_version(None) is None
+    assert draft_service._recipe_version("") is None
+
+    gone = stamped("recipe_that_left_the_library")
+    assert "пересоберите черновик" in draft_service._stale_library(gone)
+
+
+def test_the_version_of_a_recipe_is_read_from_the_recipe_itself():
+    version = draft_service._recipe_version("generic_light")
+    assert version == render.load_recipe("generic_light")["version"]
+    assert draft_service.version_stamp({
+        "library": 5, "engine": 3, "recipe": version}) == f"5/3/{version}"
 
 
 def test_every_section_of_the_library_has_a_summary():
