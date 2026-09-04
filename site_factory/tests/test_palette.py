@@ -5,16 +5,18 @@
 с проваленным контрастом) быть не может, поэтому проверяется именно «или-или».
 """
 import colorsys
+import re
 
 import pytest
 
 from site_factory.engine.checks import a11y
-from site_factory.engine.color import chroma, lightness, luminance, ratio, srgb
+from site_factory.engine.color import (chroma, lightness, luminance, mix_oklab,
+                                       ratio, srgb, to_hex)
 from site_factory.engine.palette import (CHROMA_CAPPED, HK_CHROMA, LIGHT_ZONE,
                                          LIGHT_ZONE_CHROMA, MAX_CHROMA,
                                          MIN_CHROMA, brand_color, brand_palette,
                                          cap_chroma, readable)
-from site_factory.engine.render import load_tokens
+from site_factory.engine.render import ROOT, load_tokens
 
 # Двадцать цветов по кругу оттенков плюс серые: так выглядит то, что реально
 # приезжает из чужих логотипов — от кричащего фирменного до чёрно-белого.
@@ -182,3 +184,50 @@ def test_preset_palettes_are_their_own_fixed_point():
         if source == "brand":
             assert palette["accent"] == cap_chroma(accent)
             assert a11y.contrast_problems(palette) == []
+
+
+# --- шапка поверх чужого кадра ------------------------------------------------
+
+# Плотность подложки .header-overlay и доля бумаги в её приглушённом тоне —
+# числа из css/source.css. Читаются оттуда же, чтобы правка стиля падала здесь,
+# а не на первом экране лида.
+OVERLAY_SCRIM = re.compile(
+    r"\.header-overlay\s*\{.*?--color-muted:\s*color-mix\(in oklab, "
+    r"var\(--paper\) (\d+)%.*?var\(--ink\) (\d+)%, transparent\)", re.S)
+
+# Кадр лида непредсказуем: под подложкой может оказаться и белая стена, и
+# ночная витрина, и ровный полутон.
+ANY_FRAME = ((1.0, 1.0, 1.0), (0.0, 0.0, 0.0), (0.5, 0.5, 0.5))
+
+
+def overlay_mixes() -> tuple[float, float]:
+    source = (ROOT / "css" / "source.css").read_text(encoding="utf-8")
+    muted, density = OVERLAY_SCRIM.search(source).groups()
+    return int(muted) / 100, int(density) / 100
+
+
+@pytest.mark.parametrize("preset_id", sorted(PALETTES))
+def test_the_header_over_a_photo_stays_readable_on_any_frame(preset_id):
+    """Обещание комментария в source.css: буквы шапки держат AA на любом кадре.
+
+    checks/a11y.py этого не считает — он берёт сплошные пары палитры, а тут
+    полупрозрачная подложка поверх чужого снимка. Считаем здесь, той же
+    колор-математикой, которой браузер считает color-mix.
+    """
+    paper_mix, density = overlay_mixes()
+    ink, paper = srgb(PALETTES[preset_id]["ink"]), srgb(PALETTES[preset_id]["paper"])
+    muted = mix_oklab(paper, ink, paper_mix)
+
+    for frame in ANY_FRAME:
+        ground = mix_oklab(ink, frame, density)
+        assert ratio(paper, ground) >= a11y.AA_TEXT, preset_id
+        assert ratio(muted, ground) >= a11y.AA_TEXT, preset_id
+
+
+def test_the_menu_of_the_overlay_header_still_changes_colour_on_hover():
+    """hover ведёт из --color-muted в --color-ink: цвета обязаны быть разными."""
+    paper_mix, _ = overlay_mixes()
+    assert paper_mix < 1.0
+    for palette in PALETTES.values():
+        ink, paper = srgb(palette["ink"]), srgb(palette["paper"])
+        assert to_hex(mix_oklab(paper, ink, paper_mix)) != to_hex(paper)

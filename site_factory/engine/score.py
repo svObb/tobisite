@@ -8,9 +8,10 @@ novelty штрафует варианты из последних 30 черно�
 Слагаемые считаются так:
 
 * **data_fit** — доля выполненных условий `prefers` контракта, 0..1. Признак,
-  которого мы не знаем, условие не выполняет (то же правило, что в гейтах).
-  У варианта без `prefers` data_fit = 0: подходящесть надо заявить, она не
-  выдаётся по умолчанию.
+  которого мы не знаем, условие не выполняет (то же правило, что в гейтах), и
+  считается он тем же gates.feature_for: вариант с image_pool видит пул по
+  остатку страницы и в гейте, и здесь. У варианта без `prefers` data_fit = 0:
+  подходящесть надо заявить, она не выдаётся по умолчанию.
 * **niche_affinity** — вес варианта в рецепте, 0..1. Порядок downgrade_ladder
   и убывание этих весов рецепт обязан держать согласованными: гейт снимает
   верхнюю ступень, вес поднимает следующую.
@@ -29,7 +30,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from .gates import satisfies
+from .gates import feature_for, satisfies
 from .profile import Profile
 
 WEIGHT_DATA_FIT = 3
@@ -61,9 +62,9 @@ class Score:
 
 
 def score(contract: dict, profile: Profile, recipe: dict,
-          recent_variants=()) -> Score:
+          recent_variants=(), taken=()) -> Score:
     variant = contract["id"]
-    data_fit = _data_fit(contract, profile)
+    data_fit = _data_fit(contract, profile, taken)
     affinity = float((recipe.get("niche_affinity") or {}).get(variant, 0.0))
     novelty = 0.0 if variant in recent_variants else 1.0
     perf_cost = _perf_cost(contract)
@@ -83,13 +84,13 @@ def choose(scores, rng: random.Random) -> Score:
     return tied[0] if len(tied) == 1 else rng.choice(tied)
 
 
-def _data_fit(contract: dict, profile: Profile) -> float:
+def _data_fit(contract: dict, profile: Profile, taken=()) -> float:
     prefers = contract.get("prefers") or {}
     if not prefers:
         return 0.0
     hits = 0
     for name, condition in prefers.items():
-        feature = profile.feature(name)
+        feature = feature_for(name, contract, profile, taken)
         if feature.known and satisfies(condition, feature):
             hits += 1
     return hits / len(prefers)

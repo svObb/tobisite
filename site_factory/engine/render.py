@@ -245,34 +245,55 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
     }
 
 
+def first_screen(sections):
+    """Секция первого экрана: первая после шапки. None — секций нет вовсе.
+
+    Роль header в порядке страницы идёт первой и первым экраном не бывает: она
+    полоса над содержимым или лежит на нём, но собственного кадра не несёт.
+    """
+    return next((section for section in sections if section["role"] != "header"),
+                None)
+
+
 def header_overlay(sections) -> bool:
     """Ложится ли шапка на первую секцию вместо того, чтобы стоять над ней.
 
     Просит об этом сама секция — ключом header: overlay своего контракта, — и
     просят только те первые экраны, у которых кадр идёт во всю ширину: тогда
-    фотография начинается от кромки окна, а не под полосой шапки. Роль header
-    в порядке страницы идёт первой, поэтому «первая секция» здесь — первая
-    после неё.
+    фотография начинается от кромки окна, а не под полосой шапки.
     """
-    body = [section for section in sections if section["role"] != "header"]
-    return bool(body) and (body[0].get("contract") or {}).get("header") == OVERLAY
+    first = first_screen(sections)
+    return first is not None and (first.get("contract") or {}).get("header") == OVERLAY
 
 
 def preload_for(sections) -> list[str]:
     """Картинки, за которыми браузер обязан пойти до разбора CSS.
 
-    Фоновое фото первого экрана — LCP-элемент страницы, но <img> внутри секции
-    браузер находит только после stylesheet, и запрос уходит на треть времени
-    LCP позже, чем мог бы. Список собирается из тех секций, что реально попали
-    на страницу: секция без ключа preload_images не кладёт в него ничего.
+    Кадр первого экрана — LCP-элемент страницы, но <img> внутри секции браузер
+    забирает только после stylesheet, и запрос уходит на треть времени LCP
+    позже, чем мог бы. Ниже первого экрана preload вреден: он отнимает канал у
+    того, что видно сразу, — поэтому список читается ровно с одной секции.
+
+    Кадр называет либо контракт (preload_images: [hero_bg] — именованная
+    картинка белого списка), либо сам первый экран числом: preload_pool: N —
+    это «первые N моих пуловых кадров стоят на первом экране». Имя пулового
+    кадра в контракте не написать, его раздаёт курсор пула в рантайме
+    (engine/photos), поэтому имена берутся из уже распределённых картинок
+    секции — в том же порядке, в каком их получит шаблон.
     """
+    first = first_screen(sections)
+    if first is None:
+        return []
+    contract = first.get("contract") or {}
+    images = first.get("images") or {}
+    names = list(contract.get("preload_images") or [])
+    names += list(images)[:int(contract.get("preload_pool") or 0)]
+
     sources: list[str] = []
-    for section in sections:
-        names = (section.get("contract") or {}).get("preload_images") or []
-        for name in names:
-            image = (section.get("images") or {}).get(name)
-            if image and image["src"] not in sources:
-                sources.append(image["src"])
+    for name in names:
+        image = images.get(name)
+        if image and image["src"] not in sources:
+            sources.append(image["src"])
     return sources
 
 

@@ -313,21 +313,24 @@ PARALLAX = OVERLAY_HEROES + ("gallery_statement.html.j2",)
 def site_for(sections: list) -> dict:
     """site.scripts — готовые адреса: их подставляет base/head.j2 как есть.
 
-    Контрактов у здешних секций нет, поэтому и preload фона, и шапка-оверлей
-    собираются по самим шаблонам: страницы смоука обязаны выглядеть так же,
-    как страницы движка.
+    Контрактов у здешних секций нет, поэтому и preload кадров, и шапка-оверлей
+    собираются по шаблонам и картинкам первого экрана: страницы смоука обязаны
+    выглядеть так же, как страницы движка.
     """
     names = list(BASE_SCRIPTS)
     if any(s["template"].endswith(PARALLAX) for s in sections):
         names.append("parallax")
+    first = next((s for s in sections if s["role"] != "header"), None)
     return {
         "lang": "uk",
         "title": "Адвокатське бюро «Фікстура» — Київ",
         "description": "Фікстура для смоук-рендера site_factory.",
         "assets_base": ASSETS_BASE,
         "scripts": [f"{ASSETS_BASE}/{name}.js" for name in names],
-        "preload_images": [s["images"]["hero_bg"]["src"] for s in sections
-                           if "hero_bg" in s["images"]],
+        # preload читается с первого экрана и только с него, как в движке:
+        # именованный hero_bg или кадры пула, если экран собран из них.
+        "preload_images": [image["src"] for image
+                           in (first or {"images": {}})["images"].values()],
         "header_overlay": any(s["template"].endswith(OVERLAY_HEROES)
                               for s in sections),
         "ui": {"skip_to_content": "Перейти до вмісту",

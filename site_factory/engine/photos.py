@@ -87,6 +87,17 @@ def _take(contract: dict, free: int) -> int:
     return max(min(free - leave, ceiling), floor(contract))
 
 
+def strictest_min_width(library: dict) -> int:
+    """Самый строгий pool_min_width библиотеки: уже него кадр не берёт никто.
+
+    Публичная, потому что вне движка есть ровно один вопрос к пулу — годится
+    ли кадр, который человек кладёт в стейджинг руками (bot/ambient_stage).
+    Ответ на него обязан считаться по контрактам, а не второй копией числа.
+    """
+    return max((int(contract.get("pool_min_width") or 0)
+                for contract in library.values()), default=0)
+
+
 def claimed(section: dict) -> set[str]:
     """Кадры пула, которые секция забрала со страницы.
 

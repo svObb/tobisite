@@ -272,9 +272,24 @@
      text-muted и text-accent-ink считают цвет из этих переменных, и подменять
      их по одной значило бы вести второй набор классов для каждой шапки.
 
+     Пункт меню и в оверлее ходит из приглушённого в основной: --color-muted
+     подмешан к чернилам, --color-ink остаётся чистой бумагой, и hover в
+     header_nav.j2 работает тем же переходом, что и в обычной шапке. Доля
+     здесь своя, не зеркальные 72% страничного --color-muted: тот лежит на
+     сплошной бумаге, а этот — на полупрозрачной подложке поверх чужого кадра,
+     и на 72% худший пресет даёт 4,0:1.
+
      Контраст держит не фотография — какой она окажется, мы не знаем, — а
-     градиент ink сверху: пара «бумага по чернилам» проверена в
-     checks/a11y.py, а плотность взята от .scrim, у которого та же работа.
+     подложка ink под буквами. checks/a11y.py её не считает: он берёт сплошные
+     пары палитры, а тут полупрозрачный слой поверх снимка. Плотность выбрана
+     по худшему кадру и равна плотности .scrim, у которого та же работа;
+     обе доли сверяет тест-заслон в tests/test_palette.py — он и держит
+     обещание про AA.
+
+     Буквы шапки стоят по всей её высоте (items-center, py-4), поэтому
+     подложка держит полную плотность до нижней кромки блока, а сходит на нет
+     уже под ним — фон нарочно выше шапки на длину растушёвки. Градиент,
+     слабеющий сверху вниз, ставил бы буквы на прозрачное место.
 
      Прокрутили первый экран — шапка возвращается сплошной полосой чернил и
      садится сверху. Состояние ставит /assets/preview.js по сентинелу под
@@ -285,16 +300,21 @@
     inset-inline: 0;
     top: 0;
     z-index: var(--z-header);
+    --header-scrim-fade: 3rem;
     --color-ink: var(--paper);
-    --color-muted: var(--paper);
+    --color-muted: color-mix(in oklab, var(--paper) 80%, var(--ink));
     --color-accent-ink: var(--paper);
     --color-line: color-mix(in oklab, var(--paper) 45%, transparent);
     color: var(--paper);
     background-image: linear-gradient(
       to bottom,
-      color-mix(in oklab, var(--ink) 78%, transparent),
+      color-mix(in oklab, var(--ink) 84%, transparent),
+      color-mix(in oklab, var(--ink) 84%, transparent)
+        calc(100% - var(--header-scrim-fade)),
       transparent
     );
+    background-repeat: no-repeat;
+    background-size: 100% calc(100% + var(--header-scrim-fade));
   }
 
   [data-header-stuck="on"] .header-overlay {

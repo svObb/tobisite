@@ -5,22 +5,20 @@
 """
 import re
 
-import yaml
-
 from site_factory.engine import slots
 from site_factory.engine.checks import run_all
 from site_factory.engine.compose import CONTRAST_ROLES, compose, link_sections
 from site_factory.engine.naming import split_product_name
 from site_factory.engine.palette import contrast_tones
-from site_factory.engine.profile import (CAROUSEL_CAP, CAROUSEL_MIN, GRID_CAP,
-                                         GRID_MIN, Profile)
+from site_factory.engine.profile import Profile
 from site_factory.engine.render import (ROOT, environment, load_library,
                                         load_recipe, load_tokens, palette_for,
                                         recipe_id_for, render, resolve_preset,
                                         seed_for)
 
 from . import smoke_render
-from .conftest import BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH, PRODUCTS
+from .conftest import (BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH,
+                       PRODUCTS, shop_with_pool, shop_without_hero)
 
 # Название из настоящего прайса запчастей: имя товара, артикулы в скобках и
 # пометка состояния — три разных сообщения в одной строке.
@@ -187,11 +185,12 @@ def test_the_gallery_shows_only_the_photos_no_product_took():
     assert len(used) == len(set(used))
 
 
-def test_a_single_product_photo_does_not_cost_the_gallery_its_frames():
-    """Товар с картинкой один: сетке до гейта далеко — снимок остаётся галерее.
+def test_a_single_product_photo_stays_out_of_the_pool_anyway():
+    """Товар с картинкой один: витрины на странице не будет, но кадр занят.
 
-    Резерв под витрину, посчитанный по всем товарам с картинкой, отнимал у
-    галереи снимок, которого страница потом не показывала нигде.
+    Пул беспредметный: снимок товара, дошедший до gallery_statement или до
+    первого экрана, уезжает предметной съёмкой во всю ширину. Порог товарной
+    секции этого не отменяет — и раньше отменял.
     """
     products = [dict(PRODUCTS[0], image=GALLERY["photo-2"])]
     products += [{key: value for key, value in item.items() if key != "image"}
@@ -199,11 +198,39 @@ def test_a_single_product_photo_does_not_cost_the_gallery_its_frames():
     profile = Profile.from_dict(dict(BRAND_SHOP, products=products))
     html, trace = render(profile)
 
-    assert profile.feature("product_image_names").value == frozenset()
+    assert profile.feature("product_image_names").value == {"photo-2"}
+    assert profile.free_photos() == ["photo-3", "photo-4"]
     assert "products_list" in trace["sections"]
-    assert "gallery_collage" in trace["sections"]
-    assert images_of(section_html(html, "gallery")) == \
-        ["/img/photo-2.webp", "/img/photo-3.webp", "/img/photo-4.webp"]
+    assert "/img/photo-2.webp" not in images_of(html)
+
+
+def test_a_product_photo_is_taken_even_when_the_shop_window_falls_apart():
+    """Названий у товаров нет — витрина выбывает на слотах, кадры не свободны.
+
+    Гейт по products_with_images витрина проходит, а slots.build отсеивает её
+    за пустыми названиями: роли products на странице нет вовсе. Снимки товаров
+    от этого не становятся атмосферными кадрами.
+    """
+    products = [{"name": "", "image": GALLERY[name]}
+                for name in ("photo-2", "photo-3", "photo-4")]
+    profile = Profile.from_dict(dict(BRAND_SHOP, products=products))
+    _, trace = render(profile)
+
+    assert profile.feature("products_with_images").value == 3
+    assert not [variant for variant in trace["sections"]
+                if variant.startswith("product")]
+    assert profile.free_photos() == []
+
+
+def test_a_lead_whose_products_were_never_asked_about_keeps_every_frame():
+    """Товары не спрашивали — товарной съёмки нет, и весь пул свободен."""
+    images = {name: image for name, image in BRAND_SHOP["images"].items()}
+    profile = Profile.from_dict(
+        {key: value for key, value in dict(BRAND_SHOP, images=images).items()
+         if key != "products"})
+
+    assert not profile.feature("product_image_names").known
+    assert profile.free_photos() == ["photo-2", "photo-3", "photo-4"]
 
 
 def test_two_frames_go_to_the_statement_and_the_about_block():
@@ -212,7 +239,7 @@ def test_two_frames_go_to_the_statement_and_the_about_block():
     Кадров на кладку не набралось — единственный широкий снимок работает фоном
     заявления, второй уходит блоку «о компании», и оба видны по одному разу.
     """
-    profile = _shop_with_pool((1200, 1600))
+    profile = shop_with_pool((1200, 1600))
     html, trace = render(profile)
 
     assert trace["sections"].count("gallery_statement") == 1
@@ -226,7 +253,7 @@ def test_two_frames_go_to_the_statement_and_the_about_block():
 
 def test_the_collage_leaves_a_frame_to_the_about_block():
     """Кладка тянется до пяти кадров, но кадр блоку «о компании» оставляет."""
-    profile = _shop_with_pool((1200,) * 5)
+    profile = shop_with_pool((1200,) * 5)
     html, trace = render(profile)
 
     assert "gallery_collage" in trace["sections"]
@@ -237,7 +264,7 @@ def test_the_collage_leaves_a_frame_to_the_about_block():
 
 def test_three_frames_stay_with_the_collage_whole():
     """Порог кладки сильнее вежливости: на трёх кадрах отдавать нечего."""
-    profile = _shop_with_pool((1200,) * 3)
+    profile = shop_with_pool((1200,) * 3)
     html, trace = render(profile)
 
     assert "gallery_collage" in trace["sections"]
@@ -251,7 +278,7 @@ def test_narrow_frames_never_become_a_full_width_background():
     Кладке ширина безразлична — она режет кадр тайлом, а не растягивает его на
     экран, — поэтому узкие снимки уходят ей, а не заявлению.
     """
-    wide, narrow = _shop_with_pool((1200, 1200)), _shop_with_pool((800, 800))
+    wide, narrow = shop_with_pool((1200, 1200)), shop_with_pool((800, 800))
 
     assert "gallery_statement" in render(wide)[1]["sections"]
     assert not [variant for variant in render(narrow)[1]["sections"]
@@ -266,7 +293,7 @@ def test_the_split_hero_takes_two_frames_and_the_page_gets_the_rest():
     полотна важнее полосы ниже. Остаток достаётся секциям под ними, и ни один
     кадр не выходит на страницу дважды.
     """
-    profile = _shop_without_a_named_hero((1600, 1400, 1200, 1000))
+    profile = shop_without_hero((1600, 1400, 1200, 1000))
     html, trace = render(profile)
 
     assert "hero_split_2" in trace["sections"]
@@ -279,13 +306,25 @@ def test_the_split_hero_takes_two_frames_and_the_page_gets_the_rest():
     assert len(used) == len(set(used))
 
 
+def test_the_header_lies_on_the_two_frames_of_the_split_hero():
+    """Первый экран из пула просит шапку тем же ключом, что и фон из белого списка."""
+    profile = shop_without_hero((1600, 1400, 1200, 1000))
+    html, trace = render(profile)
+    header = section_html(html, "header")
+
+    assert trace["sections"][1] == "hero_split_2"
+    assert "header-overlay" in header
+    assert "bg-paper" not in header
+    assert "data-header-sentinel" in html
+
+
 def test_the_split_hero_needs_two_frames_wide_enough():
-    """Полотно занимает половину экрана: снимок шестисот точек на нём — мыло.
+    """Полотно идёт во всю ширину окна до lg: снимок 800px на нём — мыло.
 
     Кладке ширина безразлична — она режет кадр тайлом, — поэтому узкие снимки
     достаются ей, а первый экран честно спускается на ступень ниже.
     """
-    profile = _shop_without_a_named_hero((600,) * 4)
+    profile = shop_without_hero((800,) * 4)
     _, trace = render(profile)
 
     assert "hero_split_2" not in trace["sections"]
@@ -293,9 +332,16 @@ def test_the_split_hero_needs_two_frames_wide_enough():
     assert "gallery_collage" in trace["sections"]
 
 
+def test_the_split_hero_holds_the_same_floor_as_the_full_width_statement():
+    """Оба кадра идут от кромки до кромки — и порог ширины у них общий."""
+    library = load_library()
+    assert library["hero_split_2"]["pool_min_width"] == \
+        library["gallery_statement"]["pool_min_width"]
+
+
 def test_the_statement_says_one_thing_over_the_frame(brand_shop):
     """Заявление — одна фраза поверх кадра: ни подписи снимку, ни второй строки."""
-    profile = _shop_with_pool((1600,))
+    profile = shop_with_pool((1600,))
     html, trace = render(profile)
     gallery = section_html(html, "gallery")
 
@@ -314,7 +360,7 @@ def test_the_facts_card_leans_over_the_photo_and_keeps_its_own_ground():
     кадра, но текст в ней стоит на непрозрачной подложке — той же, что у любой
     другой карточки страницы, — и все автопроверки черновика остаются пустыми.
     """
-    profile = _shop_with_pool((1200, 1600))
+    profile = shop_with_pool((1200, 1600))
     html, _ = render(profile)
     card = re.search(r"<dl[^>]+>", section_html(html, "about")).group(0)
 
@@ -344,7 +390,7 @@ def test_the_carousel_takes_the_shelf_the_grid_can_no_longer_hold():
     assert "products_grid" not in trace["sections"]
     assert images_of(section_html(html, "products")) == \
         [f"/img/photo-{number}.webp" for number in range(2, 10)]
-    # резерв ленты шире витринного: снимки товаров галерее не достаются
+    # снимки товаров пулу не достаются, остальные достаются целиком
     assert profile.free_photos() == ["photo-10", "photo-11"]
 
 
@@ -364,22 +410,6 @@ def test_the_carousel_scrolls_without_a_line_of_script():
     assert 'tabindex="0"' in products
     assert 'aria-labelledby="products-title"' in products
     assert "onclick" not in products
-
-
-def test_the_photo_reserve_mirrors_the_product_contracts():
-    """Заслон: константы резерва — копия контрактов витрины и ленты."""
-    assert _product_bounds("products_grid") == (GRID_MIN, GRID_CAP)
-    assert _product_bounds("product_carousel") == (CAROUSEL_MIN, CAROUSEL_CAP)
-
-
-def _product_bounds(variant: str) -> tuple[int, int]:
-    """Порог и потолок товарного контракта: (requires снизу, repeat сверху)."""
-    contract = yaml.safe_load(
-        (ROOT / "sections" / "products" / f"{variant}.yaml").read_text("utf-8"))
-    repeat = next(slot["repeat"] for slot in contract["slots"]
-                  if slot["name"] == "product_name")
-    requires = str(contract["requires"]["products_with_images"]).lstrip(">=")
-    return int(requires.partition("..")[0]), int(repeat.partition("..")[2])
 
 
 def test_hours_become_a_table(brand_shop):
@@ -671,29 +701,6 @@ def test_smoke_pages_render_on_every_preset():
                                  facts=smoke_render.FACTS, sections=sections)
             assert "{{" not in html and "{%" not in html, preset["id"] + suffix
             assert html.count("<h1") == 1, preset["id"] + suffix
-
-
-def _shop_with_pool(widths):
-    """brand_shop, у которого свободных снимков ровно столько и такой ширины.
-
-    Именованные кадры остаются только logo и hero_bg: portrait и map в пул не
-    входят, и держать их здесь значило бы проверять не то, что проверяется.
-    """
-    photos = {f"photo-{2 + index}": {"src": f"/img/photo-{2 + index}.webp",
-                                     "width": width,
-                                     "height": width * 3 // 4}
-              for index, width in enumerate(widths)}
-    named = {name: image for name, image in BRAND_SHOP["images"].items()
-             if name in ("logo", "hero_bg")}
-    return Profile.from_dict(dict(BRAND_SHOP, images=named | photos))
-
-
-def _shop_without_a_named_hero(widths):
-    """То же, но без hero_bg: кадр под первый экран приходится брать из пула."""
-    profile = _shop_with_pool(widths)
-    images = {name: image for name, image in profile.images.value.items()
-              if name != "hero_bg"}
-    return Profile.from_dict(dict(BRAND_SHOP, images=images))
 
 
 def _shop_with_product_photos(names, pool=5):

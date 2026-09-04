@@ -231,6 +231,35 @@ def bundle_built():
                     "python tools/fetch_fonts.py && python tools/build_css.py")
 
 
+def shop_with_pool(widths):
+    """brand_shop, у которого свободных снимков ровно столько и такой ширины.
+
+    Именованные кадры остаются только logo и hero_bg: portrait и map в пул не
+    входят, и держать их здесь значило бы проверять не то, что проверяется.
+    """
+    photos = {f"photo-{2 + index}": {"src": f"/img/photo-{2 + index}.webp",
+                                     "width": width,
+                                     "height": width * 3 // 4}
+              for index, width in enumerate(widths)}
+    named = {name: image for name, image in BRAND_SHOP["images"].items()
+             if name in ("logo", "hero_bg")}
+    return Profile.from_dict(dict(BRAND_SHOP, images=named | photos))
+
+
+def shop_without_hero(widths):
+    """То же, но без hero_bg: кадр под первый экран приходится брать из пула."""
+    profile = shop_with_pool(widths)
+    images = {name: image for name, image in profile.images.value.items()
+              if name != "hero_bg"}
+    return Profile.from_dict(dict(BRAND_SHOP, images=images))
+
+
+@pytest.fixture
+def shop_without_a_named_hero():
+    """Лид под hero_split_2: четыре широких кадра и ни одного именованного фона."""
+    return shop_without_hero((1600, 1400, 1200, 1000))
+
+
 @pytest.fixture(params=sorted(FIXTURES))
 def any_profile(request):
     return Profile.from_dict(FIXTURES[request.param])

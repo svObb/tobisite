@@ -92,7 +92,7 @@ def check(contract: dict, profile: Profile, taken=()) -> Verdict:
     """
     reasons: list[Reason] = []
     for name, condition in (contract.get("requires") or {}).items():
-        feature = _feature(name, contract, profile, taken)
+        feature = feature_for(name, contract, profile, taken)
         if not feature.known:
             reasons.append(Reason(name, UNKNOWN_FIELD,
                                   f"{name} неизвестен, требуется {condition!r}"))
@@ -103,8 +103,12 @@ def check(contract: dict, profile: Profile, taken=()) -> Verdict:
     return Verdict(not reasons, tuple(reasons))
 
 
-def _feature(name: str, contract: dict, profile: Profile, taken) -> Feature:
-    """Признак профиля глазами варианта: пул он видит по остатку страницы."""
+def feature_for(name: str, contract: dict, profile: Profile, taken=()) -> Feature:
+    """Признак профиля глазами варианта: пул он видит по остатку страницы.
+
+    Публичная, потому что тем же признаком считает score.py: у гейта и у
+    скоринга одно и то же поле обязано значить одно и то же (profile.py).
+    """
     if name != POOL_COUNT or not photos.uses_pool(contract):
         return profile.feature(name)
     if not profile.images.known:

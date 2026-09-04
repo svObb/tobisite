@@ -261,6 +261,38 @@ def test_a_page_without_a_background_photo_preloads_no_image(lawyer_rich):
     assert 'rel="preload" as="image"' not in html
 
 
+def test_the_frames_of_the_split_hero_are_preloaded_too(shop_without_a_named_hero):
+    """Кадр первого экрана из пула — тот же LCP: имени в контракте у него нет.
+
+    Контракт объявляет число кадров, а имена (photo-N) раздаёт курсор пула уже
+    в рантайме — их и подставляет preload_for.
+    """
+    html, trace = render(shop_without_a_named_hero)
+    preloads = re.findall(r'<link rel="preload" as="image"[^>]*>', html)
+
+    assert trace["sections"][1] == "hero_split_2"
+    assert [re.search(r'href="([^"]+)"', tag).group(1) for tag in preloads] == \
+        ["/img/photo-2.webp", "/img/photo-3.webp"]
+    # high достаётся LCP-кадру, второе полотно идёт обычной очередью
+    assert 'fetchpriority="high"' in preloads[0]
+    assert "fetchpriority" not in preloads[1]
+    assert html.index(preloads[-1]) < html.index('<link rel="stylesheet"')
+
+
+def test_sections_below_the_first_screen_ask_for_no_preload(
+        shop_without_a_named_hero):
+    """Заявление галереи тоже кадр во всю ширину, но оно ниже сгиба.
+
+    preload там отнял бы канал у того, что видно сразу, поэтому список читается
+    ровно с первого экрана — и кадр галереи в него не попадает.
+    """
+    html, trace = render(shop_without_a_named_hero)
+
+    assert "gallery_statement" in trace["sections"]
+    assert '/img/photo-4.webp" fetchpriority' not in html
+    assert html.count('rel="preload" as="image"') == 2
+
+
 def test_derived_features_read_the_new_enrichment(brand_shop):
     """Производные, на которых стоят полоса галереи и proof: имена и рейтинг."""
     photos = Profile.from_dict(dict(

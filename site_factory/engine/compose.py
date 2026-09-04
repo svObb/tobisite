@@ -32,7 +32,8 @@ needs_enrichment со списком недостающего, а не крив�
 Тем же порядком ролей задан приоритет на фотографии: пул беспредметных
 снимков один на страницу, и курсор по нему сквозной (engine/photos). Секция,
 выбывшая позже на пустом тексте модели (apply_free_texts), свои кадры
-обратно не отдаёт — это принятая цена, как и резерв товарной сетки.
+обратно не отдаёт — это принятая цена. Снимки товаров в пул не попадают
+вовсе, и от состава страницы это не зависит (profile.free_photos).
 """
 from __future__ import annotations
 
@@ -175,7 +176,7 @@ def _fill(role: str, profile: Profile, recipe: dict, library: dict,
     if not admitted:
         return None, record
 
-    scores = [score(contract, profile, recipe, recent_variants)
+    scores = [score(contract, profile, recipe, recent_variants, taken_photos)
               for contract, _ in admitted]
     record["candidates"] = [s.as_dict() for s in scores]
     winner = choose(scores, rng)
