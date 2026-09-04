@@ -141,7 +141,7 @@ async def test_broken_bytes_change_nothing(ambient_lead, r2):
 async def test_a_picture_smaller_than_a_background_is_refused(ambient_lead, r2):
     lead = await ambient_lead()
 
-    with pytest.raises(ValueError, match="фон"):
+    with pytest.raises(ValueError, match="не годится"):
         await ambient_stage.stage_ambient(lead.id, png(600, 400))
 
     assert await enrichment_of(lead.id) == {}
@@ -152,18 +152,45 @@ async def test_a_strip_is_not_a_background_either(ambient_lead, r2):
     """Полоска 5:1 шире порога, но пропорции фотографии она не проходит."""
     lead = await ambient_lead()
 
-    with pytest.raises(ValueError, match="фон"):
+    with pytest.raises(ValueError, match="не годится"):
         await ambient_stage.stage_ambient(lead.id, png(2000, 400))
 
     assert r2.objects == {}
 
 
-async def test_only_the_background_role_is_ambient(ambient_lead, r2):
+async def test_a_tall_frame_that_shrinks_below_the_sections_is_refused(
+        ambient_lead, r2):
+    """900px ширины исходником, 300px после пережатия по длинной стороне."""
     lead = await ambient_lead()
 
-    with pytest.raises(ValueError, match="portrait"):
-        await ambient_stage.stage_ambient(lead.id, png(1920, 1080),
-                                          role="portrait")
+    with pytest.raises(ValueError, match="после пережатия"):
+        await ambient_stage.stage_ambient(lead.id, png(900, 3600))
+
+    assert r2.objects == {}
+
+
+async def test_a_frame_of_the_pool_is_staged_under_its_own_name(ambient_lead, r2):
+    """Кадр пула добивает нехватку: hero_bg вне пула, и её он не закрывает."""
+    lead = await ambient_lead()
+
+    await ambient_stage.stage_ambient(lead.id, png(1200, 1500),
+                                      role="ambient-1")
+
+    assert es.image_key(lead.id, "ambient-1.webp") in r2.objects
+    data = await enrichment_of(lead.id)
+    assert data["images"]["ambient-1"]["src"] == "/img/ambient-1.webp"
+    assert data[es.AMBIENT_KEY] == ["ambient-1"]
+    assert es.ambient_gap(data) == es.AMBIENT_TARGET - 1
+
+
+async def test_a_role_of_the_scraper_is_not_ambient(ambient_lead, r2):
+    """Портрет и photo-N раздаёт скрейп: амбиент в эти имена не пишет."""
+    lead = await ambient_lead()
+
+    for role in ("portrait", "photo-2"):
+        with pytest.raises(ValueError, match=role):
+            await ambient_stage.stage_ambient(lead.id, png(1920, 1080),
+                                              role=role)
 
     assert await enrichment_of(lead.id) == {} and r2.objects == {}
 

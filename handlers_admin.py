@@ -1419,6 +1419,7 @@ def enrich_report(result) -> str:
                      f"{esc(', '.join(result.staged))}")
     if result.ambient:
         lines.append(f"Амбиент сохранён: {esc(', '.join(result.ambient))}")
+    lines += _ambient_ask(result)
     if result.images_reason:
         lines.append(f"⚠️ Картинок нет: {esc(result.images_reason)}")
     if result.logo_note:
@@ -1434,6 +1435,31 @@ def enrich_report(result) -> str:
     if result.ai_note:
         lines.append(f"Модель: {esc(result.ai_note)}")
     return "\n".join(lines)
+
+
+def _ambient_ask(result) -> list[str]:
+    """Чего не хватает странице и как это доложить. Пусто — кадров хватает.
+
+    Кадры рисует человек в подписочной сессии генератора: бот считает нехватку
+    и говорит о ней, но сам не рисует ничего и никуда за картинкой не ходит.
+    Поэтому здесь и команда — строку из отчёта видно, а молча появившуюся на
+    превью картинку работник заметил бы только глазами.
+    """
+    if not result.ambient_need:
+        return []
+    return [
+        f"⚠️ Нужно {result.ambient_need} "
+        f"{_frames_word(result.ambient_need)}, промпт: "
+        f"{esc(result.ambient_brief)}",
+        f"Выложить: <code>python -m ambient_stage {result.lead_id} кадр.png "
+        f"--role ambient-1</code>",
+    ]
+
+
+def _frames_word(count: int) -> str:
+    if count == 1:
+        return "амбиент-кадр"
+    return "амбиент-кадра" if count in (2, 3, 4) else "амбиент-кадров"
 
 
 def _enrich_labels(keys, rating: str = "") -> list[str]:

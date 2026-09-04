@@ -250,6 +250,47 @@ def test_a_site_without_a_readable_address_gives_the_card_none():
     assert found_email() is None
 
 
+# --- минимум кадров: чистая функция -------------------------------------------
+
+def frames(*names) -> dict:
+    return {"images": {name: {"src": f"/img/{name}.webp", "width": 1200,
+                              "height": 900} for name in names}}
+
+
+def test_a_card_with_three_free_frames_needs_nothing():
+    assert es.ambient_gap(frames("photo-2", "photo-3", "photo-4")) == 0
+
+
+def test_the_gap_counts_what_the_composer_will_see_not_what_lies_in_the_bucket():
+    """Логотип и именованные роли пулу не достаются — и нехватку не закрывают."""
+    card = frames("logo", "hero_bg", "portrait", "photo-2")
+    assert es.ambient_gap(card) == es.AMBIENT_TARGET - 1
+
+
+def test_frames_taken_by_the_shop_window_do_not_count_as_free():
+    card = frames("photo-2", "photo-3", "photo-4", "photo-5")
+    card["products"] = [{"name": f"Товар {n}",
+                         "image": {"src": f"/img/photo-{n}.webp", "width": 800,
+                                   "height": 800}} for n in (3, 4, 5)]
+    assert es.ambient_gap(card) == es.AMBIENT_TARGET - 1
+
+
+def test_a_card_whose_pictures_were_never_examined_says_nothing():
+    """Ключа images нет — сказать «кадров мало» не о чем: это не ноль кадров."""
+    assert es.ambient_gap({"services": ["Заміна екрана"]}) == 0
+    assert es.ambient_gap({}) == 0
+
+
+def test_the_brief_names_the_niche_and_forbids_what_cannot_be_drawn():
+    brief = es.ambient_brief("Кафе/ресторан")
+    assert "зал" in brief and es.AMBIENT_RULE in brief
+    assert es.AMBIENT_DEFAULT in es.ambient_brief("Ветеринарная клиника")
+
+
+def test_every_niche_of_the_bot_has_a_subject_of_its_own():
+    assert sorted(es.AMBIENT_SUBJECTS) == sorted(config.NICHES)
+
+
 # --- прогон целиком -----------------------------------------------------------
 
 async def test_an_empty_card_gets_everything(site_lead, scraped, r2):
@@ -290,6 +331,34 @@ async def test_images_are_staged_under_the_lead_prefix(site_lead, scraped, r2):
     assert data["photo_count"] == 3 == len(data["images"]) - 1
     assert all(set(item) == {"src", "width", "height"}
                for item in data["images"].values())
+
+
+async def test_a_site_with_one_pool_frame_is_asked_for_ambient(site_lead,
+                                                               scraped, r2):
+    """Фон и портрет пулу не достаются: свободный кадр один, и это видно."""
+    lead = await site_lead()
+    scraped(result())
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.ambient_need == es.AMBIENT_TARGET - 1
+    # ниша лида — стоматология, и промпт говорит именно про её помещение
+    assert "кабинет" in got.ambient_brief and es.AMBIENT_RULE in got.ambient_brief
+
+
+async def test_a_site_with_frames_to_spare_is_asked_for_nothing(site_lead,
+                                                                scraped, r2):
+    urls = [f"{SITE}zal-{n}.jpg" for n in range(4)]
+    lead = await site_lead()
+    scraped(result(products=[], images=[{"url": url, "weight": 30, "og": False,
+                                         "width": 1200, "height": 900}
+                                        for url in urls]),
+            {LOGO_URL: BLOBS[LOGO_URL]} | {url: png(1200, 900) for url in urls})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == ["logo", "photo-2", "photo-3", "photo-4", "portrait"]
+    assert got.ambient_need == 0 and got.ambient_brief == ""
 
 
 async def test_products_point_at_staged_files(site_lead, scraped, r2):
@@ -1073,6 +1142,27 @@ def test_the_report_says_when_the_ambient_was_kept():
                                          ambient=["hero_bg"]))
 
     assert "Амбиент сохранён: hero_bg" in text
+
+
+def test_the_report_asks_for_the_frames_it_lacks_and_says_what_to_draw():
+    """Кадры рисует человек: бот называет число, промпт и команду выкладки."""
+    from handlers_admin import enrich_report
+
+    text = enrich_report(es.EnrichResult(
+        ok=True, lead_id=417, pages=1, staged=["logo", "photo-2"],
+        ambient_need=2, ambient_brief=es.ambient_brief("Салон красоты")))
+
+    assert "Нужно 2 амбиент-кадра, промпт:" in text
+    assert "кресло у зеркала" in text
+    assert "python -m ambient_stage 417" in text
+
+
+def test_a_report_about_a_page_with_enough_frames_asks_for_nothing():
+    from handlers_admin import enrich_report
+
+    text = enrich_report(es.EnrichResult(ok=True, pages=1, staged=["photo-2"]))
+
+    assert "амбиент" not in text.lower()
 
 
 # --- контракты ----------------------------------------------------------------

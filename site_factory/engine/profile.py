@@ -254,9 +254,18 @@ def clean_rating(value) -> dict | None:
 
 
 def _photo_order(name: str) -> tuple:
-    """photo-2, photo-3, …, photo-10 — по числу снимка, а не по алфавиту."""
-    number = name.rpartition("-")[2]
-    return (0, int(number), name) if number.isdigit() else (1, 0, name)
+    """photo-2, photo-3, …, photo-10 — по числу снимка, а не по алфавиту.
+
+    Числовая ветка только для photo-N: номер там раздаёт стейджинг по убыванию
+    размера, и он значит «насколько снимок хорош». У остальных имён цифра на
+    конце ничего такого не значит, и они идут следом — в том числе ambient-N,
+    кадры, дорисованные под нехватку пула. Снимок компании на странице стоит
+    раньше дорисованного, пока он есть.
+    """
+    head, _, number = name.rpartition("-")
+    if head == "photo" and number.isdigit():
+        return (0, int(number), name)
+    return (1, 0, name)
 
 
 def _flag(source: Feature) -> Feature:

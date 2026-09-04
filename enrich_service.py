@@ -27,6 +27,12 @@ ENRICHMENT_FIELDS.
 иначе доложенный руками фон исчезал бы от каждого повторного нажатия. Занял
 скрейп то же имя своим снимком — настоящее фото компании побеждает.
 
+Ещё обогащение считает, хватает ли странице беспредметных кадров: меньше
+AMBIENT_TARGET — отчёт называет, сколько кадров не хватает и что на них
+рисовать. Рисует и выкладывает их человек штатной командой `ambient_stage`; ни
+одного вызова генератора отсюда не уходит, и решение видно работнику строкой,
+а не по факту появившейся картинки.
+
 Картинки живут в бакете под `_enrich/<lead_id>/img/`. Ни диска, ни /tmp:
 файловая система бота read-only, а tmpfs умирает вместе с контейнером.
 Подчёркивание в префиксе не проходит проверку слага в воркере — снаружи этих
@@ -51,6 +57,7 @@ import site_scrape
 from dedup import normalize_email
 from models import Contact, Lead, Session, log_event
 from site_factory.engine import color
+from site_factory.engine.profile import Profile
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +90,42 @@ SCRAPE_KEY = "_scrape"
 # Имена картинок стейджинга, которые положил не скрейп, а амбиент-генерация:
 # ["hero_bg"]. Служебный ключ, в профиль движка не проходит.
 AMBIENT_KEY = "_ambient"
+
+# Сколько беспредметных кадров нужно странице, чтобы фото-секциям движка было
+# из чего собираться: коллаж берёт от трёх, statement, «о компании» и
+# двухполотный первый экран — по одному-два из того же пула. Ниже порога
+# страница соберётся, но с одной фотографией на весь экран прокрутки, и
+# черновик выглядит пустым — а нехватку видно только глазами.
+AMBIENT_TARGET = 3
+# Что рисовать в амбиент-кадре, по нишам бота (config.NICHES). Строки выросли
+# из photo_style дизайн-библиотеки (niche-rules/<slug>.yaml), но сведены к
+# тому, что рисовать вообще можно: помещение, свет, материалы, инструмент.
+# Библиотека лежит в другом репозитории и в образ бота не едет — таблица здесь
+# и есть её след, и обновляется она руками вместе с ней.
+AMBIENT_SUBJECTS = {
+    "Стоматология": "пустой кабинет при включённом свете, стерильные "
+                    "инструменты в лотке, стойка ресепшена",
+    "Автосервис": "бокс с подъёмником без машины, стеллаж с инструментом, "
+                  "рабочая стена мастерской",
+    "Кафе/ресторан": "пустой зал с накрытыми столами, барная стойка, утренний "
+                     "свет из окна",
+    "Юрист": "кабинет с полками книг и переговорным столом, фасад делового "
+             "квартала",
+    "Салон красоты": "пустое кресло у зеркала, полка с инструментом, мягкий "
+                     "свет зала",
+    "Гостиница": "убранный номер, коридор с тёплым светом, вид из окна на "
+                 "территорию",
+    "Строительство": "площадка с материалами и техникой, штабель бруса, фасад "
+                     "в лесах",
+}
+AMBIENT_DEFAULT = ("рабочее помещение компании, его материалы и инструмент при "
+                   "естественном свете")
+# Ограничение общее для всех ниш: нарисованного человека, животное, блюдо или
+# товар на странице клиента не с чем сверить, а выдуманное блюдо в меню кафе —
+# враньё в лицо гостю. Текст в кадре запрещён по той же причине: генератор
+# пишет вывеску с несуществующим названием.
+AMBIENT_RULE = ("без людей, животных, еды и товаров, без текста и логотипов в "
+                "кадре")
 # Что отчёт называет найденным и ненайденным: людскими словами, а не ключами
 # схемы — отчёт читает человек, а производные вроде service_count ему не нужны.
 REPORT_FIELDS = (("services", "услуги"), ("hours", "часы"),
@@ -157,6 +200,11 @@ class EnrichResult:
     logo_note: str = ""
     rating: str = ""
     ambient: list[str] = field(default_factory=list)
+    # Скольких кадров пулу не хватает и что на них рисовать. Генерации здесь
+    # нет: бот считает нехватку и говорит о ней словами, кадры рисует человек
+    # и выкладывает их командой ambient_stage.
+    ambient_need: int = 0
+    ambient_brief: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,6 +257,30 @@ def ambient_names(enrichment: dict) -> list[str]:
             if str(name)]
 
 
+def ambient_gap(enrichment: dict) -> int:
+    """Скольких беспредметных кадров пулу не хватает до AMBIENT_TARGET.
+
+    Считает ровно то, что увидит композитор: свободный кадр — не логотип, не
+    именованная роль и не снимок, занятый витриной (Profile.free_photos).
+    Поэтому фон первого экрана нехватку не закрывает: он вне пула, и секции
+    пула берут кадры мимо него.
+
+    Картинки не смотрели — ключа images в карточке нет, и утверждать «их мало»
+    не о чем: ноль возвращается там же, где скрейп молчит.
+    """
+    card = dict(enrichment or {})
+    if "images" not in card:
+        return 0
+    fields = {key: card[key] for key in ("images", "products") if key in card}
+    pool = Profile.from_dict({"domain_norm": "-", **fields}).free_photos()
+    return max(AMBIENT_TARGET - len(pool), 0)
+
+
+def ambient_brief(niche: str) -> str:
+    """Что рисовать на амбиент-кадре лида этой ниши. Ниша чужая — общее."""
+    return f"{AMBIENT_SUBJECTS.get(niche, AMBIENT_DEFAULT)}; {AMBIENT_RULE}"
+
+
 async def enrich_from_site(lead_id: int, *,
                            actor_tg_id: int = config.ADMIN_TG_ID) -> EnrichResult:
     """Обойти сайт лида и дописать его карточку. Проверка лида не требуется."""
@@ -220,14 +292,16 @@ async def enrich_from_site(lead_id: int, *,
             if lead is None or lead.deleted_at or lead.cancelled_at:
                 return EnrichResult(reason="лид недоступен", lead_id=lead_id)
             url = (lead.website_url or lead.domain_norm or "").strip()
-            country, enrichment = lead.country, dict(lead.enrichment or {})
+            country, niche = lead.country, lead.niche
+            enrichment = dict(lead.enrichment or {})
             types = set(await s.scalars(
                 select(Contact.ctype).where(Contact.lead_id == lead_id,
                                             Contact.deleted_at.is_(None))
             ))
         if not url:
             return EnrichResult(reason="у лида нет сайта", lead_id=lead_id)
-        return await _run(lead_id, url, country, enrichment, types, actor_tg_id)
+        return await _run(lead_id, url, country, niche, enrichment, types,
+                          actor_tg_id)
     finally:
         release_lead(lead_id)
 
@@ -383,7 +457,7 @@ def enrich_line(lead) -> str:
 
 # --- внутреннее ---------------------------------------------------------------
 
-async def _run(lead_id, url, country, enrichment, contact_types,
+async def _run(lead_id, url, country, niche, enrichment, contact_types,
                actor_tg_id) -> EnrichResult:
     region = config.COUNTRY_ISO.get(country) or None
     async with aiohttp.ClientSession(timeout=site_scrape.TIMEOUT) as session:
@@ -426,6 +500,9 @@ async def _run(lead_id, url, country, enrichment, contact_types,
     }
     enriched = dict(merged.enrichment)
     enriched[SCRAPE_KEY] = journal
+    # нехватка считается по слитой карточке, а не по одному скрейпу: кадры,
+    # доложенные руками в прошлый раз, никуда не делись и в счёт идут
+    need = ambient_gap(merged.enrichment)
     if ambient:
         # список амбиента ведёт обогащение: имя, которое скрейп занял своим
         # фото, амбиентом больше не считается
@@ -446,7 +523,8 @@ async def _run(lead_id, url, country, enrichment, contact_types,
         staged=sorted(staged), images_reason=images_reason,
         phone_diff=_phone_diff(scrape, contact_types), ai_note=ai_note,
         logo_note=logo_note, rating=rating_note(merged.enrichment.get("rating")),
-        ambient=survived,
+        ambient=survived, ambient_need=need,
+        ambient_brief=ambient_brief(niche) if need else "",
     )
 
 

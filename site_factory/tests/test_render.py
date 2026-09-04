@@ -279,6 +279,19 @@ def test_derived_features_read_the_new_enrichment(brand_shop):
     assert not Profile.from_dict(LAWYER_RICH).feature("product_image_names").known
 
 
+def test_frames_drawn_to_order_stand_behind_the_photos_of_the_company():
+    """Пул: сперва снимки сайта по номеру, потом амбиент, дорисованный под нехватку."""
+    def frame(name):
+        return {"src": f"/img/{name}.webp", "width": 1200, "height": 900}
+
+    profile = Profile.from_dict(dict(
+        BRAND_SHOP,
+        images={name: frame(name) for name in ("ambient-2", "photo-10",
+                                               "ambient-1", "photo-2")}))
+    assert profile.free_photos() == ["photo-2", "photo-10",
+                                     "ambient-1", "ambient-2"]
+
+
 def test_recent_variants_lower_the_score(lawyer_rich):
     _, plain = render(lawyer_rich)
     _, penalised = render(lawyer_rich, recent_variants=("hero_photo_left",))
