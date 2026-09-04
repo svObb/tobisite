@@ -56,6 +56,33 @@ def test_header_stands_before_the_content(buildable_profile):
     assert html.index('<main id="main">') < html.index("<h1")
 
 
+def test_the_header_lies_on_the_photo_of_the_first_screen(brand_shop):
+    """Первый экран — кадр во всю ширину: он начинается от кромки окна.
+
+    Просит об этом контракт секции, а не шапка: у шапки одна разметка на оба
+    случая, и меняется у неё класс, а не набор цветов в каждом теге.
+    """
+    html, trace = render(brand_shop)
+    header = section_html(html, "header")
+
+    assert trace["sections"][0] == "header_logo"
+    assert "header-overlay" in header
+    assert "bg-paper" not in header
+    assert "data-header-sentinel" in html
+
+
+def test_a_page_that_opens_with_text_keeps_the_header_over_the_content(
+        lawyer_light):
+    """Первый экран без кадра — шапка стоит своей полосой, и сентинела нет."""
+    html, trace = render(lawyer_light)
+    header = section_html(html, "header")
+
+    assert trace["sections"][1] == "hero_type_only"
+    assert "header-overlay" not in header
+    assert "border-b border-line bg-paper" in header
+    assert "data-header-sentinel" not in html
+
+
 def test_sections_have_no_side_container(buildable_profile):
     """Железное правило: узкой колонки посреди пустой страницы не бывает.
 

@@ -4,10 +4,14 @@
 
     Порядок на узком экране — логотип, кнопка меню, телефон: телефон стоит
     отдельной строкой под ними, а не над логотипом. Само меню — в
-    base/header_nav.j2, оно одно на обе шапки. -#}
+    base/header_nav.j2, оно одно на обе шапки.
+
+    Первая секция страницы — кадр во всю ширину: шапка ложится на него
+    (.header-overlay в css/source.css), и второго набора классов для этого не
+    нужно — цвета там подменяются семьёй тонов. -#}
 {%- set s = section.slots -%}
 {%- set logo = section.images.logo -%}
-<header id="{{ section.id }}" class="border-b border-line bg-paper">
+<header id="{{ section.id }}" class="{{ 'header-overlay' if site.header_overlay else 'border-b border-line bg-paper' }}">
   <div class="flex w-full flex-wrap items-center justify-between gap-x-8 gap-y-3 px-gutter py-4">
     <img src="{{ logo.src }}" alt="{{ s.business_name }}" width="{{ logo.width }}" height="{{ logo.height }}" class="order-1 h-10 max-w-full object-contain object-left sm:h-12" loading="eager" decoding="async">
 {% include 'base/header_nav.j2' %}

@@ -50,6 +50,7 @@ from .profile import Profile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS_BASE = "/assets"          # общий префикс превью; @font-face в бандле
 ENGINE_VERSION = 2
+OVERLAY = "overlay"              # ключ header контракта: шапка ложится на секцию
 
 SECTION_ROLES = ("header", "hero", "products", "services", "gallery", "proof",
                  "about", "info", "cta", "footer")
@@ -238,9 +239,23 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
         "assets_base": ASSETS_BASE,
         "scripts": scripts_for(sections),
         "preload_images": preload_for(sections),
+        "header_overlay": header_overlay(sections),
         "ui": {"skip_to_content": page.get("skip_to_content", ""),
                "nav_label": page.get("nav_label", "")},
     }
+
+
+def header_overlay(sections) -> bool:
+    """Ложится ли шапка на первую секцию вместо того, чтобы стоять над ней.
+
+    Просит об этом сама секция — ключом header: overlay своего контракта, — и
+    просят только те первые экраны, у которых кадр идёт во всю ширину: тогда
+    фотография начинается от кромки окна, а не под полосой шапки. Роль header
+    в порядке страницы идёт первой, поэтому «первая секция» здесь — первая
+    после неё.
+    """
+    body = [section for section in sections if section["role"] != "header"]
+    return bool(body) and (body[0].get("contract") or {}).get("header") == OVERLAY
 
 
 def preload_for(sections) -> list[str]:

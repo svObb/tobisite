@@ -10,7 +10,7 @@
                contrast{bg, ink, surface, line, muted, accent},
                shadow, button, align
     site     — lang, title, description, assets_base, scripts[],
-               ui{skip_to_content, nav_label}
+               header_overlay, ui{skip_to_content, nav_label}
     facts    — белый список фактов лида (NAP, часы, рейтинг) для JSON-LD и футера
     sections — [{id, role, template, slots{}, images{}}] в порядке рецепта
 
@@ -56,6 +56,12 @@
 {%- for section in sections if section.role == 'header' %}
 {% include section.template %}
 {%- endfor %}
+{%- if site.header_overlay %}
+{#- Сентинел прокрутки: пока он в кадре, шапка лежит на первом экране; ушёл —
+    /assets/preview.js возвращает её плотной полосой сверху. Высота примерно
+    равна высоте самой шапки, другого назначения у элемента нет. -#}
+<div data-header-sentinel class="pointer-events-none absolute inset-x-0 top-0 h-24" aria-hidden="true"></div>
+{%- endif %}
 <main id="main">
 {%- for section in sections if section.role not in ('header', 'footer') %}
 {% include section.template %}

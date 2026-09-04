@@ -304,16 +304,21 @@ PAGES = {
 }
 
 
+# Первые экраны, у которых кадр идёт во всю ширину: движок узнаёт их по ключу
+# header: overlay контракта, у здешних секций контрактов нет.
+OVERLAY_HEROES = ("hero_bg_photo.html.j2", "hero_split_2.html.j2")
+PARALLAX = OVERLAY_HEROES + ("gallery_statement.html.j2",)
+
+
 def site_for(sections: list) -> dict:
     """site.scripts — готовые адреса: их подставляет base/head.j2 как есть.
 
-    Контрактов у здешних секций нет, поэтому preload фона собирается по самой
-    картинке: страницы смоука обязаны выглядеть так же, как страницы движка.
+    Контрактов у здешних секций нет, поэтому и preload фона, и шапка-оверлей
+    собираются по самим шаблонам: страницы смоука обязаны выглядеть так же,
+    как страницы движка.
     """
-    parallax = ("hero_bg_photo.html.j2", "hero_split_2.html.j2",
-                "gallery_statement.html.j2")
     names = list(BASE_SCRIPTS)
-    if any(s["template"].endswith(parallax) for s in sections):
+    if any(s["template"].endswith(PARALLAX) for s in sections):
         names.append("parallax")
     return {
         "lang": "uk",
@@ -323,6 +328,8 @@ def site_for(sections: list) -> dict:
         "scripts": [f"{ASSETS_BASE}/{name}.js" for name in names],
         "preload_images": [s["images"]["hero_bg"]["src"] for s in sections
                            if "hero_bg" in s["images"]],
+        "header_overlay": any(s["template"].endswith(OVERLAY_HEROES)
+                              for s in sections),
         "ui": {"skip_to_content": "Перейти до вмісту",
                "nav_label": "Розділи сторінки"},
     }

@@ -16,6 +16,9 @@ prefers: {photo_count: "3..", text_volume: ">=short"}
 image_slots: 2
 image_pool: free_photos
 pool_min_width: 700
+# Кадры идут от кромки до кромки, поэтому шапке место на них, а не над ними
+# (engine/render.header_overlay).
+header: overlay
 js: parallax
 slots:
   - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}

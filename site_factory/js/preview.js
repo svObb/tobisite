@@ -11,15 +11,17 @@
    2. Появление секций: [data-reveal] получает класс is-visible, когда входит
       в кадр. Сам эффект — CSS-переход в css/source.css, здесь только
       наблюдатель.
-   3. Хиты view / scroll50 / dwell20 / cta_click на /api/hit — по одному
+   3. Состояние шапки, лежащей на первом экране: сентинел ушёл из кадра —
+      data-header-stuck на <html>, и шапка садится сверху плотной полосой.
+   4. Хиты view / scroll50 / dwell20 / cta_click на /api/hit — по одному
       разу каждый, через sendBeacon (запрос переживает уход со страницы).
 
    Начальное состояние появлений ставит скрипт, а не таблица стилей: не
    загрузился — страница просто видна целиком. Без JS превью полноценно.
 
    prefers-reduced-motion выключает пункты 1 и 2 целиком: ни Lenis, ни
-   наблюдателя, ни атрибута data-motion. Хиты остаются — это измерение,
-   а не движение, и терять на них половину визитов незачем. */
+   наблюдателя, ни атрибута data-motion. Пункты 3 и 4 остаются — состояние
+   шапки и измерение это не движение, и терять их незачем. */
 (function () {
   "use strict";
 
@@ -45,6 +47,19 @@
     document.querySelectorAll("[data-reveal]").forEach(function (node) {
       seen.observe(node);
     });
+  }
+
+  // Шапка, лежащая на первом экране, возвращается плотной полосой, когда
+  // сентинел под ней уходит из кадра (base/layout.html.j2). Это состояние
+  // страницы, а не появление: prefers-reduced-motion его не отменяет — он
+  // гасит только переход, и делает это сам CSS.
+  var sentinel = document.querySelector("[data-header-sentinel]");
+  if (sentinel && "IntersectionObserver" in window) {
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        root.setAttribute("data-header-stuck", entry.isIntersecting ? "off" : "on");
+      });
+    }).observe(sentinel);
   }
 
   var sent = {};

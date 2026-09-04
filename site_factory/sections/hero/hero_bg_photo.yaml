@@ -10,6 +10,9 @@ image_slots: 1
 image_names: [hero_bg]
 # Этот кадр — LCP страницы, и ждать разбора CSS ему нельзя (base/head.j2).
 preload_images: [hero_bg]
+# Кадр идёт во всю ширину, поэтому шапке место на нём, а не над ним
+# (engine/render.header_overlay).
+header: overlay
 js: parallax
 slots:
   - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}

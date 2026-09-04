@@ -3,9 +3,12 @@
 
     Порядок на узком экране — название, кнопка меню, телефон: телефон стоит
     отдельной строкой под ними, а не над названием. Само меню — в
-    base/header_nav.j2, оно одно на обе шапки. -#}
+    base/header_nav.j2, оно одно на обе шапки.
+
+    Первая секция страницы — кадр во всю ширину: шапка ложится на него
+    (.header-overlay в css/source.css), как и шапка с логотипом. -#}
 {%- set s = section.slots -%}
-<header id="{{ section.id }}" class="border-b border-line bg-paper">
+<header id="{{ section.id }}" class="{{ 'header-overlay' if site.header_overlay else 'border-b border-line bg-paper' }}">
   <div class="flex w-full flex-wrap items-center justify-between gap-x-8 gap-y-3 px-gutter py-4">
     <p class="order-1 font-title text-xl leading-tight tracking-tight break-words sm:text-2xl">{{ s.business_name }}</p>
 {% include 'base/header_nav.j2' %}
