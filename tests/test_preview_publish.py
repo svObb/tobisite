@@ -9,8 +9,10 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
+import ambient_stage
 import config
 import draft_service
+import site_images
 from models import PREVIEW_TTL_DAYS, Draft, Lead, LeadEvent, Session
 from site_factory.engine import render
 from test_draft_service import shop_enrichment
@@ -490,21 +492,32 @@ def test_manifest_starts_with_the_pictures_of_the_page():
         "portrait.webp", "photo-2.webp", "logo.webp", "hero_bg.webp"]
 
 
-def test_manifest_holds_the_budget_of_one_logo_and_seven_pictures():
+def test_the_media_budget_covers_the_whole_staging():
+    """12 — потолок скрейпа (логотип и семь снимков) плюс четыре амбиент-роли.
+
+    Пересечение контрактов бывает только в меньшую сторону: hero_bg скрейпа и
+    амбиента — одно имя файла. Разъедутся контракты — разъедется и бюджет,
+    и публикация начнёт отказывать страницам, которые стейджинг честно собрал.
+    """
+    assert draft_service.MEDIA_BUDGET == (
+        site_images.MAX_STAGED + len(ambient_stage.AMBIENT_ROLES))
+
+
+def test_manifest_holds_the_budget_of_the_whole_staging():
     staged = [f"_enrich/7/img/{name}" for name in
-              ["logo.webp"] + [f"photo-{n}.webp" for n in range(2, 14)]]
+              ["logo.webp"] + [f"photo-{n}.webp" for n in range(2, 16)]]
 
     manifest = draft_service.media_manifest(staged)
 
-    assert len(manifest) == draft_service.MEDIA_BUDGET == 8
+    assert len(manifest) == draft_service.MEDIA_BUDGET == 12
     names = [key.rsplit("/", 1)[-1] for key in manifest]
     # логотип вперёд, дальше галерея по номерам: лишнее остаётся в стейджинге
     assert names[0] == "logo.webp" and names[1] == "photo-2.webp"
-    assert "photo-13.webp" not in names
+    assert "photo-14.webp" not in names and "photo-15.webp" not in names
 
 
 def test_manifest_refuses_a_page_that_asks_for_more_than_the_budget():
-    names = [f"photo-{n}.webp" for n in range(2, 12)]
+    names = [f"photo-{n}.webp" for n in range(2, 16)]
     staged = [f"_enrich/7/img/{name}" for name in names]
     page = "".join(_img(name) for name in names)
 
@@ -534,7 +547,7 @@ async def test_publication_copies_the_pictures_the_page_needs(slot_answer,
                                                               draft_lead, r2):
     lead = await draft_lead(enrichment=shop_enrichment())
     _stage(r2, lead.id, "logo.webp", "portrait.webp",
-           *[f"photo-{n}.webp" for n in range(2, 12)])
+           *[f"photo-{n}.webp" for n in range(2, 16)])
     await slot_answer(lead)
 
     result = await draft_service.build_draft(lead.id)
@@ -549,7 +562,7 @@ async def test_publication_copies_the_pictures_the_page_needs(slot_answer,
     assert draft_service.page_images(html)
     assert set(draft_service.page_images(html)) <= copied
     # логотип идёт раньше галереи, а хвост стейджинга в бюджет не влез
-    assert "logo.webp" in copied and "photo-11.webp" not in copied
+    assert "logo.webp" in copied and "photo-15.webp" not in copied
 
 
 async def test_without_r2_keys_the_pipeline_works_as_before(slot_answer,
