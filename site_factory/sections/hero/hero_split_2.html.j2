@@ -1,0 +1,42 @@
+{#- Два полотна во всю высоту первого экрана. Каждое — фон своей половины, а
+    не полоса картинки: снимок выше полотна на 12% и поднят на 6%, и внутри
+    этого запаса /assets/parallax.js двигает его от прокрутки и от указателя.
+    Скрипта нет или включён prefers-reduced-motion — кадры просто стоят.
+
+    Затемнение .scrim лежит на блоках текста, а не на всей секции: под буквами
+    оно плотное, выше кадр остаётся кадром.
+
+    Заголовки разные по уровню намеренно: h1 у главного предложения, h2 у
+    второго полотна — оно ведёт к разделу страницы, а не спорит с первым.
+
+    Описать чужие снимки движку нечем, поэтому alt пустой, а сами кадры
+    спрятаны от скринридера: всё, что секция сообщает, сказано текстом. -#}
+{%- set s = section.slots -%}
+{%- set frames = section.images.values() | list -%}
+<section id="{{ section.id }}" class="grid bg-ink text-paper lg:grid-cols-2">
+  <div class="relative isolate flex min-h-[56svh] items-end overflow-hidden lg:min-h-[78svh]" data-parallax>
+    <div class="pointer-events-none absolute inset-0 z-[var(--z-under)] overflow-hidden" aria-hidden="true">
+      <img src="{{ frames[0].src }}" alt="" aria-hidden="true" width="{{ frames[0].width }}" height="{{ frames[0].height }}" class="absolute inset-x-0 top-[-6%] h-[112%] w-full object-cover" data-parallax-layer loading="eager" decoding="async" fetchpriority="high">
+    </div>
+    <div class="scrim align-hero w-full px-gutter py-section">
+      <p class="eyebrow" data-reveal>{{ s.eyebrow }}</p>
+      <h1 class="mt-4 max-w-[18ch] font-title text-h1 tracking-tight text-balance break-words" data-reveal>{{ s.headline }}</h1>
+      <p class="mt-5 max-w-[var(--measure)] text-lede" data-reveal="after">{{ s.lede }}</p>
+      <div class="btn-row mt-flow" data-reveal="after">
+        <a href="{{ s.phone_href }}" class="btn btn-photo" data-hit="cta_click">{{ s.call_label }}</a>
+      </div>
+    </div>
+  </div>
+  <div class="relative isolate flex min-h-[56svh] items-end overflow-hidden lg:min-h-[78svh]" data-parallax>
+    <div class="pointer-events-none absolute inset-0 z-[var(--z-under)] overflow-hidden" aria-hidden="true">
+      <img src="{{ frames[1].src }}" alt="" aria-hidden="true" width="{{ frames[1].width }}" height="{{ frames[1].height }}" class="absolute inset-x-0 top-[-6%] h-[112%] w-full object-cover" data-parallax-layer loading="eager" decoding="async">
+    </div>
+    <div class="scrim align-hero w-full px-gutter py-section">
+      <h2 class="max-w-[18ch] font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.side_headline }}</h2>
+      <p class="mt-5 max-w-[var(--measure)] text-lede" data-reveal="after">{{ s.side_lede }}</p>
+      {%- if s.secondary_label %}
+      <p class="mt-flow" data-reveal="after"><a href="#{{ s.secondary_target }}" class="inline-block px-2 py-3 font-medium underline decoration-paper/50 underline-offset-4">{{ s.secondary_label }}</a></p>
+      {%- endif %}
+    </div>
+  </div>
+</section>

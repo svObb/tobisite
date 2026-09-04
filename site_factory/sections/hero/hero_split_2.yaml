@@ -1,0 +1,34 @@
+# Первый экран из двух полотен: слева главное предложение с телефоном, справа
+# второй кадр со своим заголовком и переходом к первому разделу страницы.
+# Ступень для лида, у которого именованного hero_bg нет, а свободных снимков
+# хватает: собрать первый экран из фотографий лида лучше, чем из одного шрифта.
+#
+# Кадры берутся пулом, и hero стоит в roles_order первым — эти два снимка
+# уходят с страницы раньше галереи. Решение осознанное: первый экран важнее.
+#
+# pool_min_width: полотно занимает половину ширины экрана, и снимок уже 700px
+# на нём растянут. Не набралось двух таких — вариант выбывает по гейту, а не
+# показывает мыло.
+id: hero_split_2
+role: hero
+requires: {nonproduct_photo_count: ">=2"}
+prefers: {photo_count: "3..", text_volume: ">=short"}
+image_slots: 2
+image_pool: free_photos
+pool_min_width: 700
+js: parallax
+slots:
+  - {name: eyebrow, type: free, max_chars: 28, lang: from_lead}
+  - {name: headline, type: free, max_chars: 56, lang: from_lead}
+  - {name: lede, type: free, max_chars: 160, lang: from_lead}
+  - {name: call_label, type: free, max_chars: 24, lang: from_lead}
+  - {name: phone_href, type: fact, source: whitelist, max_chars: 32}
+  - {name: side_headline, type: free, max_chars: 40, lang: from_lead}
+  - {name: side_lede, type: free, max_chars: 110, lang: from_lead}
+  # Подпись перехода — заголовок секции, к которой он ведёт: её пишет
+  # композитор, а не модель (compose.link_sections). Секции с заголовком на
+  # странице нет — нет и перехода.
+  - {name: secondary_label, type: fact, source: composer, max_chars: 42, optional: true}
+  - {name: secondary_target, type: fact, source: composer, max_chars: 32}
+perf: {est_dom_nodes: 26, images: 2}
+a11y: {heading_level: 1}

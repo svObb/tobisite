@@ -17,7 +17,7 @@ role_substitutes:
 
 downgrade_ladder:
   header: [header_logo, header_wordmark]
-  hero: [hero_split_map, hero_bg_photo, hero_type_only, hero_photo_left]
+  hero: [hero_split_map, hero_bg_photo, hero_type_only, hero_split_2, hero_photo_left]
   products: [products_list, products_grid, product_carousel]
   services: [svc_two_col_rule, svc_list_icons, svc_cards_3]
   gallery: [gallery_statement, gallery_collage, gallery_strip]
@@ -33,6 +33,9 @@ niche_affinity:
   hero_split_map: 0.9
   hero_bg_photo: 0.75
   hero_type_only: 0.7
+  # Два полотна ниже шрифтового первого экрана: на треке light снимков мало,
+  # и пара кадров под целый экран — исключение, а не правило.
+  hero_split_2: 0.5
   hero_photo_left: 0.4
   products_list: 0.5
   products_grid: 0.4
@@ -102,6 +105,9 @@ free_defaults:
         - "Тримаємо звʼязок і відповідаємо в робочі години."
         - "Готуємо позицію до засідання, а не в останній день."
         - "Пояснюємо, які документи знадобляться."
+    hero_split_2:
+      side_headline: "Що ми беремо на себе"
+      side_lede: "Нижче — напрями роботи, години прийому та адреса офісу."
     svc_cards_3:
       section_title: "Напрями роботи"
     svc_two_col_rule:
@@ -167,6 +173,9 @@ free_defaults:
         - "We keep in touch and reply during office hours."
         - "The position is ready before the hearing, not on the day."
         - "We say which papers you will need to bring."
+    hero_split_2:
+      side_headline: "What we take on"
+      side_lede: "Below: the practice areas, the office hours and where to find us."
     svc_cards_3:
       section_title: "Practice areas"
     svc_two_col_rule:

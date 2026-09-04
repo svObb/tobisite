@@ -67,7 +67,8 @@ def test_downgrade_inside_role(lawyer_light):
     _, trace = render(lawyer_light)
     hero = role_record(trace, "hero")
     ladder_top = {r["variant"] for r in hero["rejected"]}
-    assert ladder_top == {"hero_split_map", "hero_bg_photo", "hero_photo_left"}
+    assert ladder_top == {"hero_split_map", "hero_bg_photo", "hero_split_2",
+                          "hero_photo_left"}
     assert hero["chosen"] == "hero_type_only"
     assert {r["kind"] for r in rejected_reasons(hero, "hero_split_map")} == \
         {gates.MISSING_IMAGE}

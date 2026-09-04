@@ -12,7 +12,7 @@
 {%- set s = section.slots -%}
 {%- set photo = (section.images.values() | list)[0] -%}
 <section id="{{ section.id }}" class="relative isolate flex min-h-[62svh] items-end overflow-hidden bg-ink text-paper" data-parallax>
-  <div class="pointer-events-none absolute inset-0 -z-20 overflow-hidden" aria-hidden="true">
+  <div class="pointer-events-none absolute inset-0 z-[var(--z-under)] overflow-hidden" aria-hidden="true">
     <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="absolute inset-x-0 top-[-6%] h-[112%] w-full object-cover" data-parallax-layer loading="lazy" decoding="async">
   </div>
   <div class="scrim w-full px-gutter py-section">

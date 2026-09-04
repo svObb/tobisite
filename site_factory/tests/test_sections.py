@@ -8,6 +8,7 @@ import re
 import yaml
 
 from site_factory.engine import slots
+from site_factory.engine.checks import run_all
 from site_factory.engine.compose import CONTRAST_ROLES, compose, link_sections
 from site_factory.engine.naming import split_product_name
 from site_factory.engine.palette import contrast_tones
@@ -231,6 +232,40 @@ def test_narrow_frames_never_become_a_full_width_background():
     assert "about_photo_split" in render(narrow)[1]["sections"]
 
 
+def test_the_split_hero_takes_two_frames_and_the_page_gets_the_rest():
+    """Именованного кадра под фон нет — первый экран собирается из пула.
+
+    Hero стоит в roles_order первым и разбирает снимки раньше галереи: два
+    полотна важнее полосы ниже. Остаток достаётся секциям под ними, и ни один
+    кадр не выходит на страницу дважды.
+    """
+    profile = _shop_without_a_named_hero((1600, 1400, 1200, 1000))
+    html, trace = render(profile)
+
+    assert "hero_split_2" in trace["sections"]
+    assert images_of(section_html(html, "hero")) == \
+        ["/img/photo-2.webp", "/img/photo-3.webp"]
+    assert images_of(section_html(html, "gallery")) == ["/img/photo-4.webp"]
+    assert images_of(section_html(html, "about")) == ["/img/photo-5.webp"]
+    assert html.count("<h1") == 1
+    used = images_of(html)
+    assert len(used) == len(set(used))
+
+
+def test_the_split_hero_needs_two_frames_wide_enough():
+    """Полотно занимает половину экрана: снимок шестисот точек на нём — мыло.
+
+    Кладке ширина безразлична — она режет кадр тайлом, — поэтому узкие снимки
+    достаются ей, а первый экран честно спускается на ступень ниже.
+    """
+    profile = _shop_without_a_named_hero((600,) * 4)
+    _, trace = render(profile)
+
+    assert "hero_split_2" not in trace["sections"]
+    assert "hero_type_only" in trace["sections"]
+    assert "gallery_collage" in trace["sections"]
+
+
 def test_the_statement_says_one_thing_over_the_frame(brand_shop):
     """Заявление — одна фраза поверх кадра: ни подписи снимку, ни второй строки."""
     profile = _shop_with_pool((1600,))
@@ -243,6 +278,23 @@ def test_the_statement_says_one_thing_over_the_frame(brand_shop):
     assert "data-parallax" in gallery and "data-parallax-layer" in gallery
     assert re.search(r'<img[^>]+alt="" aria-hidden="true"', gallery)
     assert "/assets/parallax.js" in html
+
+
+def test_the_facts_card_leans_over_the_photo_and_keeps_its_own_ground():
+    """Оверлей даёт глубину, а не проблему с контрастом.
+
+    Карточка фактов шире текстовой колонки на две доли и лежит ступенью выше
+    кадра, но текст в ней стоит на непрозрачной подложке — той же, что у любой
+    другой карточки страницы, — и все автопроверки черновика остаются пустыми.
+    """
+    profile = _shop_with_pool((1200, 1600))
+    html, _ = render(profile)
+    card = re.search(r"<dl[^>]+>", section_html(html, "about")).group(0)
+
+    assert "lg:col-span-9" in card and "lg:col-start-1" in card
+    assert "card" in card and "panel" in card
+    assert "lg:z-[var(--z-raise)]" in card
+    assert run_all(html, profile, palette_for(profile)) == {}
 
 
 def test_the_carousel_takes_the_shelf_the_grid_can_no_longer_hold():
@@ -424,7 +476,8 @@ def test_the_bands_of_the_page_come_from_position_not_from_the_markup(
     смыслу, — кадр под первым экраном и полоса галереи.
     """
     html, trace = render(buildable_profile)
-    own_ground = {"hero_bg_photo", "gallery_statement", "gallery_strip"}
+    own_ground = {"hero_bg_photo", "hero_split_2", "gallery_statement",
+                  "gallery_strip"}
     for variant in trace["sections"]:
         role = load_library()[variant]["role"]
         if role in ("header", "footer") or variant in own_ground:
@@ -606,6 +659,14 @@ def _shop_with_pool(widths):
     named = {name: image for name, image in BRAND_SHOP["images"].items()
              if name in ("logo", "hero_bg")}
     return Profile.from_dict(dict(BRAND_SHOP, images=named | photos))
+
+
+def _shop_without_a_named_hero(widths):
+    """То же, но без hero_bg: кадр под первый экран приходится брать из пула."""
+    profile = _shop_with_pool(widths)
+    images = {name: image for name, image in profile.images.value.items()
+              if name != "hero_bg"}
+    return Profile.from_dict(dict(BRAND_SHOP, images=images))
 
 
 def _shop_with_product_photos(names, pool=5):

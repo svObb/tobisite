@@ -18,7 +18,7 @@ role_substitutes:
 
 downgrade_ladder:
   header: [header_logo, header_wordmark]
-  hero: [hero_bg_photo, hero_photo_left, hero_split_map, hero_type_only]
+  hero: [hero_bg_photo, hero_split_2, hero_photo_left, hero_split_map, hero_type_only]
   products: [products_grid, product_carousel, products_list]
   services: [svc_cards_3, svc_two_col_rule, svc_list_icons]
   gallery: [gallery_statement, gallery_collage, gallery_strip]
@@ -34,6 +34,7 @@ niche_affinity:
   header_logo: 1.0
   header_wordmark: 0.5
   hero_bg_photo: 1.0
+  hero_split_2: 0.9
   hero_photo_left: 0.8
   hero_split_map: 0.6
   hero_type_only: 0.35
@@ -105,6 +106,9 @@ free_defaults:
         - "Пишіть або телефонуйте — підкажемо, з чого почати."
         - "Розрахунок робимо до початку робіт."
         - "Уточнимо деталі перед виїздом."
+    hero_split_2:
+      side_headline: "Подивіться, як ми працюємо"
+      side_lede: "Нижче — напрями роботи, контакти та години."
     svc_cards_3:
       section_title: "Наші послуги"
     svc_two_col_rule:
@@ -170,6 +174,9 @@ free_defaults:
         - "Write or call — we will suggest where to start."
         - "The estimate comes before the work does."
         - "We check the details before we set out."
+    hero_split_2:
+      side_headline: "See how we work"
+      side_lede: "Below: what we do, when we work and how to reach us."
     svc_cards_3:
       section_title: "What we do"
     svc_two_col_rule:

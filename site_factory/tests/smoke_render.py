@@ -10,7 +10,8 @@
     <preset>.html        лид со всем: логотип, фон-фото, товары с фото, галерея
     <preset>-light.html  лид без единой картинки
     <preset>-map.html    лид с картой, карточками услуг и кладкой из четырёх фото
-    <preset>-photo.html  лид с прайсом на ленту, заявлением и фото в блоке о нас
+    <preset>-photo.html  лид без hero_bg: первый экран из двух полотен, прайс на
+                         ленту, заявление и фото в блоке о нас
 
 Результат — site_factory/build/smoke/. Открывать через превью-воркер (страница
 тянет /assets/bundle.css и /assets/*.js), собрав бандл:
@@ -64,8 +65,12 @@ PHOTOS = {name: placeholder(1200, 900, "#dbd7d1", "#a9a49c")
 # в ряду осталась бы дыра — самая хрупкая раскладка коллажа из трёх.
 COLLAGE = {f"photo-{number}": placeholder(1200, 900, "#dbd7d1", "#a9a49c")
            for number in range(2, 6)}
-STATEMENT_PHOTO = {"photo-2": placeholder(2000, 1250, "#4a4640", "#6f6a63")}
-ABOUT_PHOTO = {"photo-3": placeholder(1400, 1800, "#dbd7d1", "#a9a49c")}
+# Два полотна первого экрана: кадры вертикальные и тёмные — поверх каждого
+# лежит .scrim и текст бумагой, как на фоне hero_bg_photo.
+SPLIT_FRAMES = {f"photo-{number}": placeholder(1600, 2000, "#4a4640", "#6f6a63")
+                for number in (2, 3)}
+STATEMENT_PHOTO = {"photo-4": placeholder(2000, 1250, "#4a4640", "#6f6a63")}
+ABOUT_PHOTO = {"photo-5": placeholder(1400, 1800, "#dbd7d1", "#a9a49c")}
 GOODS = [placeholder(800, 800, "#e0ddd7", "#a9a49c") for _ in range(3)]
 SHELF = [placeholder(800, 800, "#e0ddd7", "#a9a49c") for _ in range(7)]
 
@@ -274,15 +279,18 @@ PAGES = {
     ],
     "-photo": [
         HEADER_LOGO,
-        section("hero", "sections/hero/hero_bg_photo.html.j2",
+        section("hero", "sections/hero/hero_split_2.html.j2",
                 {"eyebrow": "Адвокатське бюро",
                  "headline": "Юридична підтримка бізнесу в Києві",
                  "lede": "Супровід договорів, спорів і перевірок — від першої "
                          "консультації до рішення суду.",
                  "call_label": "Зателефонувати", "phone_href": PHONE_HREF,
+                 "side_headline": "Що ми беремо на себе",
+                 "side_lede": "Нижче — напрями роботи, години прийому та "
+                              "адреса офісу.",
                  "secondary_label": "Послуги за прайсом",
                  "secondary_target": "products"},
-                {"hero_bg": HERO_BG}),
+                SPLIT_FRAMES),
         section("products", "sections/products/product_carousel.html.j2",
                 {"section_title": "Послуги за прайсом", "products": SHELF_ROWS}),
         section("gallery", "sections/gallery/gallery_statement.html.j2",
@@ -302,7 +310,8 @@ def site_for(sections: list) -> dict:
     Контрактов у здешних секций нет, поэтому preload фона собирается по самой
     картинке: страницы смоука обязаны выглядеть так же, как страницы движка.
     """
-    parallax = ("hero_bg_photo.html.j2", "gallery_statement.html.j2")
+    parallax = ("hero_bg_photo.html.j2", "hero_split_2.html.j2",
+                "gallery_statement.html.j2")
     names = list(BASE_SCRIPTS)
     if any(s["template"].endswith(parallax) for s in sections):
         names.append("parallax")
