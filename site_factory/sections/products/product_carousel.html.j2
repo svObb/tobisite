@@ -1,0 +1,36 @@
+{#- Лента листается прокруткой самой ленты, а не скриптом: CSP превью
+    разрешает только свои файлы, и заводить третий скрипт ради горизонтального
+    списка незачем. Снап держит карточку у левой кромки поля страницы
+    (scroll-px-gutter), поэтому лента останавливается там же, где начинается
+    заголовок, а не посреди карточки.
+
+    tabindex и имя от заголовка секции — не украшение: список, который
+    листается только мышью, для клавиатуры не существует, а прокручиваемая
+    область без имени не объявляется вовсе.
+
+    Название разрезано на имя и хвост прайса (артикул в скобках, пометка
+    состояния) — та же engine/naming.split_product_name, что и в витрине.
+    Снимки сняты с чужого сайта и обрезаны по-разному: object-contain на общей
+    подложке показывает товар целиком, а не его середину. Название стоит
+    текстом рядом, поэтому у картинки пустой alt и aria-hidden. -#}
+{%- set s = section.slots -%}
+<section id="{{ section.id }}" class="py-section">
+  <h2 id="{{ section.id }}-title" class="px-gutter font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
+  <ul class="mt-flow flex snap-x snap-mandatory gap-6 overflow-x-auto scroll-px-gutter px-gutter pb-4" tabindex="0" aria-labelledby="{{ section.id }}-title" data-reveal="after">
+    {%- for item in s.products %}
+    {%- set head, tail = split_product_name(item.name) %}
+    <li class="grid w-[15rem] shrink-0 snap-start content-start gap-3 sm:w-[17rem]">
+      <img src="{{ item.image.src }}" alt="" aria-hidden="true" width="{{ item.image.width }}" height="{{ item.image.height }}" class="panel aspect-square w-full rounded-preset object-contain p-3" loading="lazy" decoding="async">
+      <div>
+        <h3 class="line-clamp-2 font-title text-base leading-snug break-words sm:text-lg">{{ head }}</h3>
+        {%- if tail %}
+        <p class="mt-1 line-clamp-2 text-sm leading-snug break-words text-muted">{{ tail }}</p>
+        {%- endif %}
+      </div>
+      {%- if item.price %}
+      <p class="text-sm font-medium text-accent-ink sm:text-base">{{ item.price }}</p>
+      {%- endif %}
+    </li>
+    {%- endfor %}
+  </ul>
+</section>

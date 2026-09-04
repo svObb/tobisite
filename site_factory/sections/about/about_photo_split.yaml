@@ -1,0 +1,22 @@
+# Абзац о компании рядом со снимком лида: текст ведёт, кадр держит правый край
+# во всю высоту колонки. Асимметрия 7fr/5fr, а не половина на половину: это
+# блок о компании, а не подпись под фотографией.
+#
+# Кадр приходит из пула, и приходит последним: галерея стоит выше по странице
+# и выбирает раньше (engine/photos). Кадров не осталось — роль честно уходит
+# на about_note, где фотографии нет вовсе.
+id: about_photo_split
+role: about
+requires: {has_address: true, nonproduct_photo_count: ">=1"}
+prefers: {text_volume: ">=medium", has_hours: true}
+image_slots: 1
+image_pool: free_photos
+slots:
+  - {name: section_title, type: free, max_chars: 42, lang: from_lead}
+  - {name: about_text, type: free, max_chars: 260, lang: from_lead}
+  - {name: company_label, type: free, max_chars: 20, lang: from_lead}
+  - {name: business_name, type: fact, source: whitelist, max_chars: 60}
+  - {name: address_label, type: free, max_chars: 20, lang: from_lead}
+  - {name: address, type: fact, source: whitelist, max_chars: 120}
+perf: {est_dom_nodes: 16, images: 1}
+a11y: {heading_level: 2}

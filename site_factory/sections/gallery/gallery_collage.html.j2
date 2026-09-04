@@ -1,0 +1,32 @@
+{#- Кладка идёт от кромки до кромки: боковое поле есть только у подписи, сами
+    кадры работают полосой страницы, а не иллюстрацией к тексту.
+
+    Раскладка следует числу кадров, а не шаблону: три снимка ложатся в три
+    колонки, четыре и пять — в четыре. Крупный кадр всегда первый и всегда
+    занимает четверть кладки; при четырёх кадрах второй берёт двойную ширину,
+    иначе в ряду осталась бы дыра. На узком экране кладка идёт в две колонки, и
+    последний кадр растягивается на обе, когда иначе он остался бы один в ряду.
+
+    Швы между кадрами — просветы сетки (gap-px) на линейке палитры: рамок у
+    снимков нет, границу рисует что-то одно.
+
+    Описать чужие фотографии движку нечем, поэтому alt пустой, а кладка
+    спрятана от скринридера: она ничего не сообщает сверх соседних секций. -#}
+{%- set s = section.slots -%}
+{%- set frames = section.images.values() | list -%}
+{%- set n = frames | length -%}
+<section id="{{ section.id }}">
+  {%- if s.caption %}
+  <p class="max-w-[var(--measure)] px-gutter pt-section pb-flow text-lede text-balance" data-reveal>{{ s.caption }}</p>
+  {%- endif %}
+  <ul class="grid grid-cols-2 gap-px bg-line md:grid-rows-2 {{ 'md:aspect-[3/2] md:grid-cols-3' if n == 3 else 'md:aspect-[2/1] md:grid-cols-4' }}">
+    {%- for photo in frames %}
+    {%- set across = 'col-span-2' if loop.first or (loop.last and n % 2 == 0) else '' %}
+    {%- set tile = 'md:col-span-2 md:row-span-2' if loop.first
+                   else ('md:col-span-2' if n == 4 and loop.index == 2 else 'md:col-span-1') %}
+    <li class="relative aspect-[4/3] {{ across }} {{ tile }} md:aspect-auto" data-reveal="item">
+      <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async">
+    </li>
+    {%- endfor %}
+  </ul>
+</section>

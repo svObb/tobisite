@@ -11,7 +11,7 @@
 # приходят только из профиля Google, а «лучший юрист города» мы не знаем.
 
 id: lawyer_rich
-version: 2
+version: 3
 niche: lawyer
 track: rich
 schema_type: LegalService
@@ -26,11 +26,11 @@ role_substitutes:
 downgrade_ladder:
   header: [header_logo, header_wordmark]
   hero: [hero_photo_left, hero_bg_photo, hero_split_map, hero_type_only]
-  products: [products_list, products_grid]
+  products: [products_list, products_grid, product_carousel]
   services: [svc_two_col_rule, svc_cards_3, svc_list_icons]
-  gallery: [gallery_strip]
+  gallery: [gallery_statement, gallery_collage, gallery_strip]
   proof: [proof_stats_bar]
-  about: [about_note]
+  about: [about_photo_split, about_note]
   info: [info_hours_card]
   cta: [cta_form_short]
   footer: [footer_nap]
@@ -44,12 +44,16 @@ niche_affinity:
   hero_type_only: 0.35
   products_list: 0.5
   products_grid: 0.4
+  product_carousel: 0.3
   svc_two_col_rule: 0.9
   svc_cards_3: 0.8
   svc_list_icons: 0.7
-  gallery_strip: 0.6
+  gallery_statement: 1.0
+  gallery_collage: 0.85
+  gallery_strip: 0.7
   proof_stats_bar: 0.6
-  about_note: 0.9
+  about_photo_split: 1.0
+  about_note: 0.7
   info_hours_card: 0.9
   cta_form_short: 1.0
   footer_nap: 1.0
@@ -79,6 +83,10 @@ free_defaults:
       eyebrow: "Юридичні послуги"
       headline: "Юридична підтримка у складних питаннях"
       lede: "Консультації, підготовка документів і представництво інтересів — від першої зустрічі до результату."
+      # Абзац про компанію общий для обоих вариантов роли about: слот один и
+      # тот же, и держать его копию в каждом варианте значило бы однажды
+      # поправить одну из них.
+      about_text: "Тут зібрано те, з чим до нас звертаються найчастіше: напрями роботи, години прийому та адреса офісу. Якщо ваше питання ширше — зателефонуйте або опишіть ситуацію у формі, і ми скажемо, з чого почати."
       call_label: "Зателефонувати"
       reassurance: "Відповідаємо в робочі години"
       portrait_alt: "Фотографія з профілю компанії"
@@ -112,13 +120,18 @@ free_defaults:
       section_title: "Напрями роботи"
     products_grid:
       section_title: "Послуги за прайсом"
+    product_carousel:
+      section_title: "Послуги за прайсом"
     products_list:
       section_title: "Послуги за прайсом"
+    gallery_statement:
+      statement: "Від першої зустрічі до результату"
     info_hours_card:
       section_title: "Коли і де нас знайти"
+    about_photo_split:
+      section_title: "Що варто знати до дзвінка"
     about_note:
       section_title: "Що варто знати до дзвінка"
-      about_text: "Тут зібрано те, з чим до нас звертаються найчастіше: напрями роботи, години прийому та адреса офісу. Якщо ваше питання ширше — зателефонуйте або опишіть ситуацію у формі, і ми скажемо, з чого почати."
     proof_stats_bar:
       # Подписи не называют источник: оценка приходит и из карточки Google, и из
       # разметки сайта лида. Откуда цифры — говорит факт rating_source_note.
@@ -138,6 +151,7 @@ free_defaults:
       eyebrow: "Legal services"
       headline: "Legal support for everyday and difficult matters"
       lede: "Advice, paperwork and representation — from the first meeting to the outcome."
+      about_text: "This page gathers what people come to the office with most often: the practice areas, the office hours and the address. If your matter is wider than that, call or describe it in the form and we will say where to start."
       call_label: "Call the office"
       reassurance: "We reply during office hours"
       portrait_alt: "Photo from the company profile"
@@ -171,13 +185,18 @@ free_defaults:
       section_title: "Practice areas"
     products_grid:
       section_title: "Services with a set fee"
+    product_carousel:
+      section_title: "Services with a set fee"
     products_list:
       section_title: "Services with a set fee"
+    gallery_statement:
+      statement: "From the first meeting to the outcome"
     info_hours_card:
       section_title: "When and where to find us"
+    about_photo_split:
+      section_title: "What to know before you call"
     about_note:
       section_title: "What to know before you call"
-      about_text: "This page gathers what people come to the office with most often: the practice areas, the office hours and the address. If your matter is wider than that, call or describe it in the form and we will say where to start."
     proof_stats_bar:
       section_title: "Rating and reviews"
       stat_label:

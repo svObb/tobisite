@@ -11,11 +11,17 @@
     image_pool: free_photos   вариант берёт кадры пулом, а не поимённо
     image_slots: N            сколько кадров он покажет — это потолок
     pool_min: N               без скольких он не живёт (по умолчанию image_slots)
+    pool_leave: N             сколько кадров оставить секциям ниже по странице
     pool_min_width: N         кадры уже этой ширины варианту не годятся вовсе
     pool_pick: widest         вперёд идёт самый широкий кадр остатка
 
 pool_min нужен там, где секция тянется: коллаж рисует и три кадра, и пять, —
 потолок у него пять, а порог три. Порог проверяет гейт, потолок режет выдачу.
+
+pool_leave — вежливость тянущейся секции к тем, кто идёт следом: коллаж стоит
+выше блока «о компании» и без него забирал бы весь пул, оставляя странице один
+абзац без единой фотографии. Порог сильнее вежливости: отдать последние кадры
+и выбыть самому — хуже, чем не оставить их вовсе.
 
 pool_min_width — жёсткий отсев, а не предпочтение: снимок 600px под фон
 секции не годится ничем, и вариант с ним честно выбывает по гейту, вместо
@@ -53,7 +59,7 @@ def available(contract: dict, profile, taken=()) -> list[str]:
 
 
 def picked(contract: dict, profile, taken=()) -> list[str]:
-    """Кадры, которые вариант заберёт: срез годных по image_slots.
+    """Кадры, которые вариант заберёт из остатка.
 
     Порядок остатка — номерной (profile.free_photos), и он же порядок выдачи.
     pool_pick: widest переставляет его один раз: секции, где кадр идёт фоном
@@ -64,7 +70,21 @@ def picked(contract: dict, profile, taken=()) -> list[str]:
     names = available(contract, profile, taken)
     if contract.get("pool_pick") == WIDEST:
         names = sorted(names, key=lambda name: -_width(profile, name))
-    return names[:contract.get("image_slots") or 0]
+    return names[:_take(contract, len(names))]
+
+
+def _take(contract: dict, free: int) -> int:
+    """Сколько кадров вариант возьмёт из free годных: потолок с оглядкой назад.
+
+    Без pool_leave это просто image_slots. С ним вариант отдаёт лишние кадры
+    секциям ниже по странице, но не опускается ниже своего порога: секция,
+    выбывшая из-за собственной вежливости, не оставит кадры никому.
+    """
+    ceiling = contract.get("image_slots") or 0
+    leave = contract.get("pool_leave") or 0
+    if not leave:
+        return ceiling
+    return max(min(free - leave, ceiling), floor(contract))
 
 
 def claimed(section: dict) -> set[str]:

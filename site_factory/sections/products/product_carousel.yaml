@@ -1,0 +1,21 @@
+# Лента товаров: горизонтальная прокрутка со снапом, ноль скрипта. Берётся,
+# когда товаров с фотографиями больше, чем показывает витрина (products_grid
+# ограничена шестью): семь карточек в три ряда — это уже каталог, а лента
+# остаётся одной строкой и листается пальцем.
+#
+# Пороги ленты копируют engine/profile.CAROUSEL_MIN/CAROUSEL_CAP: по ним
+# считается резерв снимков под товары, и расхождение ловит тест-заслон в
+# test_sections.
+id: product_carousel
+role: products
+requires: {products_with_images: ">=7"}
+prefers: {products_with_images: "7..", has_prices: true}
+image_slots: 1
+slots:
+  - {name: section_title, type: free, max_chars: 42, lang: from_lead}
+  - {name: product_name, type: fact, source: whitelist, group: products, repeat: 7..10, max_chars: 120, group_filter: has_image}
+  - {name: product_image, type: fact, source: item, group: products, repeat: same_as_group}
+  - {name: product_price, type: fact, source: item, group: products, repeat: same_as_group, max_chars: 24, optional: true}
+# images: 1 на секцию, а не на карточку — как и в витрине (engine/score.py).
+perf: {est_dom_nodes: 64, images: 1}
+a11y: {heading_level: 2}

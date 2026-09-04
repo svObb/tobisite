@@ -1,0 +1,21 @@
+{#- Кадр во всю ширину и одна фраза поверх него. Секция не «полоса картинки»:
+    снимок здесь фон, поэтому он живой — выше рамки на 12% и поднят на 6%, и
+    внутри этого запаса /assets/parallax.js двигает его от прокрутки и от
+    указателя. Скрипта нет или включён prefers-reduced-motion — кадр просто
+    стоит, и секция от этого не меняется.
+
+    Затемнение .scrim идёт по блоку с текстом, а не по всей секции: под
+    буквами оно плотное, выше кадр остаётся кадром.
+
+    Описать чужую фотографию движку нечем, поэтому alt пустой, а сам снимок
+    спрятан от скринридера: всё, что секция сообщает, сказано фразой. -#}
+{%- set s = section.slots -%}
+{%- set photo = (section.images.values() | list)[0] -%}
+<section id="{{ section.id }}" class="relative isolate flex min-h-[62svh] items-end overflow-hidden bg-ink text-paper" data-parallax>
+  <div class="pointer-events-none absolute inset-0 -z-20 overflow-hidden" aria-hidden="true">
+    <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="absolute inset-x-0 top-[-6%] h-[112%] w-full object-cover" data-parallax-layer loading="lazy" decoding="async">
+  </div>
+  <div class="scrim w-full px-gutter py-section">
+    <h2 class="max-w-[16ch] font-title text-statement tracking-tight text-balance break-words" data-reveal>{{ s.statement }}</h2>
+  </div>
+</section>

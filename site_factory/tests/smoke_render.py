@@ -6,10 +6,11 @@
 
     python site_factory/tests/smoke_render.py
 
-Три композиции на пресет закрывают всю библиотеку, кроме hero_photo_left:
+Четыре композиции на пресет закрывают всю библиотеку, кроме hero_photo_left:
     <preset>.html        лид со всем: логотип, фон-фото, товары с фото, галерея
     <preset>-light.html  лид без единой картинки
-    <preset>-map.html    лид с картой и карточками услуг
+    <preset>-map.html    лид с картой, карточками услуг и кладкой из четырёх фото
+    <preset>-photo.html  лид с прайсом на ленту, заявлением и фото в блоке о нас
 
 Результат — site_factory/build/smoke/. Открывать через превью-воркер (страница
 тянет /assets/bundle.css и /assets/*.js), собрав бандл:
@@ -59,7 +60,14 @@ PORTRAIT = placeholder(1600, 2000, "#dbd7d1", "#a9a49c")
 MAP = placeholder(1600, 1200, "#dedad3", "#a9a49c")
 PHOTOS = {name: placeholder(1200, 900, "#dbd7d1", "#a9a49c")
           for name in ("photo-2", "photo-3", "photo-4")}
+# Кладка на четыре кадра: в этой ветке второй тайл берёт двойную ширину, иначе
+# в ряду осталась бы дыра — самая хрупкая раскладка коллажа из трёх.
+COLLAGE = {f"photo-{number}": placeholder(1200, 900, "#dbd7d1", "#a9a49c")
+           for number in range(2, 6)}
+STATEMENT_PHOTO = {"photo-2": placeholder(2000, 1250, "#4a4640", "#6f6a63")}
+ABOUT_PHOTO = {"photo-3": placeholder(1400, 1800, "#dbd7d1", "#a9a49c")}
 GOODS = [placeholder(800, 800, "#e0ddd7", "#a9a49c") for _ in range(3)]
+SHELF = [placeholder(800, 800, "#e0ddd7", "#a9a49c") for _ in range(7)]
 
 # Фикстура. Компания выдуманная целиком, телефон — несуществующий, из одних
 # нулей. Цифры фикстуры (рейтинг, отзывы, цены) это входные данные, а не текст
@@ -96,6 +104,22 @@ GOODS_ROWS = [
      "image": GOODS[0]},
     {"name": "Перевірка договору", "price": "1 800 грн", "image": GOODS[1]},
     {"name": "Реєстрація ТОВ", "price": "4 500 грн", "image": GOODS[2]},
+]
+
+# Прайс на ленту: семь позиций с фото — потолок витрины пройден, и роль
+# products берёт product_carousel. Названия с артикулами и пометкой состояния
+# идут вперемешку с обычными: разрез имени работает и там, и там.
+SHELF_ROWS = [
+    {"name": "Гальмівні колодки передні (D1234) бу", "price": "890 грн",
+     "image": SHELF[0]},
+    {"name": "Амортизатор передній лівий", "price": "1 450 грн",
+     "image": SHELF[1]},
+    {"name": "Комплект зчеплення в зборі", "price": "3 200 грн",
+     "image": SHELF[2]},
+    {"name": "Масляний фільтр (OC90)", "price": "240 грн", "image": SHELF[3]},
+    {"name": "Акумулятор", "price": "2 700 грн", "image": SHELF[4]},
+    {"name": "Свічки запалювання, комплект", "price": None, "image": SHELF[5]},
+    {"name": "Ремінь ГРМ (CT1028) бу", "price": "610 грн", "image": SHELF[6]},
 ]
 
 HOURS_ROWS = [{"day": "Пн–Пт", "time": "09:00–18:00"},
@@ -179,6 +203,8 @@ CTA = section("cta", "sections/cta/cta_form_short.html.j2", FORM)
 FOOTER_SECTION = section("footer", "sections/footer/footer_nap.html.j2", FOOTER)
 PROOF_SECTION = section("proof", "sections/proof/proof_stats_bar.html.j2", PROOF)
 ABOUT_SECTION = section("about", "sections/about/about_note.html.j2", ABOUT)
+ABOUT_SPLIT = section("about", "sections/about/about_photo_split.html.j2",
+                      ABOUT, ABOUT_PHOTO)
 
 PAGES = {
     "": [
@@ -238,8 +264,32 @@ PAGES = {
                 {"map": MAP}),
         section("services", "sections/services/svc_cards_3.html.j2",
                 {"section_title": "Напрями роботи", "services": SERVICES}),
+        section("gallery", "sections/gallery/gallery_collage.html.j2",
+                {"caption": "Наш офіс і зала для зустрічей з клієнтами."},
+                COLLAGE),
         PROOF_SECTION,
         toned(ABOUT_SECTION),
+        CTA,
+        FOOTER_SECTION,
+    ],
+    "-photo": [
+        HEADER_LOGO,
+        section("hero", "sections/hero/hero_bg_photo.html.j2",
+                {"eyebrow": "Адвокатське бюро",
+                 "headline": "Юридична підтримка бізнесу в Києві",
+                 "lede": "Супровід договорів, спорів і перевірок — від першої "
+                         "консультації до рішення суду.",
+                 "call_label": "Зателефонувати", "phone_href": PHONE_HREF,
+                 "secondary_label": "Послуги за прайсом",
+                 "secondary_target": "products"},
+                {"hero_bg": HERO_BG}),
+        section("products", "sections/products/product_carousel.html.j2",
+                {"section_title": "Послуги за прайсом", "products": SHELF_ROWS}),
+        section("gallery", "sections/gallery/gallery_statement.html.j2",
+                {"statement": "Від першої зустрічі до результату"},
+                STATEMENT_PHOTO),
+        toned(ABOUT_SPLIT),
+        INFO,
         CTA,
         FOOTER_SECTION,
     ],
@@ -252,8 +302,9 @@ def site_for(sections: list) -> dict:
     Контрактов у здешних секций нет, поэтому preload фона собирается по самой
     картинке: страницы смоука обязаны выглядеть так же, как страницы движка.
     """
+    parallax = ("hero_bg_photo.html.j2", "gallery_statement.html.j2")
     names = list(BASE_SCRIPTS)
-    if any(s["template"].endswith("hero_bg_photo.html.j2") for s in sections):
+    if any(s["template"].endswith(parallax) for s in sections):
         names.append("parallax")
     return {
         "lang": "uk",

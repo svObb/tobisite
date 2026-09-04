@@ -3,9 +3,13 @@
 # не подставляет — строка ровно та, которую пишет сам магазин.
 # group_filter снимает товары без картинки до проверки repeat: пустых рамок
 # в сетке не бывает, лучше уйти на ступень ниже (products_list).
+#
+# Потолок в requires, а не только в repeat: товаров с фотографиями больше шести
+# — это уже не витрина, а каталог, и роль обязана уйти на ленту
+# (product_carousel), а не показать первые шесть и молча забыть остальные.
 id: products_grid
 role: products
-requires: {products_with_images: ">=3"}
+requires: {products_with_images: "3..6"}
 prefers: {products_with_images: "3..", has_prices: true}
 image_slots: 1
 slots:
