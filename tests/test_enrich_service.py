@@ -332,14 +332,16 @@ async def test_images_are_staged_under_the_lead_prefix(site_lead, scraped, r2):
     assert sorted(r2.objects) == [f"_enrich/{lead.id}/img/{n}.webp"
                                   for n in names]
     data = await enrichment_of(lead.id)
-    assert data["images"]["logo"] == {"src": "/img/logo.webp", "width": 400,
-                                      "height": 120}
+    assert data["images"]["logo"] == {
+        "src": "/img/logo.webp", "width": 400, "height": 120,
+        "colors": site_images.dominant_colors(BLOBS[LOGO_URL])}
     assert (data["images"]["hero_bg"]["width"]
             == site_images.ROLE_MAX_SIDE["background"])
     # инвариант сшивки: photo_count — контентные фото, логотип в них не входит
     assert data["photo_count"] == 3 == len(data["images"]) - 1
+    # цвета несёт только логотип: у остальных кадров их не считают
     assert all(set(item) == {"src", "width", "height"}
-               for item in data["images"].values())
+               for name, item in data["images"].items() if name != "logo")
 
 
 async def test_a_site_without_a_single_free_frame_is_asked_for_ambient(site_lead,
@@ -668,6 +670,24 @@ async def test_the_logo_gives_the_brand_colours_when_the_page_has_none(
     assert colors["accent"] == palette[1] == _hex(VIVID)
     assert color.chroma(color.srgb(palette[1])) > color.chroma(
         color.srgb(palette[0]))
+
+
+async def test_the_colours_of_the_logo_travel_with_the_logo_itself(site_lead,
+                                                                   scraped, r2):
+    """По ним движок решает, ляжет ли шапка на кадр первого экрана.
+
+    Цвета бренда для этого не годятся: сайт объявляет их сам (meta theme-color)
+    и о самой картинке они не говорят ничего.
+    """
+    lead = await site_lead()
+    scraped(result(images=[], products=[]), blobs={LOGO_URL: two_tone_logo()})
+
+    await es.enrich_from_site(lead.id)
+
+    logo = (await enrichment_of(lead.id))["images"]["logo"]
+    assert logo["colors"] == site_images.dominant_colors(two_tone_logo())
+    # сквозь стык дорожек: движок читает цвета из той же записи
+    assert draft_service._clean_image(logo)["colors"] == logo["colors"]
 
 
 async def test_the_page_colours_win_over_the_logo(site_lead, scraped, r2):

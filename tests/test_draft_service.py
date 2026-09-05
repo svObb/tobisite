@@ -338,6 +338,19 @@ def test_a_semicolon_splits_the_line_whatever_stands_around_it():
         "Пн-Пт: 9:00-19:00", "Сб: вихідний"]
 
 
+def test_the_colours_of_a_logo_pass_the_gateway_and_the_rubbish_does_not():
+    """Цвета необязательны, а всё, что не читается как «#rrggbb», не цвет."""
+    logo = {"src": "/img/logo.webp", "width": 320, "height": 96}
+
+    assert draft_service._clean_image(logo) == logo
+    assert draft_service._clean_image(
+        dict(logo, colors=[" #005068 ", "#F8C050"]))["colors"] == \
+        ["#005068", "#F8C050"]
+    # мусор выброшен, а картинка осталась картинкой
+    assert draft_service._clean_image(
+        dict(logo, colors=["тёмно-синий", "#12345", "rgb(0,0,0)", 5, None])) == logo
+
+
 # --- готовые тексты слотов вместо модели (дельта 27.08) -----------------------
 
 async def _ready(lead, texts: dict):

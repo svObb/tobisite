@@ -4,21 +4,23 @@
 контракт секции имеет смысл только вместе с профилем, который его закрыл.
 """
 import re
+from dataclasses import replace
 
 from site_factory.engine import slots
 from site_factory.engine.checks import run_all
 from site_factory.engine.compose import CONTRAST_ROLES, compose, link_sections
 from site_factory.engine.naming import split_product_name
 from site_factory.engine.palette import contrast_tones
-from site_factory.engine.profile import Profile
+from site_factory.engine.profile import Profile, known
 from site_factory.engine.render import (ROOT, environment, load_library,
                                         load_recipe, load_tokens, palette_for,
                                         recipe_id_for, render, resolve_preset,
                                         seed_for)
 
 from . import smoke_render
-from .conftest import (BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH,
-                       PRODUCTS, shop_with_pool, shop_without_hero)
+from .conftest import (BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH, LOGO,
+                       PRODUCTS, shop_with_pool, shop_without_hero,
+                       with_a_light_logo)
 
 # Название из настоящего прайса запчастей: имя товара, артикулы в скобках и
 # пометка состояния — три разных сообщения в одной строке.
@@ -61,13 +63,41 @@ def test_the_header_lies_on_the_photo_of_the_first_screen(brand_shop):
     Просит об этом контракт секции, а не шапка: у шапки одна разметка на оба
     случая, и меняется у неё класс, а не набор цветов в каждом теге.
     """
-    html, trace = render(brand_shop)
+    html, trace = render(with_a_light_logo(brand_shop))
     header = section_html(html, "header")
 
     assert trace["sections"][0] == "header_logo"
     assert "header-overlay" in header
     assert "bg-paper" not in header
     assert "data-header-sentinel" in html
+
+
+def test_a_dark_logo_takes_the_header_off_the_photo(brand_shop):
+    """Тёмный логотип на тёмном скриме нечитаем — шапка встаёт своей полосой.
+
+    Цвета логотипа у brand_shop не сняты, и судить приходится по фирменному
+    цвету: он взят с самого логотипа (source: logo), и он тёмно-синий.
+    """
+    profile = replace(brand_shop, images=known(
+        dict(brand_shop.images.value, logo=dict(LOGO, colors=["#005068"]))))
+
+    for lead in (brand_shop, profile):
+        html, trace = render(lead)
+        header = section_html(html, "header")
+
+        assert trace["sections"][1] == "hero_bg_photo"
+        assert "header-overlay" not in header
+        assert "border-b border-line bg-paper" in header
+        assert "data-header-sentinel" not in html
+
+
+def test_a_brand_colour_from_the_old_site_says_nothing_about_the_logo(brand_shop):
+    """Цвет из CSS старого сайта о самой картинке не говорит: шапка как раньше."""
+    profile = replace(brand_shop, brand_colors=known(
+        dict(brand_shop.brand_colors.value, source="css")))
+
+    assert not profile.feature("logo_is_dark").known
+    assert "header-overlay" in section_html(render(profile)[0], "header")
 
 
 def test_a_page_that_opens_with_text_keeps_the_header_over_the_content(
@@ -309,7 +339,7 @@ def test_the_split_hero_takes_two_frames_and_the_page_gets_the_rest():
 
 def test_the_header_lies_on_the_two_frames_of_the_split_hero():
     """Первый экран из пула просит шапку тем же ключом, что и фон из белого списка."""
-    profile = shop_without_hero((1600, 1400, 1200, 1000))
+    profile = with_a_light_logo(shop_without_hero((1600, 1400, 1200, 1000)))
     html, trace = render(profile)
     header = section_html(html, "header")
 

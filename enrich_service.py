@@ -398,16 +398,27 @@ def found_fields(scrape, staged: dict, colors: dict, *,
     if looked_at_images:
         # images и photo_count пишутся всегда вместе: инвариант «photo_count
         # равен числу выложенных контентных фото» держится этой строкой
-        found["images"] = {
-            name: {"src": item["src"], "width": item["width"],
-                   "height": item["height"]}
-            for name, item in staged.items()
-        }
+        found["images"] = {name: _image_field(item)
+                           for name, item in staged.items()}
         found["photo_count"] = len(site_images.photo_names(staged))
     products = _products_with_images(scrape.products, staged)
     if products:
         found["products"] = products
     return found
+
+
+def _image_field(record: dict) -> dict:
+    """Картинка стейджинга в том виде, в каком её ждёт карточка лида.
+
+    Цвета едут вместе с логотипом: по ним движок решает, ляжет ли шапка на кадр
+    первого экрана (profile.logo_is_dark), — а source остаётся в стейджинге,
+    странице он не нужен.
+    """
+    image = {"src": record["src"], "width": record["width"],
+             "height": record["height"]}
+    if record.get("colors"):
+        image["colors"] = list(record["colors"])
+    return image
 
 
 def rating_note(value) -> str:

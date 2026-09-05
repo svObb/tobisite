@@ -142,6 +142,9 @@ MEDIA_ORDER = ("logo", "hero_bg", "portrait")
 # Всё, что страница дотягивает из собственной папки. Других путей у картинок
 # превью не бывает: на чужой хост движок не ссылается.
 PAGE_IMG = re.compile(rf'<img[^>]+\bsrc="/{IMG_DIR}/([^"/]+)"')
+# Цвет логотипа в записи картинки: ровно так его пишет стейджинг
+# (site_images.dominant_colors), и другого вида цвета в карточке не бывает.
+HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 # Ключи бакета живут в окружении, а не в config: бот стартует и без них,
 # и тогда публикации просто нет.
 R2_ENV = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
@@ -981,13 +984,25 @@ def _clean_images(value) -> dict:
 
 
 def _clean_image(item) -> dict | None:
+    """Запись картинки для движка. None — показывать нечего.
+
+    colors несёт только логотип: по ним движок решает, ляжет ли шапка на кадр
+    первого экрана (profile.logo_is_dark). Поле необязательное — у логотипа,
+    взятого руками, и у карточек прошлых волн его нет вовсе, — а всё, что не
+    читается как «#rrggbb», выбрасывается: судить по мусору хуже, чем не знать.
+    """
     if not isinstance(item, dict):
         return None
     src = str(item.get("src") or "").strip()
     width, height = _size(item.get("width")), _size(item.get("height"))
     if not (src and width and height):
         return None
-    return {"src": src, "width": width, "height": height}
+    image = {"src": src, "width": width, "height": height}
+    colors = [value.strip() for value in item.get("colors") or []
+              if isinstance(value, str) and HEX_COLOR.fullmatch(value.strip())]
+    if colors:
+        image["colors"] = colors
+    return image
 
 
 def _clean_products(value) -> list[dict]:

@@ -2,9 +2,10 @@
 import hashlib
 import json
 import re
+from dataclasses import replace
 
 from site_factory.engine import niches
-from site_factory.engine.profile import Profile
+from site_factory.engine.profile import Profile, known
 from site_factory.engine.render import (BASE_SCRIPTS, DESCRIPTION_LIMIT,
                                         PRESET_DEFAULTS, SECTION_ROLES,
                                         load_library, load_tokens,
@@ -13,7 +14,7 @@ from site_factory.engine.render import (BASE_SCRIPTS, DESCRIPTION_LIMIT,
                                         seed_for, track_for)
 
 from .conftest import (BRAND_SHOP, GENERIC_LIGHT, GENERIC_RICH, LAWYER_POOR,
-                       LAWYER_RICH)
+                       LAWYER_RICH, LOGO)
 
 # Домены-однодневки, на которых видно, что пресет меняется вместе с доменом.
 DOMAINS = ["alfa.example", "beta.example", "gamma.example", "delta.example",
@@ -388,6 +389,22 @@ def test_derived_features_read_the_new_enrichment(brand_shop):
     # товары не спрашивали — снимки свободны все: товарной секции всё равно нет
     assert brand_shop.feature("product_image_names").known
     assert not Profile.from_dict(LAWYER_RICH).feature("product_image_names").known
+
+
+def test_the_darkness_of_the_logo_is_read_from_its_own_colours(brand_shop):
+    """Цвета логотипа старше фирменного: они сняты с самой картинки."""
+    def with_colors(*values):
+        images = dict(BRAND_SHOP["images"], logo=dict(LOGO, colors=list(values)))
+        return replace(brand_shop, images=known(images))
+
+    # фирменный цвет brand_shop снят с логотипа и тёмен — судим по нему
+    assert brand_shop.feature("logo_is_dark").value is True
+    assert with_colors("#f8c050").feature("logo_is_dark").value is False
+    assert with_colors("#005068").feature("logo_is_dark").value is True
+    # мусор вместо цвета — то же, что цвета нет: остаётся фирменный
+    assert with_colors("тёмно-синий").feature("logo_is_dark").value is True
+    # логотипа нет и фирменных цветов нет — судить не по чему
+    assert not Profile.from_dict(LAWYER_RICH).feature("logo_is_dark").known
 
 
 def test_frames_drawn_to_order_stand_behind_the_photos_of_the_company():

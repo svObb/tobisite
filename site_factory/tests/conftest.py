@@ -16,11 +16,12 @@
     brand_ugly     — бренд-цвета из чёрно-белого логотипа: палитра пресетная
     products_lead  — товары, картинки не у всех: отбор group_filter
 """
+import dataclasses
 import pathlib
 
 import pytest
 
-from site_factory.engine.profile import Profile
+from site_factory.engine.profile import Profile, known
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
@@ -30,6 +31,9 @@ BUILD = ROOT / "build"
 PORTRAIT = {"src": "/img/portrait.avif", "width": 1600, "height": 2000}
 MAP = {"src": "/img/map.avif", "width": 1600, "height": 1200}
 LOGO = {"src": "/img/logo.webp", "width": 320, "height": 96}
+# Цвета логотипа снимает стейджинг картинок (site_images.dominant_colors).
+# Светлый читается на тёмном скриме первого экрана, тёмный на нём пропадает.
+LIGHT_LOGO = dict(LOGO, colors=["#f8c050"])
 HERO_BG = {"src": "/img/hero_bg.webp", "width": 2000, "height": 1125}
 GALLERY = {
     "photo-2": {"src": "/img/photo-2.webp", "width": 1200, "height": 900},
@@ -252,6 +256,18 @@ def shop_without_hero(widths):
     images = {name: image for name, image in profile.images.value.items()
               if name != "hero_bg"}
     return Profile.from_dict(dict(BRAND_SHOP, images=images))
+
+
+def with_a_light_logo(profile: Profile) -> Profile:
+    """Тот же лид, но логотип у него светлый — шапка ложится на кадр.
+
+    Фирменный цвет у brand_shop снят с логотипа, поэтому меняются они вместе:
+    стейджинг берёт primary из тех же цветов (enrich_service._brand_colors).
+    """
+    brand = dict(profile.brand_colors.value, primary=LIGHT_LOGO["colors"][0])
+    images = dict(profile.images.value, logo=LIGHT_LOGO)
+    return dataclasses.replace(profile, images=known(images),
+                               brand_colors=known(brand))
 
 
 @pytest.fixture

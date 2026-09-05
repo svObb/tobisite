@@ -14,8 +14,9 @@ brand_colors, products, ниша, язык, страна.
 
 Кроме сырых полей профиль отдаёт производные признаки (`feature`), которыми
 оперируют контракты секций: has_phone, has_address, service_count из списка
-услуг, product_count и products_with_images, has_logo, has_brand_colors,
-has_rating, proof_stats_count, nonproduct_photo_count, нормализованная ниша.
+услуг, product_count и products_with_images, has_logo, logo_is_dark,
+has_brand_colors, has_rating, proof_stats_count, nonproduct_photo_count,
+нормализованная ниша.
 Производные считаются в одном месте, чтобы гейт и скоринг не разошлись в
 трактовке.
 
@@ -29,6 +30,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import niches
+from .color import lightness, srgb
+from .palette import HEX
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,11 @@ ORDERED_ENUMS = (TEXT_VOLUME_ORDER, OLD_SITE_STATE_ORDER)
 # галереи берёт снимки пулом и эти имена не трогает: иначе фон первого экрана
 # встал бы на страницу вторым экземпляром.
 NAMED_IMAGES = ("logo", "hero_bg", "portrait", "map")
+
+# Ниже этой светлоты (L в oklab) логотип считается тёмным. Середина шкалы:
+# такой логотип нарисован под белый фон, и на тёмном скриме первого экрана он
+# пропадает — шапке приходится вставать своей полосой (render.header_overlay).
+DARK_LOGO_LIGHTNESS = 0.5
 
 # Карточку лида наполняет выгрузка Google Maps, поэтому у карточных оценки и
 # числа отзывов источник ровно один. У скрейпа источник свой и приходит вместе
@@ -312,6 +320,36 @@ def _image_stem(src) -> str:
     return str(src or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
 
+def _logo_is_dark(p: Profile) -> Feature:
+    """Тёмный ли логотип лида. unknown — судить не по чему, и решает шапка.
+
+    Судим по цветам самого логотипа: их считает стейджинг картинок
+    (site_images.dominant_colors) и кладёт в запись картинки. Цветов нет —
+    остаётся фирменный цвет, но только если он снят с логотипа: цвет из CSS
+    старого сайта о самой картинке не говорит ничего.
+    """
+    tone = _logo_tone(p)
+    if tone is None:
+        return UNKNOWN
+    return known(lightness(srgb(tone)) < DARK_LOGO_LIGHTNESS)
+
+
+def _logo_tone(p: Profile) -> str | None:
+    """Цвет, по которому судим о логотипе. None — такого цвета мы не знаем.
+
+    Порядок кандидатов и есть старшинство: цвета картинки, потом фирменный цвет
+    с неё же. Всё, что не читается как hex, пропускается — судить по мусору
+    хуже, чем не судить вовсе.
+    """
+    logo = ((p.images.value or {}).get("logo") or {}) if p.images.known else {}
+    brand = p.brand_colors.value if isinstance(p.brand_colors.value, dict) else {}
+    candidates = list(logo.get("colors") or [])
+    if brand.get("source") == "logo":
+        candidates.append(brand.get("primary"))
+    return next((value.strip() for value in candidates
+                 if isinstance(value, str) and HEX.match(value.strip())), None)
+
+
 def _has_rating(p: Profile) -> Feature:
     """Рейтинг показуем: оценка задана и отзыв хотя бы один."""
     if not p.rating.known:
@@ -327,6 +365,7 @@ _DERIVED: dict[str, Callable[[Profile], Feature]] = {
     "has_address": lambda p: _fallback(p.has_address, p.address),
     "has_hours": lambda p: _fallback(p.has_hours, p.hours),
     "has_logo": _has_logo,
+    "logo_is_dark": _logo_is_dark,
     "has_brand_colors": lambda p: _flag(p.brand_colors),
     "service_count": _service_count,
     "product_count": lambda p: (known(len(p.products.value or []))

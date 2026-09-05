@@ -248,7 +248,7 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
         "assets_base": ASSETS_BASE,
         "scripts": scripts_for(sections),
         "preload_images": preload_for(sections),
-        "header_overlay": header_overlay(sections),
+        "header_overlay": header_overlay(sections, profile),
         "ui": {"skip_to_content": page.get("skip_to_content", ""),
                "nav_label": page.get("nav_label", "")},
     }
@@ -284,14 +284,20 @@ def page_description(profile: Profile, default: str) -> str:
     return head
 
 
-def header_overlay(sections) -> bool:
+def header_overlay(sections, profile: Profile) -> bool:
     """Ложится ли шапка на первую секцию вместо того, чтобы стоять над ней.
 
     Просит об этом сама секция — ключом header: overlay своего контракта, — и
     просят только те первые экраны, у которых кадр идёт во всю ширину: тогда
     фотография начинается от кромки окна, а не под полосой шапки.
+
+    Тёмный логотип на тёмном скриме нечитаем, и просьбу секции перебивает он:
+    шапка встаёт своей полосой на бумаге пресета, кадр начинается под ней.
+    Светлоту логотипа мы знаем не всегда — неизвестное здесь ведёт себя как
+    раньше, то есть шапка ложится на кадр.
     """
-    return opens_with_a_frame(sections)
+    return (opens_with_a_frame(sections)
+            and not profile.feature("logo_is_dark").value)
 
 
 def preload_for(sections) -> list[str]:
