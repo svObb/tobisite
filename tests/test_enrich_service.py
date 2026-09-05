@@ -808,6 +808,22 @@ async def test_the_journal_records_every_cut_with_its_reason(site_lead, scraped,
     assert sticker["colors"] and sticker["transparent"] > 0 and sticker["bpp"]
 
 
+async def test_the_journal_leaves_out_metrics_nobody_could_measure(
+        site_lead, scraped, r2):
+    """У значка с меткой на 6% кадра цвет мерить не по чему — ключа и нет."""
+    lead = await site_lead()
+    scraped(result(products=[], images=[shown(TEAM_URL, 1000, 1200),
+                                        shown(STICKER_URL, 600, 400)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], TEAM_URL: BLOBS[TEAM_URL],
+                   STICKER_URL: icon(600, 400, opaque=0.1)})
+
+    await es.enrich_from_site(lead.id)
+
+    sticker, = (await enrichment_of(lead.id))["_scrape"]["images_dropped"]
+    assert sticker["why"] == "alpha" and sticker["transparent"] > 0
+    assert not {"colors", "dominant", "flat"} & set(sticker)
+
+
 async def test_a_repeat_scrape_writes_the_same_journal(site_lead, scraped, r2):
     """Округление метрик — ради этого: JSONB карточки обязан быть тем же."""
     lead = await site_lead()

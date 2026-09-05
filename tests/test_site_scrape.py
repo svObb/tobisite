@@ -430,7 +430,9 @@ def test_a_banner_is_marked_but_not_thrown_away():
     room = candidate(body, "media/zal.jpg")
 
     assert plate["banner"] is True and room["banner"] is False
-    assert plate["weight"] < room["weight"]
+    # вес — по-прежнему только площадь: понижение вытолкнуло бы кадр из шести
+    # кандидатов, и до пикселей, которые решают, он бы не доехал
+    assert plate["weight"] == room["weight"]
 
 
 def test_the_wifi_sticker_is_marked_by_its_alt_alone():
@@ -461,6 +463,30 @@ def test_a_social_link_is_not_outbound():
 
     assert candidate(body, "media/zal.jpg")["outbound"] is False
     assert candidate(body, "media/tim.jpg")["outbound"] is False
+
+
+def test_a_social_host_is_matched_by_domain_not_by_substring():
+    """«x.com» подстрокой сидит в xerox.com — чужая ссылка так теряла пометку."""
+    body = ('<a href="https://xerox.com/print">'
+            '<img src="/media/zal.jpg" alt="Зал" width="1200" height="600"></a>'
+            '<a href="https://x.com/lihtaryk">'
+            '<img src="/media/tim.jpg" alt="Тім" width="1200" height="600"></a>'
+            '<a href="https://mobile.x.com/lihtaryk">'
+            '<img src="/media/bar.jpg" alt="Бар" width="1200" height="600"></a>')
+
+    assert candidate(body, "media/zal.jpg")["outbound"] is True
+    assert candidate(body, "media/tim.jpg")["outbound"] is False
+    assert candidate(body, "media/bar.jpg")["outbound"] is False
+
+
+def test_only_the_maps_part_of_google_is_a_social_link():
+    body = ('<a href="https://www.google.com/maps/place/Lihtaryk/@50.4,30.5">'
+            '<img src="/media/zal.jpg" alt="Зал" width="1200" height="600"></a>'
+            '<a href="https://www.google.com/search?q=knyhy">'
+            '<img src="/media/tim.jpg" alt="Тім" width="1200" height="600"></a>')
+
+    assert candidate(body, "media/zal.jpg")["outbound"] is False
+    assert candidate(body, "media/tim.jpg")["outbound"] is True
 
 
 def test_a_normal_photo_is_not_marked_as_a_banner(builder, handmade, shop):

@@ -59,6 +59,17 @@ def icon(width, height, opaque=0.5) -> bytes:
     return _png(img)
 
 
+def indexed_icon(width, height) -> bytes:
+    """Тот же значок, но в палитре: прозрачность объявлена индексом, не альфой."""
+    img = Image.new("P", (width, height), 0)
+    img.putpalette([0, 0, 0] + list(ORANGE) + [0] * 762)
+    img.paste(1, (width // 2 - 30, height // 2 - 20,
+                  width // 2 + 30, height // 2 + 20))
+    buf = io.BytesIO()
+    img.save(buf, "PNG", transparency=0)
+    return buf.getvalue()
+
+
 def _png(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG")
@@ -275,13 +286,41 @@ def test_two_signals_make_it_graphics():
 
 
 def test_a_picture_without_pixels_to_judge_says_nothing():
-    assert si.graphic_probe(icon(600, 400, opaque=0.1)) is None
+    """Не открылось — None; открылось, но мерить нечего — пустые метрики."""
     assert si.graphic_probe(b"\x89PNG oops") is None
 
+    probe = si.graphic_probe(icon(600, 400, opaque=0.1))
+
+    assert probe["colors"] is None and probe["dominant"] is None
+    assert probe["flat"] is None
+    # ни альфы, ни палитры: разрежённость сама по себе ничего не доказывает
     verdict = si.graphic_verdict({"width": 600, "height": 400, "alpha": False},
-                                 None)
+                                 probe)
 
     assert verdict == {"hard": "", "score": 0, "soft": False}
+
+
+def test_a_sparse_icon_on_a_transparent_background_is_still_a_sticker():
+    """Значок «Free WiFi» с меткой на 6% кадра — та самая дыра инцидента."""
+    data = icon(600, 400, opaque=0.1)
+    size = si.probe_image(data)
+
+    verdict = si.graphic_verdict(size, si.graphic_probe(data))
+
+    assert size["alpha"] is True
+    assert verdict["hard"] == "alpha"
+
+
+def test_a_sparse_indexed_image_is_still_indexed():
+    probe = si.graphic_probe(indexed_icon(600, 400))
+
+    assert probe["indexed"] is True and probe["colors"] is None
+    # альфу гасим руками: у настоящего такого PNG сработало бы её правило,
+    # первое по порядку, а прочесть здесь нужно именно палитру
+    verdict = si.graphic_verdict({"width": 600, "height": 400, "alpha": False},
+                                 probe)
+
+    assert verdict["hard"] == "indexed"
 
 
 def test_graphics_never_take_the_hero_or_the_portrait():

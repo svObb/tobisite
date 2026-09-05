@@ -48,8 +48,9 @@ BACKGROUND_MIN_WIDTH = 900
 # ровно те же, что у dominant_colors: третьей копии сетки в модуле быть не должно.
 GRAPHIC_GRID = 64
 GRAPHIC_BUCKET = 8
-# Непрозрачных пикселей на сетке меньше — судить не по чему, как mean_lightness
-# нечего сказать о прозрачном насквозь логотипе.
+# Непрозрачных пикселей на сетке меньше — цвет и плоскость мерить не по чему,
+# как mean_lightness нечего сказать о прозрачном насквозь логотипе. Молчат
+# именно эти метрики: прозрачность и палитра остаются фактами.
 GRAPHIC_MIN_OPAQUE = 256
 # Индексные и битовые режимы Pillow: фотография ни одним из них не бывает.
 GRAPHIC_INDEXED_MODES = ("P", "PA", "1")
@@ -213,8 +214,15 @@ def mean_lightness(data: bytes) -> float | None:
 def graphic_probe(data: bytes) -> dict | None:
     """Пиксельная статистика кандидата: снимок это или нарисованная плашка.
 
-    None — картинку не открыть или судить не по чему. Значения сырые, без
-    суждения: пороги знает graphic_verdict, и на них смотрит один вызывающий.
+    None — только когда картинки нет вовсе: файл не открылся или в нём ноль
+    пикселей. Разрежённый значок с меткой на пустом фоне None не даёт: цвета
+    и плоскость по горстке пикселей мерить не по чему (`colors`, `dominant`,
+    `flat` равны None), но прозрачность и палитра — факты той же силы, и
+    значок узнаётся по ним. Пока такой кадр возвращал None целиком, он
+    проходил за фотографию компании мимо всех жёстких правил.
+
+    Значения сырые, без суждения: пороги знает graphic_verdict, и на них
+    смотрит один вызывающий.
 
     Считается по той же загрублённой копии, что цвета и светлота логотипа:
     отдельного декодирования полноразмерного кадра здесь не появляется.
@@ -230,6 +238,9 @@ def graphic_probe(data: bytes) -> dict | None:
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError,
             ValueError):
         return None
+    total = width * height
+    if not total:
+        return None
     buckets: dict[tuple, int] = {}
     opaque = 0
     for start in range(0, len(pixels) - 3, 4):
@@ -239,22 +250,27 @@ def graphic_probe(data: bytes) -> dict | None:
         opaque += 1
         key = (r // GRAPHIC_BUCKET, g // GRAPHIC_BUCKET, b // GRAPHIC_BUCKET)
         buckets[key] = buckets.get(key, 0) + 1
-    total = width * height
-    if not total or opaque < GRAPHIC_MIN_OPAQUE:
-        return None
+    facts = {"indexed": source_mode in GRAPHIC_INDEXED_MODES,
+             "transparent": (total - opaque) / total}
+    if opaque < GRAPHIC_MIN_OPAQUE:
+        return facts | {"colors": None, "dominant": None, "flat": None}
     pairs = same = 0
     for row in range(height):
         line = row * width
         for col in range(width - 1):
+            left, right = line + col, line + col + 1
+            # Прозрачные пиксели декодируются в один и тот же чёрный: считая
+            # их за совпавших соседей, мы мерили бы размер пустоты, а не
+            # плоскость самой картинки.
+            if pixels[left * 4 + 3] < 128 or pixels[right * 4 + 3] < 128:
+                continue
             pairs += 1
-            if grey[line + col] == grey[line + col + 1]:
+            if grey[left] == grey[right]:
                 same += 1
-    return {
+    return facts | {
         "colors": len(buckets),
         "dominant": max(buckets.values()) / opaque,
         "flat": same / pairs if pairs else 0.0,
-        "indexed": source_mode in GRAPHIC_INDEXED_MODES,
-        "transparent": (total - opaque) / total,
     }
 
 
@@ -270,6 +286,10 @@ def graphic_verdict(size: dict, probe: dict | None, *, hint: bool = False) -> di
     так, что ни один сигнал в одиночку метки не ставит: эвристика ошибается,
     и лишняя картинка в галерее дешевле пустой страницы.
 
+    Прозрачность и палитра — факты, и читаются при любой пробе. Веса
+    складываются только там, где пиксели было по чему считать: у разрежённого
+    значка colors/dominant/flat пустые, и это молчание не голос за фотографию.
+
     Чистая функция: ни Pillow, ни байтов — размеры probe_image, метрики
     graphic_probe и подсказка разметки.
     """
@@ -277,14 +297,15 @@ def graphic_verdict(size: dict, probe: dict | None, *, hint: bool = False) -> di
     ratio = width / height if height else 0
     # Пустой альфа-канал не говорит ни о чём: значок выдаёт не сам канал, а
     # по-настоящему прозрачные пиксели в нём.
-    if size.get("alpha") and probe and probe["transparent"] >= TRANSPARENT_SHARE:
+    if (size.get("alpha") and probe is not None
+            and probe["transparent"] >= TRANSPARENT_SHARE):
         return {"hard": "alpha", "score": 100, "soft": True}
-    if probe and probe["indexed"]:
+    if probe is not None and probe["indexed"]:
         return {"hard": "indexed", "score": 100, "soft": True}
     if ratio >= BANNER_ASPECT or (ratio and ratio <= 1 / BANNER_ASPECT):
         return {"hard": "strip", "score": 100, "soft": True}
     score = 0
-    if probe:
+    if probe is not None and probe["colors"] is not None:
         if probe["colors"] < GRAPHIC_MAX_COLORS:
             score += W_COLORS
         if probe["dominant"] >= GRAPHIC_DOMINANT:

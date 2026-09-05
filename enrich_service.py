@@ -757,6 +757,10 @@ def _dropped(url: str, why: str, data: bytes, *, size=None, probe=None) -> dict:
     bpp считается, но веса не имеет — сильно сжатый геройник и PNG-скриншот
     попадают в один диапазон, и порог по нему разделил бы качество сжатия, а
     не графику и фото.
+
+    Неизмеренное в журнал не пишется — так же, как размеры битого файла: у
+    разрежённого значка цвет и плоскость мерить не по чему, и их отсутствие
+    в записи и есть ответ.
     """
     record = {"url": url[:DROPPED_URL_CHARS], "why": why}
     if size:
@@ -765,10 +769,11 @@ def _dropped(url: str, why: str, data: bytes, *, size=None, probe=None) -> dict:
         if pixels:
             record["bpp"] = round(len(data) / pixels, 3)
     if probe:
-        record |= {"colors": probe["colors"],
-                   "dominant": round(probe["dominant"], 3),
-                   "flat": round(probe["flat"], 3),
-                   "transparent": round(probe["transparent"], 3)}
+        record["transparent"] = round(probe["transparent"], 3)
+        if probe["colors"] is not None:
+            record |= {"colors": probe["colors"],
+                       "dominant": round(probe["dominant"], 3),
+                       "flat": round(probe["flat"], 3)}
     return record
 
 

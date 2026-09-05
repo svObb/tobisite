@@ -130,11 +130,13 @@ _BANNER_HINT = re.compile(
 )
 # Куда картинка вправе вести, не становясь при этом рекламой: соцсети,
 # мессенджеры и карты. Ссылка на свой инстаграм под своим же снимком —
-# обычная подпись, а не баннер.
+# обычная подпись, а не баннер. Записи — домены целиком (у карт ещё и начало
+# пути): подстрокой «x.com» сидит в fedex.com и netflix.com, и чужая ссылка
+# теряла бы пометку.
 _SOCIAL_HOSTS = (
-    "facebook", "instagram", "t.me", "telegram", "youtube", "youtu.be",
-    "tiktok", "linkedin", "twitter", "x.com", "viber", "whatsapp",
-    "google.com/maps", "goo.gl", "maps.app",
+    "facebook.com", "instagram.com", "t.me", "telegram.org", "telegram.me",
+    "youtube.com", "youtu.be", "tiktok.com", "linkedin.com", "twitter.com",
+    "x.com", "viber.com", "whatsapp.com", "goo.gl", "google.com/maps",
 )
 _LOGO_HINT = re.compile(r"logo|логотип|лого|brand|wordmark", re.I)
 _SERVICE_HINT = re.compile(r"servic|servis|posluh|poslug|uslug|услуг|послуг", re.I)
@@ -305,9 +307,11 @@ def logo_candidates(soup, base: str) -> list[dict]:
 def image_candidates(soup, base: str) -> list[dict]:
     """Кандидаты в фотографии, лучшая первой. og:image идёт вперёд всех.
 
-    banner и outbound — подсказки для site_images, а не отсев: по ним кандидат
-    только теряет в весе и в правах на шапку. Мета-теги их не получают:
-    об og:image компания объявляет сама, и понижать его не за что.
+    banner и outbound — подсказки для site_images, а не отсев и не штраф: вес
+    остаётся площадью кадра. Слово «slider» носит и настоящий снимок галереи,
+    а понижение веса вытолкнуло бы его из шести кандидатов ещё до того, как
+    проголосуют пиксели — тихий отсев по не-факту. Мета-теги подсказок не
+    получают вовсе: об og:image компания объявляет сама.
     """
     found: list[dict] = []
     for prop, weight in (("og:image", 60), ("twitter:image", 50)):
@@ -333,8 +337,7 @@ def image_candidates(soup, base: str) -> list[dict]:
             [url, alt_class, tag.get("title") or "", tag.get("id") or "",
              _wrapper_names(tag)])))
         found.append({"url": url,
-                      "weight": (10 + min(width * height // 100_000, 20)
-                                 - (5 if banner else 0)),
+                      "weight": 10 + min(width * height // 100_000, 20),
                       "og": False, "width": width, "height": height,
                       "banner": banner, "outbound": _outbound_wrapper(tag, base)})
     for tag in soup.find_all("source", srcset=True):
@@ -1187,8 +1190,24 @@ def _outbound_wrapper(tag, base: str) -> bool:
     target = urlparse(urljoin(base, link["href"]))
     if not target.netloc or _same_site(target.netloc, urlparse(base).netloc):
         return False
-    where = f"{target.netloc}{target.path}".lower()
-    return not any(host in where for host in _SOCIAL_HOSTS)
+    return not _social_link(target.netloc, target.path)
+
+
+def _social_link(netloc: str, path: str) -> bool:
+    """Ссылка ведёт в соцсеть, мессенджер или на карту.
+
+    Хост сверяется доменом и его поддоменами, а не подстрокой: mobile.x.com —
+    та же соцсеть, xerox.com — не она. У записей с путём (карты) сверяется
+    ещё и начало пути: google.com/search рекламой быть вполне может.
+    """
+    site = netloc.lower().removeprefix("www.")
+    for entry in _SOCIAL_HOSTS:
+        host, slash, prefix = entry.partition("/")
+        if site != host and not site.endswith(f".{host}"):
+            continue
+        if not slash or path.lower().startswith(f"/{prefix}"):
+            return True
+    return False
 
 
 def _same_site(one: str, two: str) -> bool:
