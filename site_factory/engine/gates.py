@@ -16,7 +16,9 @@
   секции выше по странице. Для варианта с image_pool признак
   nonproduct_photo_count это остаток пула, а не весь пул: три снимка, из
   которых два забрала галерея, — это один снимок, и вариант, которому нужно
-  два, обязан выбыть здесь, а не встать на страницу с чужими кадрами.
+  два, обязан выбыть здесь, а не встать на страницу с чужими кадрами. Остаток
+  считается глазами самого варианта (photos.offered): галерея дорисованных
+  кадров сверх добора не видит, и считать их ей здесь тоже нечего.
 
 Язык условий (он же используется в score.py для prefers):
 
@@ -113,7 +115,7 @@ def feature_for(name: str, contract: dict, profile: Profile, taken=()) -> Featur
         return profile.feature(name)
     if not profile.images.known:
         return profile.feature(name)
-    return known(len(photos.remaining(profile, taken)))
+    return known(len(photos.offered(contract, profile, taken)))
 
 
 def _image_reasons(contract: dict, profile: Profile, taken) -> list[Reason]:

@@ -5,6 +5,7 @@
 """
 from site_factory.engine import gates, photos, score, slots
 from site_factory.engine.profile import Profile
+from site_factory.engine.render import load_library
 
 from .conftest import BRAND_SHOP
 
@@ -40,6 +41,18 @@ PICKY = {"id": "picky", "role": "gallery", "image_pool": "free_photos",
 def shop(**kw) -> Profile:
     """brand_shop, у которого пул — POOL и ничего кроме."""
     return Profile.from_dict(dict(BRAND_SHOP, images=dict(POOL), **kw))
+
+
+def with_frames(*names) -> Profile:
+    """brand_shop, у которого пул — ровно эти кадры, все одной ширины.
+
+    Имена и решают всё: photo-N снял сайт лида, ambient-N дорисовали под
+    нехватку (bot/ambient_stage), и в белом списке они лежат вперемешку.
+    """
+    return Profile.from_dict(dict(
+        BRAND_SHOP,
+        images={name: {"src": f"/img/{name}.webp", "width": 1200, "height": 900}
+                for name in names}))
 
 
 def test_the_pool_hands_out_frames_in_number_order():
@@ -159,6 +172,57 @@ def test_the_strictest_floor_of_the_library_wins_over_the_loose_ones():
     assert photos.strictest_min_width({"one": ONE, "pair": PAIR,
                                        "widest": WIDEST}) == 900
     assert photos.strictest_min_width({}) == 0
+
+
+# --- дорисованные кадры -------------------------------------------------------
+
+def test_a_gallery_does_not_see_drawn_frames_while_it_has_its_own():
+    """Снимков лида хватает на порог — дорисованных в пуле галереи нет вовсе."""
+    profile = with_frames("photo-2", "photo-3", "photo-4", "ambient-1",
+                          "ambient-2")
+    assert photos.offered(STRETCHY, profile) == ["photo-2", "photo-3", "photo-4"]
+    assert photos.picked(STRETCHY, profile) == ["photo-2", "photo-3", "photo-4"]
+
+
+def test_a_gallery_borrows_exactly_as_many_drawn_frames_as_it_lacks():
+    """Двух снимков до порога не хватает на один — он и добирается, второй нет."""
+    profile = with_frames("photo-2", "photo-3", "ambient-1", "ambient-2")
+    assert photos.picked(STRETCHY, profile) == ["photo-2", "photo-3", "ambient-1"]
+    # добор считается от снимков лида, а не от остатка: кадр забрали выше —
+    # дыра стала глубже, и закрывается она вторым дорисованным
+    assert photos.picked(STRETCHY, profile, {"photo-2"}) == \
+        ["photo-3", "ambient-1", "ambient-2"]
+
+
+def test_a_gallery_without_a_single_photo_of_its_own_stands_on_drawn_frames():
+    """Своих снимков нет вовсе — порог закрывается дорисованными целиком."""
+    profile = with_frames("ambient-1", "ambient-2", "ambient-3")
+    assert photos.picked(STRETCHY, profile) == \
+        ["ambient-1", "ambient-2", "ambient-3"]
+
+
+def test_the_first_screen_takes_a_drawn_frame_as_it_took_it_before():
+    """Правило про добор — про галерею: фоном дорисованный кадр годится всегда."""
+    profile = with_frames("ambient-1", "ambient-2")
+    assert photos.picked(PAIR, profile) == ["ambient-1", "ambient-2"]
+    assert gates.check(PAIR, profile).ok
+
+
+def test_the_gate_counts_the_frames_the_gallery_will_actually_see():
+    """У гейта и у выдачи один пул: лишние дорисованные не считает ни один."""
+    lean = with_frames("photo-2", "photo-3")
+    assert not gates.check(STRETCHY, lean).ok
+    assert gates.check(STRETCHY, with_frames("photo-2", "photo-3", "ambient-1")).ok
+
+    crowded = with_frames("photo-2", "ambient-1", "ambient-2", "ambient-3")
+    assert gates.feature_for("nonproduct_photo_count", STRETCHY, crowded).value == 3
+
+
+def test_the_floor_of_the_gallery_is_the_floor_of_its_strictest_variant():
+    """GRID_MIN — не второе число рядом с контрактами, а то же самое."""
+    assert photos.GRID_MIN == max(photos.floor(contract)
+                                  for contract in load_library().values()
+                                  if contract["role"] == photos.GALLERY)
 
 
 def test_a_named_picture_never_goes_through_the_pool():

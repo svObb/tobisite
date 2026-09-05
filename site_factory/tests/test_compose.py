@@ -8,7 +8,8 @@ from site_factory.engine.profile import Profile
 from site_factory.engine.render import load_library, render
 from site_factory.engine.score import Score, choose
 
-from .conftest import GENERIC_RICH, LAWYER_POOR, LAWYER_RICH
+from .conftest import (GENERIC_RICH, LAWYER_POOR, LAWYER_RICH,
+                       shop_with_ambient)
 
 # Рейтинг со страницы лида: так его отдаёт скрейп разметки (site_scrape.rating).
 SCRAPED_RATING = {"value": 4.8, "count": 120, "source": "jsonld"}
@@ -143,6 +144,16 @@ def test_the_frames_of_the_split_hero_spend_the_accent_too(
     assert trace["sections"][1] == "hero_split_2"
     assert trace["tone"] is None
     assert 'data-tone="contrast"' not in html
+
+
+def test_the_trace_counts_the_frames_the_gallery_borrowed():
+    """Сколько кадров кладка добрала дорисованными — видно в карточке черновика."""
+    for real, drawn, borrowed in ((3, 2, 0), (2, 2, 1), (0, 3, 3)):
+        _, trace = render(shop_with_ambient(real, drawn))
+        assert role_record(trace, "gallery")["ambient_fill"] == borrowed
+
+    # у ролей, которым дорисованный кадр годится фоном, счёт не ведётся вовсе
+    assert "ambient_fill" not in role_record(trace, "hero")
 
 
 def test_a_scraped_rating_keeps_the_proof_section_alive():

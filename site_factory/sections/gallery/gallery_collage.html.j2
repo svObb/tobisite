@@ -10,13 +10,17 @@
     Швы между кадрами — просветы сетки (gap-px) на линейке палитры: рамок у
     снимков нет, границу рисует что-то одно.
 
+    Подпись говорит о компании, а не о кадрах, и печатается только над её
+    собственными снимками: в кладку с дорисованным кадром она бы утверждала
+    «наш зал» о том, что залом не является (engine/photos.offered).
+
     Описать чужие фотографии движку нечем, поэтому alt пустой, а кладка
     спрятана от скринридера: она ничего не сообщает сверх соседних секций. -#}
 {%- set s = section.slots -%}
 {%- set frames = section.images.values() | list -%}
 {%- set n = frames | length -%}
 <section id="{{ section.id }}">
-  {%- if s.caption %}
+  {%- if s.caption and not has_ambient(section.images) %}
   <p class="max-w-[var(--measure)] px-gutter pt-section pb-flow text-lede text-balance" data-reveal>{{ s.caption }}</p>
   {%- endif %}
   <ul class="grid grid-cols-2 gap-px bg-line md:grid-rows-2 {{ 'md:aspect-[3/2] md:grid-cols-3' if n == 3 else 'md:aspect-[2/1] md:grid-cols-4' }}">

@@ -250,6 +250,22 @@ def shop_with_pool(widths):
     return Profile.from_dict(dict(BRAND_SHOP, images=named | photos))
 
 
+def shop_with_ambient(real: int, drawn: int):
+    """brand_shop, у которого столько снимков сайта и столько дорисованных кадров.
+
+    Дорисованные кладёт в стейджинг человек штатной командой (bot/ambient_stage)
+    под именами ambient-N: в белом списке они лежат рядом с photo-N и отличаются
+    от них только именем.
+    """
+    frames = [f"photo-{2 + index}" for index in range(real)]
+    frames += [f"ambient-{1 + index}" for index in range(drawn)]
+    pool = {name: {"src": f"/img/{name}.webp", "width": 1200, "height": 900}
+            for name in frames}
+    named = {name: image for name, image in BRAND_SHOP["images"].items()
+             if name in ("logo", "hero_bg")}
+    return Profile.from_dict(dict(BRAND_SHOP, images=named | pool))
+
+
 def shop_without_hero(widths):
     """То же, но без hero_bg: кадр под первый экран приходится брать из пула."""
     profile = shop_with_pool(widths)

@@ -26,11 +26,24 @@ pool_leave — вежливость тянущейся секции к тем, �
 pool_min_width — жёсткий отсев, а не предпочтение: снимок 600px под фон
 секции не годится ничем, и вариант с ним честно выбывает по гейту, вместо
 того чтобы растянуть его на всю ширину экрана.
+
+Кадры `ambient-N` в пуле лежат вместе с остальными, но галерее достаются не
+так: см. offered().
 """
 from __future__ import annotations
 
 FREE_PHOTOS = "free_photos"   # единственный пул картинок (image_pool контракта)
 WIDEST = "widest"             # pool_pick: самый широкий кадр остатка вперёд
+AMBIENT = "ambient-"          # префикс кадров, дорисованных под нехватку пула
+GALLERY = "gallery"           # роль, где кадр читается как фотография объекта
+
+# Сколько кадров нужно галерее, чтобы быть галереей: порог самой требовательной
+# из них — кладки. Добор дорисованными считается для роли целиком, а не для
+# каждого варианта отдельно: считай его вариант по своему порогу, заявление и
+# кладка спорили бы за роль, глядя на пулы разного размера. Числом, потому что
+# библиотеки здесь нет и не будет (её читает render, а он импортирует этот
+# модуль); вывод числа из контрактов держит тест в tests/test_photos.py.
+GRID_MIN = 3
 
 
 def uses_pool(contract: dict) -> bool:
@@ -49,13 +62,43 @@ def remaining(profile, taken=()) -> list[str]:
     return [name for name in profile.free_photos() if name not in used]
 
 
+def is_ambient(name: str) -> bool:
+    """Кадр дорисован под нехватку пула, а не снят у самого лида."""
+    return str(name).startswith(AMBIENT)
+
+
+def has_ambient(images) -> bool:
+    """Есть ли дорисованный кадр среди картинок секции. Зовут и шаблоны галерей."""
+    return any(is_ambient(name) for name in images or ())
+
+
+def offered(contract: dict, profile, taken=()) -> list[str]:
+    """Кадры остатка, которые вариант вправе увидеть. Реальные всегда впереди.
+
+    Сгенерированный кадр не доказательство — он закрывает дыру, а не
+    рассказывает о бизнесе. Поэтому галерее он достаётся только добором: пока
+    снимков лида хватает на GRID_MIN, дорисованных она не видит вовсе, а не
+    хватает — берёт ровно столько, сколько не хватает до порога.
+
+    Остальным ролям дорисованный кадр годится как прежде: фоном первого экрана
+    и полотном рядом с текстом он и задуман, а фотографией объекта там никто
+    его не выдаёт.
+    """
+    names = remaining(profile, taken)
+    if contract.get("role") != GALLERY:
+        return names
+    real = [name for name in names if not is_ambient(name)]
+    gap = max(GRID_MIN - len(real), 0)
+    return real + [name for name in names if is_ambient(name)][:gap]
+
+
 def available(contract: dict, profile, taken=()) -> list[str]:
     """Кадры остатка, годные варианту: те, что не уже его pool_min_width."""
     least = contract.get("pool_min_width") or 0
+    names = offered(contract, profile, taken)
     if not least:
-        return remaining(profile, taken)
-    return [name for name in remaining(profile, taken)
-            if _width(profile, name) >= least]
+        return names
+    return [name for name in names if _width(profile, name) >= least]
 
 
 def picked(contract: dict, profile, taken=()) -> list[str]:
@@ -96,6 +139,11 @@ def strictest_min_width(library: dict) -> int:
     """
     return max((int(contract.get("pool_min_width") or 0)
                 for contract in library.values()), default=0)
+
+
+def ambient_fill(section: dict) -> int:
+    """Сколько кадров секция добрала дорисованными — число для следа решения."""
+    return sum(1 for name in section["images"] if is_ambient(name))
 
 
 def claimed(section: dict) -> set[str]:

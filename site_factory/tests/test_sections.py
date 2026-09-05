@@ -19,8 +19,8 @@ from site_factory.engine.render import (ROOT, environment, load_library,
 
 from . import smoke_render
 from .conftest import (BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH, LOGO,
-                       PRODUCTS, shop_with_pool, shop_without_hero,
-                       with_a_light_logo)
+                       PRODUCTS, shop_with_ambient, shop_with_pool,
+                       shop_without_hero, with_a_light_logo)
 
 # Название из настоящего прайса запчастей: имя товара, артикулы в скобках и
 # пометка состояния — три разных сообщения в одной строке.
@@ -42,6 +42,10 @@ LONG_PRODUCT = ("Комплект зчеплення в зборі для важ
 # — под потолок источника (120 знаков режет и скрейп, и шлюз карточки).
 LONG_HOURS = ("Пн–Чт: 09:00–13:00 та 14:00–19:00, Пт: 09:00–18:00, "
               "Сб: 10:00–17:00 без перерви, Нд і святкові дні: вихідний")
+
+# Подпись кладки такая, какую пишет слот-генерация живому лиду: она утверждает
+# нечто о том, что на кадрах, — и над дорисованным кадром это ложь.
+CAPTION = "Наш сервіс у Харкові"
 
 
 def images_of(html):
@@ -301,6 +305,42 @@ def test_three_frames_stay_with_the_collage_whole():
     assert "gallery_collage" in trace["sections"]
     assert len(images_of(section_html(html, "gallery"))) == 3
     assert "about_note" in trace["sections"]
+
+
+def test_a_collage_of_the_leads_own_photos_keeps_its_caption():
+    """Снимков лида хватает на кладку — она подписана и ни одного чужого кадра."""
+    profile = shop_with_ambient(3, 2)
+    html, trace = render(profile, free_texts=free_texts_for(
+        profile, {"gallery_collage.caption": CAPTION}))
+
+    assert "gallery_collage" in trace["sections"]
+    assert images_of(section_html(html, "gallery")) == \
+        [f"/img/photo-{number}.webp" for number in (2, 3, 4)]
+    assert CAPTION in section_html(html, "gallery")
+
+
+def test_a_collage_that_borrowed_a_frame_says_nothing_about_it():
+    """Дорисованный кадр закрывает дыру — подпись о компании над ним не идёт."""
+    profile = shop_with_ambient(2, 2)
+    html, trace = render(profile, free_texts=free_texts_for(
+        profile, {"gallery_collage.caption": CAPTION}))
+
+    assert "gallery_collage" in trace["sections"]
+    assert images_of(section_html(html, "gallery")) == \
+        ["/img/photo-2.webp", "/img/photo-3.webp", "/img/ambient-1.webp"]
+    assert CAPTION not in html
+
+
+def test_a_lead_without_photos_of_its_own_gets_a_collage_of_drawn_frames():
+    """Своих снимков нет — кладка стоит на дорисованных и молчит о них."""
+    profile = shop_with_ambient(0, 3)
+    html, trace = render(profile, free_texts=free_texts_for(
+        profile, {"gallery_collage.caption": CAPTION}))
+
+    assert "gallery_collage" in trace["sections"]
+    assert images_of(section_html(html, "gallery")) == \
+        [f"/img/ambient-{number}.webp" for number in (1, 2, 3)]
+    assert CAPTION not in html
 
 
 def test_narrow_frames_never_become_a_full_width_background():

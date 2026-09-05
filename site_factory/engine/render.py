@@ -40,7 +40,7 @@ from typing import NamedTuple
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from . import niches, slots
+from . import niches, photos, slots
 from .color import PIVOT_LUMINANCE, luminance, srgb
 from .compose import (apply_free_texts, compose, enough, first_screen,
                       link_sections, opens_with_a_frame)
@@ -394,6 +394,9 @@ def environment(root: pathlib.Path = ROOT) -> Environment:
     # Разрез названия товара — чистая функция, и шаблон зовёт именно её, а не
     # свою цепочку фильтров: правило разреза одно на всю библиотеку.
     env.globals["split_product_name"] = split_product_name
+    # Кто из кадров дорисован, решает движок по имени картинки; шаблону галереи
+    # это нужно, чтобы не подписывать чужой кадр словами о компании.
+    env.globals["has_ambient"] = photos.has_ambient
     return env
 
 

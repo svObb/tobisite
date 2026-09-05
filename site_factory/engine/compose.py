@@ -195,6 +195,10 @@ def _fill(role: str, profile: Profile, recipe: dict, library: dict,
         "images": filled.images,
         "contract": contract,
     }
+    if contract["role"] == photos.GALLERY:
+        # сколько кадров галерея добрала дорисованными: по карточке черновика
+        # видно, держится полоса на снимках лида или на нашей заплатке
+        record["ambient_fill"] = photos.ambient_fill(section)
     return section, record
 
 
