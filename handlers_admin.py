@@ -1425,6 +1425,8 @@ def enrich_report(result) -> str:
         lines.append(f"⚠️ Картинок нет: {esc(result.images_reason)}")
     if result.logo_note:
         lines.append(f"⚠️ {esc(result.logo_note)}")
+    if result.dropped_note:
+        lines.append(f"⚠️ {esc(result.dropped_note)}")
     kept = _enrich_labels(result.kept, result.rating)
     if kept:
         lines.append(f"Не тронуто, заполнено руками: {esc(', '.join(kept))}")

@@ -27,6 +27,7 @@ from email_gen import LOSS_KEY
 from models import Contact, CostLedger, Lead, LeadEvent, Session
 from site_factory.engine import color
 from site_factory.engine.profile import Profile
+from test_site_images import icon, photo_like
 
 SITE = "https://lihtaryk.example/"
 LOGO_URL = f"{SITE}logo.png"
@@ -42,8 +43,11 @@ def png(width, height, color=(194, 98, 26)) -> bytes:
     return buf.getvalue()
 
 
-BLOBS = {LOGO_URL: png(400, 120), WIDE_URL: png(2400, 1200),
-         TEAM_URL: png(1000, 1200), BOX_URL: png(900, 900)}
+# Фото компании рисуются шумом, а не заливкой: одноцветный прямоугольник —
+# плашка и есть, и классификатор графики честно снимет с него шапку и портрет.
+# Логотип и снимок товара он не судит вовсе, и им заливки хватает.
+BLOBS = {LOGO_URL: png(400, 120), WIDE_URL: photo_like(2400, 1200),
+         TEAM_URL: photo_like(1000, 1200), BOX_URL: png(900, 900)}
 
 # Логотип из двух цветов: приглушённый занимает больше места, яркий — меньше.
 # Порядок по частоте тут обратен порядку по насыщенности, и на этом видно,
@@ -370,7 +374,8 @@ async def test_a_site_with_frames_to_spare_is_asked_for_nothing(site_lead,
     scraped(result(products=[], images=[{"url": url, "weight": 30, "og": False,
                                          "width": 1200, "height": 900}
                                         for url in urls]),
-            {LOGO_URL: BLOBS[LOGO_URL]} | {url: png(1200, 900) for url in urls})
+            {LOGO_URL: BLOBS[LOGO_URL]}
+            | {url: photo_like(1200, 900) for url in urls})
 
     got = await es.enrich_from_site(lead.id)
 
@@ -652,6 +657,207 @@ def test_the_rating_note_counts_reviews_in_words():
     assert note({"value": 4.8, "count": 3}) == "4.8 (3 отзыва)"
     assert note({"value": 5, "count": 127}) == "5 (127 отзывов)"
     assert note({"value": 4.8}) == "" and note(None) == ""
+
+
+# --- баннеры, значки и полосы -------------------------------------------------
+#
+# Инцидент 03.09 у Кав'ярні: в галерею черновика уехали рекламный баннер-коллаж
+# и PNG-значок «Free WiFi» — обычные <img>, крупнее 200px и внутри вилки
+# аспектов, то есть для fits() безупречные.
+
+STICKER_URL = f"{SITE}free-wifi.png"
+STRIP_URL = f"{SITE}akcia-lenta.jpg"
+
+
+def shown(url: str, width: int, height: int, **kw) -> dict:
+    return {"url": url, "weight": kw.get("weight", 20), "og": False,
+            "width": width, "height": height,
+            "banner": kw.get("banner", False),
+            "outbound": kw.get("outbound", False)}
+
+
+def strip(width: int, height: int) -> bytes:
+    """Лента-баннер: 3,6:1 — для fits() ещё фото, для классификатора уже полоса."""
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(photo_like(width, height))).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+async def test_a_transparent_logo_on_the_page_does_not_become_a_photo(
+        site_lead, scraped, r2):
+    lead = await site_lead()
+    scraped(result(products=[], images=[shown(TEAM_URL, 1000, 1200),
+                                        shown(STICKER_URL, 400, 400)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], TEAM_URL: BLOBS[TEAM_URL],
+                   STICKER_URL: icon(400, 400)})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == ["logo", "portrait"]
+    data = await enrichment_of(lead.id)
+    assert data["photo_count"] == 1
+    assert data["images"]["portrait"]["src"] == "/img/portrait.webp"
+
+
+async def test_the_count_of_pictures_matches_what_lies_in_the_bucket(
+        site_lead, scraped, r2):
+    """Инвариант сшивки: photo_count — ровно то, что увидит движок в бакете."""
+    lead = await site_lead()
+    scraped(result(products=[], images=[shown(TEAM_URL, 1000, 1200),
+                                        shown(STICKER_URL, 400, 400)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], TEAM_URL: BLOBS[TEAM_URL],
+                   STICKER_URL: icon(400, 400)})
+
+    await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    assert data["photo_count"] == len([n for n in data["images"] if n != "logo"])
+    assert len(r2.objects) == len(data["images"])
+
+
+async def test_the_gap_grows_by_exactly_what_was_cut(site_lead, scraped, r2):
+    urls = [f"{SITE}zal-{n}.jpg" for n in range(4)]
+    photos = {url: photo_like(1600, 900) for url in urls}
+    lead = await site_lead()
+    scraped(result(products=[], images=[shown(url, 1600, 900) for url in urls]),
+            {LOGO_URL: BLOBS[LOGO_URL]} | photos)
+    whole = await es.enrich_from_site(lead.id)
+
+    cut = await site_lead()
+    scraped(result(products=[],
+                   images=[shown(url, 1600, 900) for url in urls[:2]]
+                   + [shown(STICKER_URL, 400, 400), shown(STRIP_URL, 1800, 500)]),
+            {LOGO_URL: BLOBS[LOGO_URL], STICKER_URL: icon(400, 400),
+             STRIP_URL: strip(1800, 500)}
+            | {url: photos[url] for url in urls[:2]})
+    got = await es.enrich_from_site(cut.id)
+
+    assert got.ambient_need == whole.ambient_need + 2
+
+
+async def test_the_report_names_how_many_were_cut_and_why(site_lead, scraped,
+                                                          r2):
+    lead = await site_lead()
+    scraped(result(products=[],
+                   images=[shown(TEAM_URL, 1000, 1200),
+                           shown(STICKER_URL, 400, 400),
+                           shown(STRIP_URL, 1800, 500)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], TEAM_URL: BLOBS[TEAM_URL],
+                   STICKER_URL: icon(400, 400), STRIP_URL: strip(1800, 500)})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert "не подошло картинок: 2" in got.dropped_note
+    assert "1 значок" in got.dropped_note and "1 полоса" in got.dropped_note
+    # коды причин разбирает журнал, админ читает слова
+    assert not any(code in got.dropped_note
+                   for code in ("alpha", "indexed", "strip"))
+    from handlers_admin import enrich_report
+    assert got.dropped_note in enrich_report(got)
+
+
+async def test_the_note_warns_when_no_own_photos_survive(site_lead, scraped, r2):
+    """photos.offered даёт галерее один дорисованный кадр, а не три."""
+    lead = await site_lead()
+    scraped(result(products=[], images=[shown(STICKER_URL, 400, 400)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], STICKER_URL: icon(400, 400)})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == ["logo"] and got.images_reason == ""
+    assert "своих фото не осталось" in got.dropped_note
+
+
+async def test_a_site_of_nothing_but_banners_says_so_instead_of_staging_them(
+        site_lead, scraped, r2):
+    """Сегодня мусорный улов уезжал в галерею молча — и это видел клиент."""
+    lead = await site_lead()
+    scraped(result(logos=[], products=[],
+                   images=[shown(STICKER_URL, 400, 400),
+                           shown(STRIP_URL, 1800, 500)]),
+            blobs={STICKER_URL: icon(400, 400), STRIP_URL: strip(1800, 500)})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == [] and "не нашлось" in got.images_reason
+    assert got.dropped_note and got.ambient_need == es.AMBIENT_TARGET
+    data = await enrichment_of(lead.id)
+    assert data["photo_count"] == 0
+    assert len(data["_scrape"]["images_dropped"]) == 2
+
+
+async def test_the_journal_records_every_cut_with_its_reason(site_lead, scraped,
+                                                             r2):
+    lead = await site_lead()
+    scraped(result(products=[],
+                   images=[shown(TEAM_URL, 1000, 1200),
+                           shown(STICKER_URL, 400, 400),
+                           shown(STRIP_URL, 1800, 500)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], TEAM_URL: BLOBS[TEAM_URL],
+                   STICKER_URL: icon(400, 400), STRIP_URL: strip(1800, 500)})
+
+    await es.enrich_from_site(lead.id)
+
+    journal = (await enrichment_of(lead.id))["_scrape"]["images_dropped"]
+    assert len(journal) == 2 <= es.DROPPED_JOURNAL
+    assert {item["why"] for item in journal} == {"alpha", "strip"}
+    assert all(item["url"] and len(item["url"]) <= es.DROPPED_URL_CHARS
+               for item in journal)
+    # метрики отсева — материал для калибровки порогов на живых лидах
+    sticker, = [item for item in journal if item["why"] == "alpha"]
+    assert sticker["colors"] and sticker["transparent"] > 0 and sticker["bpp"]
+
+
+async def test_a_repeat_scrape_writes_the_same_journal(site_lead, scraped, r2):
+    """Округление метрик — ради этого: JSONB карточки обязан быть тем же."""
+    lead = await site_lead()
+    scraped(result(products=[], images=[shown(TEAM_URL, 1000, 1200),
+                                        shown(STICKER_URL, 400, 400)]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], TEAM_URL: BLOBS[TEAM_URL],
+                   STICKER_URL: icon(400, 400)})
+    assert (await es.enrich_from_site(lead.id)).ok
+    before = (await enrichment_of(lead.id))["_scrape"]["images_dropped"]
+
+    assert (await es.enrich_from_site(lead.id)).ok
+
+    after = (await enrichment_of(lead.id))["_scrape"]["images_dropped"]
+    assert json.dumps(after, sort_keys=True) == json.dumps(before, sort_keys=True)
+
+
+async def test_a_product_shot_is_never_judged_by_pixels(site_lead, scraped, r2):
+    """У товара своя роль, и в галерею он идёт своим путём — пиксели ни при чём."""
+    lead = await site_lead()
+    scraped(result(images=[], products=[{"name": "Промінь 14", "price": "24 990 грн",
+                                         "image": BOX_URL}]),
+            blobs={LOGO_URL: BLOBS[LOGO_URL], BOX_URL: icon(900, 900)})
+
+    got = await es.enrich_from_site(lead.id)
+
+    assert got.staged == ["logo", "photo-2"] and got.dropped_note == ""
+    product, = (await enrichment_of(lead.id))["products"]
+    assert product["image"]["src"] == "/img/photo-2.webp"
+
+
+async def test_the_logo_is_never_judged_by_pixels(site_lead, scraped, r2):
+    """У логотипа альфа и плоская заливка — норма, а не признак мусора."""
+    lead = await site_lead()
+    scraped(result(brand_colors={}, images=[], products=[]),
+            blobs={LOGO_URL: transparent_logo()})
+
+    await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    assert "logo" in data["images"] and data["brand_colors"]["source"] == "logo"
+
+
+def transparent_logo() -> bytes:
+    """Логотип на прозрачном фоне: ровно то, чем «Free WiFi» и был."""
+    img = Image.new("RGBA", (400, 120), (0, 0, 0, 0))
+    img.paste(Image.new("RGBA", (240, 120), MUTED + (255,)), (0, 0))
+    img.paste(Image.new("RGBA", (100, 120), VIVID + (255,)), (300, 0))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 # --- цвета бренда -------------------------------------------------------------

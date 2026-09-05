@@ -41,6 +41,7 @@ AMBIENT_TARGET — отчёт называет, сколько кадров не
 import asyncio
 import json
 import logging
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
@@ -149,6 +150,19 @@ LOGO_CANDIDATES = 2
 PHOTO_CANDIDATES = 6
 PRODUCT_CANDIDATES = 6
 
+# Сколько записей отсева хранит журнал _scrape. Кандидатов к скачиванию всего
+# 14 (2+6+6), так что потолок фактический, а не отсекающий; стоит он здесь,
+# чтобы правка потолков выше не раздула JSONB карточки.
+DROPPED_JOURNAL = 12
+# Адрес в журнале нужен, чтобы открыть картинку глазами, а не чтобы хранить
+# чужую строку целиком.
+DROPPED_URL_CHARS = 200
+# Причина отсева людскими словами: коды разбирает тот, кто читает журнал, а в
+# отчёт админу идёт только счёт. alpha и indexed сливаются намеренно — разница
+# между ними на решение «идти за картинкой руками» не влияет.
+DROPPED_WORDS = {"alpha": "значок", "indexed": "значок", "strip": "полоса",
+                 "shape": "полоса", "small": "мелочь", "broken": "битый файл"}
+
 SYSTEM_PROMPT = """Ты разбираешь текст сайта небольшой местной компании и достаёшь из него две вещи: перечень услуг и часы работы. Больше ничего.
 
 ЧТО ТЕБЕ ДАЮТ
@@ -198,6 +212,7 @@ class EnrichResult:
     phone_diff: str = ""
     ai_note: str = ""
     logo_note: str = ""
+    dropped_note: str = ""
     rating: str = ""
     ambient: list[str] = field(default_factory=list)
     # Скольких кадров пулу не хватает и что на них рисовать. Генерации здесь
@@ -205,6 +220,20 @@ class EnrichResult:
     # и выкладывает их командой ambient_stage.
     ambient_need: int = 0
     ambient_brief: str = ""
+
+
+@dataclass(frozen=True)
+class Staging:
+    """Итог выкладки картинок: файлы, причина пропуска, смотрели ли, хвосты.
+
+    Датаклассом, а не кортежем: полей стало пять, и забытое при правке даёт
+    пустой список, а не молчаливый сдвиг позиций.
+    """
+    files: dict = field(default_factory=dict)
+    reason: str = ""
+    looked: bool = False
+    logo_note: str = ""
+    dropped: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -279,6 +308,27 @@ def ambient_gap(enrichment: dict) -> int:
 def ambient_brief(niche: str) -> str:
     """Что рисовать на амбиент-кадре лида этой ниши. Ниша чужая — общее."""
     return f"{AMBIENT_SUBJECTS.get(niche, AMBIENT_DEFAULT)}; {AMBIENT_RULE}"
+
+
+def dropped_note(dropped, *, photos: int = 0) -> str:
+    """Сколько картинок не пошло на страницу и почему. Пусто — все пошли.
+
+    Одной строкой и людскими словами: по ней админ решает, идти ли за
+    картинками руками, а коды причин разбирает журнал _scrape.
+
+    Своих фото не осталось вовсе — это надо сказать отдельно: галерее движок в
+    таком случае предлагает один дорисованный кадр, а не три (photos.offered),
+    и ждать трёх было бы напрасно.
+    """
+    if not dropped:
+        return ""
+    counts = Counter(DROPPED_WORDS.get(item.get("why"), "мелочь")
+                     for item in dropped)
+    parts = [f"{count} {word}" for word, count in sorted(counts.items())]
+    note = f"не подошло картинок: {len(dropped)} ({', '.join(parts)})"
+    if photos:
+        return note
+    return f"{note}; своих фото не осталось, галерею закроет дорисованный кадр"
 
 
 async def enrich_from_site(lead_id: int, *,
@@ -486,9 +536,10 @@ async def _run(lead_id, url, country, niche, enrichment, contact_types,
                                 lead_id=lead_id, url=url)
         scrape, ai_note = await _ask_model(scrape, lead_id)
         ambient = ambient_names(enrichment)
-        staged, images_reason, looked, logo_note = await _stage(
-            session, lead_id, scrape, keep=ambient)
+        staging = await _stage(session, lead_id, scrape, keep=ambient)
 
+    staged, looked = staging.files, staging.looked
+    images_reason = staging.reason
     survived = [name for name in ambient if name not in staged]
     colors = _brand_colors(scrape, staged)
     found = _with_ambient(
@@ -513,6 +564,7 @@ async def _run(lead_id, url, country, niche, enrichment, contact_types,
                   "name": scrape.name},
         "products": [dict(item) for item in scrape.products],
         "ai": ai_note,
+        "images_dropped": staging.dropped[:DROPPED_JOURNAL],
     }
     enriched = dict(merged.enrichment)
     enriched[SCRAPE_KEY] = journal
@@ -538,7 +590,10 @@ async def _run(lead_id, url, country, niche, enrichment, contact_types,
         empty=[label for key, label in REPORT_FIELDS if key not in found],
         staged=sorted(staged), images_reason=images_reason,
         phone_diff=_phone_diff(scrape, contact_types), ai_note=ai_note,
-        logo_note=logo_note, rating=rating_note(merged.enrichment.get("rating")),
+        logo_note=staging.logo_note,
+        dropped_note=dropped_note(staging.dropped,
+                                  photos=len(site_images.photo_names(staged))),
+        rating=rating_note(merged.enrichment.get("rating")),
         ambient=survived, ambient_need=need,
         ambient_brief=ambient_brief(niche) if need else "",
     )
@@ -612,42 +667,58 @@ def _products_with_images(products, staged: dict) -> list[dict]:
     return out
 
 
-async def _stage(session, lead_id: int, scrape, *,
-                 keep=()) -> tuple[dict, str, bool, str]:
+async def _stage(session, lead_id: int, scrape, *, keep=()) -> Staging:
     """Скачать, пережать и выложить картинки.
 
-    Возвращает ({имя: запись}, причину пропуска, смотрели ли вообще, строку о
-    логотипе). Третий флаг отделяет «на сайте фотографий нет» от «мы не
-    проверяли»: первое пишется в enrichment нулём, второе не пишется никак.
-    Четвёртая — то, что админу придётся доделать руками.
+    Staging.looked отделяет «на сайте фотографий нет» от «мы не проверяли»:
+    первое пишется в enrichment нулём, второе не пишется никак. logo_note и
+    dropped — то, что админу придётся доделать руками.
+
+    Логотип и снимок товара классификатор графики не судят: у логотипа альфа и
+    индексная палитра — норма, а у товара своя роль, и в галерею он идёт своим
+    путём.
 
     keep — имена амбиента: их файлы уборка стейджинга не трогает.
     """
     if not draft_service.r2_ready():
-        return {}, "не заданы ключи R2 — картинки пропущены", False, ""
+        return Staging(reason="не заданы ключи R2 — картинки пропущены")
     product_images = [p["image"] for p in scrape.products if p.get("image")]
     # только растровые: у инлайнового SVG url пустой, и качать там нечего
     logo_urls = [c["url"] for c in scrape.logos if c.get("url")][:LOGO_CANDIDATES]
     wanted = (
-        [(url, "logo", False, False) for url in logo_urls]
-        + [(c["url"], "photo", c.get("og", False), False)
+        [(url, "logo", False, False, False) for url in logo_urls]
+        + [(c["url"], "photo", c.get("og", False), False,
+            bool(c.get("banner") or c.get("outbound")))
            for c in scrape.images][:PHOTO_CANDIDATES]
-        + [(url, "photo", False, True)
+        + [(url, "photo", False, True, False)
            for url in product_images][:PRODUCT_CANDIDATES]
     )
     kinds = {}
-    for url, kind, og, product in wanted:
-        kinds.setdefault(url, (kind, og, product))
+    for url, kind, og, product, hint in wanted:
+        kinds.setdefault(url, (kind, og, product, hint))
     blobs = await site_scrape.download_images(session, list(kinds))
-    candidates, bodies = [], {}
+    candidates, bodies, dropped = [], {}, []
     for url, data in blobs:
-        kind, og, product = kinds[url]
+        kind, og, product, hint = kinds[url]
         size = site_images.probe_image(data)
-        if size is None or not site_images.fits(size, kind):
+        if size is None:
+            dropped.append(_dropped(url, "broken", data))
             continue
+        if not site_images.fits(size, kind):
+            dropped.append(_dropped(url, _refusal(size, kind), data, size=size))
+            continue
+        item = {"url": url, "kind": kind, "og": og, "product": product, **size}
+        if kind != "logo" and not product:
+            probe = site_images.graphic_probe(data)
+            verdict = site_images.graphic_verdict(size, probe, hint=hint)
+            if verdict["hard"]:
+                dropped.append(_dropped(url, verdict["hard"], data, size=size,
+                                        probe=probe))
+                continue
+            if verdict["soft"]:
+                item["graphic"] = verdict["score"]
         bodies[url] = data
-        candidates.append({"url": url, "kind": kind, "og": og,
-                           "product": product, **size})
+        candidates.append(item)
     roles = site_images.assign_roles(candidates)
     files = _render_files(roles, bodies)
     logo_note = ""
@@ -658,15 +729,47 @@ async def _stage(session, lead_id: int, scrape, *,
         elif not logo_note:
             logo_note = _lost_logo_note(logo_urls)
     if not files:
-        return ({}, "картинок, годных для страницы, на сайте не нашлось",
-                True, logo_note)
+        return Staging(reason="картинок, годных для страницы, на сайте не нашлось",
+                       looked=True, logo_note=logo_note, dropped=dropped)
     try:
         await _put_all(lead_id, files, keep=keep)
     except Exception as e:
         log.exception("лид %s: стейджинг картинок не удался", lead_id)
-        return {}, f"картинки не выложены: {e}", False, logo_note
-    return ({name: _record(item) for name, item in files.items()},
-            "", True, logo_note)
+        return Staging(reason=f"картинки не выложены: {e}",
+                       logo_note=logo_note, dropped=dropped)
+    return Staging(files={name: _record(item) for name, item in files.items()},
+                   looked=True, logo_note=logo_note, dropped=dropped)
+
+
+def _refusal(size: dict, kind: str) -> str:
+    """Чем картинка не подошла fits(): мелкая или не той формы."""
+    floor = (site_images.MIN_LOGO_SIDE if kind == "logo"
+             else site_images.MIN_PHOTO_SIDE)
+    if size["width"] < floor or size["height"] < floor:
+        return "small"
+    return "shape"
+
+
+def _dropped(url: str, why: str, data: bytes, *, size=None, probe=None) -> dict:
+    """Запись журнала отсева: по ней пороги правятся на живых лидах, не гаданием.
+
+    Метрики округляются: повторный обход обязан дать байт-в-байт тот же JSONB.
+    bpp считается, но веса не имеет — сильно сжатый геройник и PNG-скриншот
+    попадают в один диапазон, и порог по нему разделил бы качество сжатия, а
+    не графику и фото.
+    """
+    record = {"url": url[:DROPPED_URL_CHARS], "why": why}
+    if size:
+        record["w"], record["h"] = size["width"], size["height"]
+        pixels = size["width"] * size["height"]
+        if pixels:
+            record["bpp"] = round(len(data) / pixels, 3)
+    if probe:
+        record |= {"colors": probe["colors"],
+                   "dominant": round(probe["dominant"], 3),
+                   "flat": round(probe["flat"], 3),
+                   "transparent": round(probe["transparent"], 3)}
+    return record
 
 
 def _render_files(roles: dict, bodies: dict) -> dict:
