@@ -351,6 +351,17 @@ def test_the_colours_of_a_logo_pass_the_gateway_and_the_rubbish_does_not():
         dict(logo, colors=["тёмно-синий", "#12345", "rgb(0,0,0)", 5, None])) == logo
 
 
+def test_the_lightness_of_a_logo_passes_the_gateway_only_as_a_share_of_one():
+    """Светлота необязательна, а всё, что вне шкалы 0..1, — не светлота."""
+    logo = {"src": "/img/logo.webp", "width": 320, "height": 96}
+
+    assert draft_service._clean_image(dict(logo, lightness=0))["lightness"] == 0.0
+    assert draft_service._clean_image(dict(logo, lightness=1))["lightness"] == 1.0
+    # bool в питоне число: True стал бы «почти белым логотипом» из мусора
+    for rubbish in (True, "0.3", 1.5, -0.1, None, [0.3]):
+        assert draft_service._clean_image(dict(logo, lightness=rubbish)) == logo
+
+
 # --- готовые тексты слотов вместо модели (дельта 27.08) -----------------------
 
 async def _ready(lead, texts: dict):

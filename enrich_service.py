@@ -410,14 +410,19 @@ def found_fields(scrape, staged: dict, colors: dict, *,
 def _image_field(record: dict) -> dict:
     """Картинка стейджинга в том виде, в каком её ждёт карточка лида.
 
-    Цвета едут вместе с логотипом: по ним движок решает, ляжет ли шапка на кадр
-    первого экрана (profile.logo_is_dark), — а source остаётся в стейджинге,
-    странице он не нужен.
+    Светлота и цвета едут вместе с логотипом: по ним движок решает, ляжет ли
+    шапка на кадр первого экрана (profile.logo_is_dark), — а source остаётся в
+    стейджинге, странице он не нужен.
+
+    Светлота отдельным полем, а не выводом из цветов: цвета отбирают
+    нейтральное, и чёрно-белый логотип их не даёт вовсе.
     """
     image = {"src": record["src"], "width": record["width"],
              "height": record["height"]}
     if record.get("colors"):
         image["colors"] = list(record["colors"])
+    if record.get("lightness") is not None:
+        image["lightness"] = record["lightness"]
     return image
 
 
@@ -678,6 +683,7 @@ def _render_files(roles: dict, bodies: dict) -> dict:
         made["source"] = candidate["url"]
         if name == "logo":
             made["colors"] = site_images.dominant_colors(data)
+            made["lightness"] = site_images.mean_lightness(data)
         files[name] = made
     return files
 
@@ -735,6 +741,8 @@ def _record(item: dict) -> dict:
               "height": item["height"], "source": item["source"]}
     if item.get("colors"):
         record["colors"] = item["colors"]
+    if item.get("lightness") is not None:
+        record["lightness"] = item["lightness"]
     return record
 
 

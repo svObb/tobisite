@@ -17,6 +17,12 @@ import re
 from PIL import Image, ImageOps, UnidentifiedImageError
 from lxml import etree
 
+# Светлота считается формулой движка, а не второй её копией: по этому числу
+# движок решает, ляжет ли шапка на кадр первого экрана, и разъехавшиеся копии
+# OKLab дали бы два разных ответа на один логотип. Модуль color ничего не
+# импортирует, поэтому чистота этого файла от него не страдает.
+from site_factory.engine.color import lightness
+
 log = logging.getLogger(__name__)
 
 # Файлов на лида: логотип плюс до семи картинок. Потолок стоит здесь, а не в
@@ -141,6 +147,39 @@ def dominant_colors(data: bytes, limit: int = 2) -> list[str]:
         buckets[key] = buckets.get(key, 0) + 1
     best = sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
     return ["#%02x%02x%02x" % (r * 8, g * 8, b * 8) for (r, g, b), _ in best]
+
+
+def mean_lightness(data: bytes) -> float | None:
+    """Средняя светлота непрозрачных пикселей логотипа, 0..1. None — судить нечем.
+
+    Отдельно от dominant_colors, потому что цвета отбрасывают нейтральное, а
+    чёрно-белый или чисто чёрный логотип — самый частый у малого бизнеса — из
+    одного нейтрального и состоит: цветов он не даёт вовсе, и о том, читается
+    ли он на тёмном скриме первого экрана, они молчат.
+
+    Считается по той же загрублённой копии, что и цвета: точная светлота
+    отдельного пикселя ни на что не влияет, а логотип в 4K обошёлся бы в
+    миллионы возведений в степень.
+
+    Прозрачный насквозь логотип — None, а не «белый»: за его пикселями стоит
+    фон страницы, и утверждать о нём нечего.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img = ImageOps.exif_transpose(img).convert("RGBA")
+            img.thumbnail((64, 64), Image.Resampling.LANCZOS)
+            pixels = img.tobytes()
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError,
+            ValueError):
+        return None
+    total, count = 0.0, 0
+    for start in range(0, len(pixels) - 3, 4):
+        r, g, b, a = pixels[start:start + 4]
+        if a < 128:
+            continue
+        total += lightness((r / 255, g / 255, b / 255))
+        count += 1
+    return total / count if count else None
 
 
 def sanitize_svg(markup: str | bytes) -> str | None:

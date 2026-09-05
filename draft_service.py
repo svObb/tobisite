@@ -986,10 +986,11 @@ def _clean_images(value) -> dict:
 def _clean_image(item) -> dict | None:
     """Запись картинки для движка. None — показывать нечего.
 
-    colors несёт только логотип: по ним движок решает, ляжет ли шапка на кадр
-    первого экрана (profile.logo_is_dark). Поле необязательное — у логотипа,
-    взятого руками, и у карточек прошлых волн его нет вовсе, — а всё, что не
-    читается как «#rrggbb», выбрасывается: судить по мусору хуже, чем не знать.
+    lightness и colors несёт только логотип: по ним движок решает, ляжет ли
+    шапка на кадр первого экрана (profile.logo_is_dark). Оба поля
+    необязательны — у логотипа, взятого руками, и у карточек прошлых волн их
+    нет вовсе, — и всё, что не читается как «#rrggbb» или как доля от нуля до
+    единицы, выбрасывается: судить по мусору хуже, чем не знать.
     """
     if not isinstance(item, dict):
         return None
@@ -1002,7 +1003,21 @@ def _clean_image(item) -> dict | None:
               if isinstance(value, str) and HEX_COLOR.fullmatch(value.strip())]
     if colors:
         image["colors"] = colors
+    light = _lightness(item.get("lightness"))
+    if light is not None:
+        image["lightness"] = light
     return image
+
+
+def _lightness(value) -> float | None:
+    """Светлота логотипа из записи стейджинга. None — числа нет или оно не в шкале.
+
+    bool в питоне число, и без этого отказа True стал бы «почти белым
+    логотипом» из мусора — тот же гард стоит в profile.clean_rating.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if 0 <= value <= 1 else None
 
 
 def _clean_products(value) -> list[dict]:

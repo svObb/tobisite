@@ -26,6 +26,7 @@ import site_scrape
 from email_gen import LOSS_KEY
 from models import Contact, CostLedger, Lead, LeadEvent, Session
 from site_factory.engine import color
+from site_factory.engine.profile import Profile
 
 SITE = "https://lihtaryk.example/"
 LOGO_URL = f"{SITE}logo.png"
@@ -49,6 +50,9 @@ BLOBS = {LOGO_URL: png(400, 120), WIDE_URL: png(2400, 1200),
 # какой из них уходит в accent: на самом частом цвете тест бы прошёл и с
 # ошибкой «accent — просто первый в палитре».
 VIVID, MUTED = (220, 20, 60), (130, 120, 90)
+# Логотип одного тёмного серого: цвета его не видят (нейтральное в палитру не
+# идёт), а светлота видит.
+GREY = (60, 60, 60)
 
 
 def two_tone_logo() -> bytes:
@@ -334,12 +338,13 @@ async def test_images_are_staged_under_the_lead_prefix(site_lead, scraped, r2):
     data = await enrichment_of(lead.id)
     assert data["images"]["logo"] == {
         "src": "/img/logo.webp", "width": 400, "height": 120,
-        "colors": site_images.dominant_colors(BLOBS[LOGO_URL])}
+        "colors": site_images.dominant_colors(BLOBS[LOGO_URL]),
+        "lightness": site_images.mean_lightness(BLOBS[LOGO_URL])}
     assert (data["images"]["hero_bg"]["width"]
             == site_images.ROLE_MAX_SIDE["background"])
     # инвариант сшивки: photo_count — контентные фото, логотип в них не входит
     assert data["photo_count"] == 3 == len(data["images"]) - 1
-    # цвета несёт только логотип: у остальных кадров их не считают
+    # цвета и светлоту несёт только логотип: у остальных кадров их не считают
     assert all(set(item) == {"src", "width", "height"}
                for name, item in data["images"].items() if name != "logo")
 
@@ -688,6 +693,31 @@ async def test_the_colours_of_the_logo_travel_with_the_logo_itself(site_lead,
     assert logo["colors"] == site_images.dominant_colors(two_tone_logo())
     # сквозь стык дорожек: движок читает цвета из той же записи
     assert draft_service._clean_image(logo)["colors"] == logo["colors"]
+
+
+async def test_a_logo_of_one_grey_travels_by_its_lightness(site_lead, scraped,
+                                                           r2):
+    """Чёрно-белый логотип цветов не даёт вовсе, и без светлоты он был бы нем.
+
+    Такой логотип у малого бизнеса самый частый, а на тёмном скриме первого
+    экрана чёрные буквы пропадают ровно так же, как тёмно-бирюзовые.
+    """
+    lead = await site_lead()
+    scraped(result(brand_colors={}, images=[], products=[]),
+            blobs={LOGO_URL: png(400, 120, GREY)})
+
+    await es.enrich_from_site(lead.id)
+
+    data = await enrichment_of(lead.id)
+    logo = data["images"]["logo"]
+    assert "colors" not in logo and "brand_colors" not in data
+    assert logo["lightness"] == site_images.mean_lightness(png(400, 120, GREY))
+    # сквозь стык дорожек: шлюз черновика пропускает светлоту, и профиль по
+    # ней одной судит о логотипе
+    profile = Profile.from_dict({
+        "domain_norm": "lead.example",
+        "images": {"logo": draft_service._clean_image(logo)}})
+    assert profile.feature("logo_is_dark").value is True
 
 
 async def test_the_page_colours_win_over_the_logo(site_lead, scraped, r2):

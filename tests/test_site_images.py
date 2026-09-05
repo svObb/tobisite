@@ -121,6 +121,33 @@ def test_a_grey_logo_has_no_brand_colour():
     assert si.dominant_colors(raster(200, 200, (128, 128, 128))) == []
 
 
+# --- светлота -----------------------------------------------------------------
+
+def test_a_black_logo_is_at_the_bottom_of_the_scale_and_a_white_one_at_the_top():
+    black = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+    black.paste(Image.new("RGBA", (100, 100), (0, 0, 0, 255)), (50, 50))
+    buf = io.BytesIO()
+    black.save(buf, "PNG")
+
+    assert si.mean_lightness(buf.getvalue()) == pytest.approx(0, abs=0.01)
+    assert si.mean_lightness(raster(200, 200, (255, 255, 255))) == \
+        pytest.approx(1, abs=0.01)
+
+
+def test_a_grey_logo_has_no_colour_but_it_has_a_lightness():
+    """Ради этого случая светлота и считается: цвета о таком логотипе молчат."""
+    grey = raster(200, 200, (128, 128, 128))
+
+    assert si.dominant_colors(grey) == []
+    assert si.mean_lightness(grey) == pytest.approx(0.6, abs=0.01)
+
+
+def test_a_logo_without_a_single_opaque_pixel_says_nothing():
+    """За прозрачными пикселями стоит фон страницы — утверждать о них нечего."""
+    assert si.mean_lightness(raster(200, 200, (0, 0, 0, 0), mode="RGBA")) is None
+    assert si.mean_lightness(b"\x89PNG oops") is None
+
+
 # --- SVG ----------------------------------------------------------------------
 
 SAFE_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40">'

@@ -407,6 +407,23 @@ def test_the_darkness_of_the_logo_is_read_from_its_own_colours(brand_shop):
     assert not Profile.from_dict(LAWYER_RICH).feature("logo_is_dark").known
 
 
+def test_the_lightness_of_the_logo_outranks_its_colours(brand_shop):
+    """Светлота снята со всей картинки, цвета — только с её цветных пятен."""
+    def with_logo(**fields):
+        images = dict(BRAND_SHOP["images"], logo=dict(LOGO, **fields))
+        return replace(brand_shop, images=known(images))
+
+    # чёрно-белый логотип цветов не даёт вовсе — судить остаётся по светлоте
+    assert with_logo(lightness=0.1).feature("logo_is_dark").value is True
+    assert with_logo(lightness=0.9).feature("logo_is_dark").value is False
+    # и цвета логотипа, и фирменный цвет brand_shop тёмные — светлота старше
+    assert with_logo(lightness=0.9, colors=["#005068"]).feature(
+        "logo_is_dark").value is False
+    # мусор вместо светлоты — то же, что светлоты нет: остаются цвета
+    assert with_logo(lightness="тёмный", colors=["#f8c050"]).feature(
+        "logo_is_dark").value is False
+
+
 def test_frames_drawn_to_order_stand_behind_the_photos_of_the_company():
     """Пул: сперва снимки сайта по номеру, потом амбиент, дорисованный под нехватку."""
     def frame(name):

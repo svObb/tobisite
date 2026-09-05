@@ -95,6 +95,23 @@ def test_a_dark_logo_takes_the_header_off_the_photo(brand_shop):
         assert "data-header-sentinel" not in html
 
 
+def test_the_header_asks_the_lightness_of_the_logo_before_its_colours(brand_shop):
+    """Чёрно-белый логотип цветов не даёт вовсе — о шапке решает светлота.
+
+    Такой логотип у малого бизнеса самый частый, и без светлоты он оставался бы
+    неизвестным, то есть ложился бы на тёмный скрим и пропадал в нём.
+    """
+    def with_lightness(value):
+        images = dict(brand_shop.images.value, logo=dict(LOGO, lightness=value))
+        return section_html(render(replace(brand_shop, images=known(images)))[0],
+                            "header")
+
+    assert "header-overlay" not in with_lightness(0.1)
+    assert "border-b border-line bg-paper" in with_lightness(0.1)
+    # фирменный цвет brand_shop снят с логотипа и тёмен, но светлота старше
+    assert "header-overlay" in with_lightness(0.9)
+
+
 def test_a_brand_colour_from_the_old_site_says_nothing_about_the_logo(brand_shop):
     """Цвет из CSS старого сайта о самой картинке не говорит: шапка как раньше."""
     profile = replace(brand_shop, brand_colors=known(

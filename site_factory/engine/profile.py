@@ -63,9 +63,11 @@ ORDERED_ENUMS = (TEXT_VOLUME_ORDER, OLD_SITE_STATE_ORDER)
 # встал бы на страницу вторым экземпляром.
 NAMED_IMAGES = ("logo", "hero_bg", "portrait", "map")
 
-# Ниже этой светлоты (L в oklab) логотип считается тёмным. Середина шкалы:
-# такой логотип нарисован под белый фон, и на тёмном скриме первого экрана он
-# пропадает — шапке приходится вставать своей полосой (render.header_overlay).
+# Ниже этой светлоты (L в oklab) логотип считается тёмным — и когда светлота
+# снята со всей картинки (site_images.mean_lightness), и когда её приходится
+# считать по цвету. Середина шкалы: такой логотип нарисован под белый фон, и
+# на тёмном скриме первого экрана он пропадает — шапке приходится вставать
+# своей полосой (render.header_overlay).
 DARK_LOGO_LIGHTNESS = 0.5
 
 # Карточку лида наполняет выгрузка Google Maps, поэтому у карточных оценки и
@@ -323,26 +325,37 @@ def _image_stem(src) -> str:
 def _logo_is_dark(p: Profile) -> Feature:
     """Тёмный ли логотип лида. unknown — судить не по чему, и решает шапка.
 
-    Судим по цветам самого логотипа: их считает стейджинг картинок
-    (site_images.dominant_colors) и кладёт в запись картинки. Цветов нет —
-    остаётся фирменный цвет, но только если он снят с логотипа: цвет из CSS
-    старого сайта о самой картинке не говорит ничего.
+    Старшинство свидетельств: средняя светлота самой картинки, потом её цвета,
+    потом фирменный цвет — и то лишь снятый с логотипа: цвет из CSS старого
+    сайта о самой картинке не говорит ничего.
+
+    Светлота старше цветов, потому что цвета отбирают нейтральное
+    (site_images.dominant_colors): чёрно-белый логотип — самый частый у малого
+    бизнеса — цветов не даёт вовсе, и без светлоты он оставался бы неизвестным.
     """
-    tone = _logo_tone(p)
+    logo = _logo_record(p)
+    value = logo.get("lightness")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return known(float(value) < DARK_LOGO_LIGHTNESS)
+    tone = _logo_tone(logo, p.brand_colors)
     if tone is None:
         return UNKNOWN
     return known(lightness(srgb(tone)) < DARK_LOGO_LIGHTNESS)
 
 
-def _logo_tone(p: Profile) -> str | None:
+def _logo_record(p: Profile) -> dict:
+    """Запись логотипа из белого списка картинок. Пустая — логотипа нет."""
+    return ((p.images.value or {}).get("logo") or {}) if p.images.known else {}
+
+
+def _logo_tone(logo: dict, brand_colors: Feature) -> str | None:
     """Цвет, по которому судим о логотипе. None — такого цвета мы не знаем.
 
     Порядок кандидатов и есть старшинство: цвета картинки, потом фирменный цвет
     с неё же. Всё, что не читается как hex, пропускается — судить по мусору
     хуже, чем не судить вовсе.
     """
-    logo = ((p.images.value or {}).get("logo") or {}) if p.images.known else {}
-    brand = p.brand_colors.value if isinstance(p.brand_colors.value, dict) else {}
+    brand = brand_colors.value if isinstance(brand_colors.value, dict) else {}
     candidates = list(logo.get("colors") or [])
     if brand.get("source") == "logo":
         candidates.append(brand.get("primary"))
