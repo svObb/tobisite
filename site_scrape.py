@@ -119,6 +119,23 @@ _NOT_A_PHOTO = re.compile(
     r"visa|mastercard|pixel|blank|spacer|loader|spinner|arrow|bullet)",
     re.I,
 )
+# Слова, которыми конструкторы и CMS называют рекламные плашки. В отличие от
+# _NOT_A_PHOTO кандидат по ним не выбрасывается: «banner» бывает и в имени
+# нормального кадра шапки. Пометка едет в site_images одним сигналом из
+# нескольких, и решают всё равно пиксели.
+_BANNER_HINT = re.compile(
+    r"banner|promo|akci|акци|акці|sale|скидк|знижк|slide|slider|carousel|"
+    r"poster|afish|афиш|wifi|wi-?fi|sticker|price-?list|прайс|kupon|coupon",
+    re.I,
+)
+# Куда картинка вправе вести, не становясь при этом рекламой: соцсети,
+# мессенджеры и карты. Ссылка на свой инстаграм под своим же снимком —
+# обычная подпись, а не баннер.
+_SOCIAL_HOSTS = (
+    "facebook", "instagram", "t.me", "telegram", "youtube", "youtu.be",
+    "tiktok", "linkedin", "twitter", "x.com", "viber", "whatsapp",
+    "google.com/maps", "goo.gl", "maps.app",
+)
 _LOGO_HINT = re.compile(r"logo|логотип|лого|brand|wordmark", re.I)
 _SERVICE_HINT = re.compile(r"servic|servis|posluh|poslug|uslug|услуг|послуг", re.I)
 _SERVICE_HEADING = re.compile(
@@ -286,13 +303,19 @@ def logo_candidates(soup, base: str) -> list[dict]:
 
 
 def image_candidates(soup, base: str) -> list[dict]:
-    """Кандидаты в фотографии, лучшая первой. og:image идёт вперёд всех."""
+    """Кандидаты в фотографии, лучшая первой. og:image идёт вперёд всех.
+
+    banner и outbound — подсказки для site_images, а не отсев: по ним кандидат
+    только теряет в весе и в правах на шапку. Мета-теги их не получают:
+    об og:image компания объявляет сама, и понижать его не за что.
+    """
     found: list[dict] = []
     for prop, weight in (("og:image", 60), ("twitter:image", 50)):
         url = _meta(soup, prop)
         if url:
             found.append({"url": urljoin(base, url), "weight": weight, "og": True,
-                          "width": 0, "height": 0})
+                          "width": 0, "height": 0, "banner": False,
+                          "outbound": False})
     for tag in soup.find_all("img"):
         url = _img_url(tag, base)
         if not url or _NOT_A_PHOTO.search(url):
@@ -306,13 +329,20 @@ def image_candidates(soup, base: str) -> list[dict]:
         # здесь, чтобы не качать её вовсе, остальное отсеет site_images
         if (width and width < 200) or (height and height < 200):
             continue
-        found.append({"url": url, "weight": 10 + min(width * height // 100_000, 20),
-                      "og": False, "width": width, "height": height})
+        banner = bool(_BANNER_HINT.search(" ".join(
+            [url, alt_class, tag.get("title") or "", tag.get("id") or "",
+             _wrapper_names(tag)])))
+        found.append({"url": url,
+                      "weight": (10 + min(width * height // 100_000, 20)
+                                 - (5 if banner else 0)),
+                      "og": False, "width": width, "height": height,
+                      "banner": banner, "outbound": _outbound_wrapper(tag, base)})
     for tag in soup.find_all("source", srcset=True):
         url = _from_srcset(tag["srcset"], base)
         if url and not _NOT_A_PHOTO.search(url):
             found.append({"url": url, "weight": 12, "og": False,
-                          "width": 0, "height": 0})
+                          "width": 0, "height": 0, "banner": False,
+                          "outbound": False})
     return _by_weight(found)[:MAX_IMAGES]
 
 
@@ -1126,6 +1156,45 @@ def _logo_wrapper_in_header(tag) -> bool:
         if parent.name in ("header", "nav"):
             return hit
     return False
+
+
+def _wrapper_names(tag, levels: int = 2) -> str:
+    """Классы и id ближайших обёрток: слово «баннер» CMS вешает на них.
+
+    Двух уровней хватает: выше начинается разметка колонки, и её класс о самой
+    картинке уже ничего не говорит.
+    """
+    names: list[str] = []
+    parent = tag.parent
+    for _ in range(levels):
+        if parent is None or not hasattr(parent, "get"):
+            break
+        names += (parent.get("class") or []) + [parent.get("id") or ""]
+        parent = parent.parent
+    return " ".join(names)
+
+
+def _outbound_wrapper(tag, base: str) -> bool:
+    """Картинка завёрнута в ссылку на чужой хост — так подписывают рекламу.
+
+    Сигнал мягкий и отсевом не работает: агрегаторы (booking, prom.ua) дают
+    ложные срабатывания, а соцсети и карты выведены исключением — ссылка на
+    свой инстаграм под своим же снимком рекламой его не делает.
+    """
+    link = tag.find_parent("a", href=True)
+    if link is None:
+        return False
+    target = urlparse(urljoin(base, link["href"]))
+    if not target.netloc or _same_site(target.netloc, urlparse(base).netloc):
+        return False
+    where = f"{target.netloc}{target.path}".lower()
+    return not any(host in where for host in _SOCIAL_HOSTS)
+
+
+def _same_site(one: str, two: str) -> bool:
+    one = one.lower().removeprefix("www.")
+    two = two.lower().removeprefix("www.")
+    return one == two or one.endswith(f".{two}") or two.endswith(f".{one}")
 
 
 def _parent_classes(tag) -> list[str]:

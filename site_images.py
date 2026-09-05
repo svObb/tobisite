@@ -44,6 +44,34 @@ PHOTO_ASPECT = (0.25, 4.0)
 BACKGROUND_ASPECT = 1.5
 BACKGROUND_MIN_WIDTH = 900
 
+# Классификатор «снимок или нарисованная плашка». Сетка и загрубление канала —
+# ровно те же, что у dominant_colors: третьей копии сетки в модуле быть не должно.
+GRAPHIC_GRID = 64
+GRAPHIC_BUCKET = 8
+# Непрозрачных пикселей на сетке меньше — судить не по чему, как mean_lightness
+# нечего сказать о прозрачном насквозь логотипе.
+GRAPHIC_MIN_OPAQUE = 256
+# Индексные и битовые режимы Pillow: фотография ни одним из них не бывает.
+GRAPHIC_INDEXED_MODES = ("P", "PA", "1")
+# 3:1 и уже — лента-баннер или обрезок карусели. Строже PHOTO_ASPECT и только
+# для нетоварных фото: у fits() свой, более мягкий контракт, и вытянутый
+# логотип-леттеринг им пользуется.
+BANNER_ASPECT = 3.0
+# Уникальных цветовых бакетов на 4096 пикселях; ниже — плоская графика. У
+# снимка даже однотонной стены их сотни: шум сенсора и JPEG дают разброс.
+GRAPHIC_MAX_COLORS = 24
+# Доля самого частого бакета: больше половины кадра одним цветом — заливка.
+GRAPHIC_DOMINANT = 0.55
+# Доля точно совпадающих соседей по горизонтали в градациях серого: у снимка
+# после LANCZOS точных совпадений почти нет, у ровной заливки — почти все.
+GRAPHIC_FLAT = 0.45
+# С какой доли по-настоящему прозрачных пикселей альфа-канал что-то значит:
+# фото, экспортированное в PNG, тоже бывает RGBA, и пустой канал молчит.
+TRANSPARENT_SHARE = 0.02
+W_COLORS, W_DOMINANT, W_FLAT, W_HINT = 40, 30, 30, 40
+# Порог мягкой метки: при таких весах ни один сигнал в одиночку её не ставит.
+GRAPHIC_SOFT = 60
+
 # Логотип в SVG: всё, что тяжелее, — это растр, зашитый в base64, и место ему
 # в обычном конвейере, а не в разметке страницы.
 MAX_SVG_BYTES = 200_000
@@ -182,6 +210,92 @@ def mean_lightness(data: bytes) -> float | None:
     return total / count if count else None
 
 
+def graphic_probe(data: bytes) -> dict | None:
+    """Пиксельная статистика кандидата: снимок это или нарисованная плашка.
+
+    None — картинку не открыть или судить не по чему. Значения сырые, без
+    суждения: пороги знает graphic_verdict, и на них смотрит один вызывающий.
+
+    Считается по той же загрублённой копии, что цвета и светлота логотипа:
+    отдельного декодирования полноразмерного кадра здесь не появляется.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            source_mode = img.mode        # до convert: 'P' после него исчезнет
+            img = ImageOps.exif_transpose(img).convert("RGBA")
+            img.thumbnail((GRAPHIC_GRID, GRAPHIC_GRID), Image.Resampling.LANCZOS)
+            width, height = img.size
+            pixels = img.tobytes()
+            grey = img.convert("L").tobytes()
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError,
+            ValueError):
+        return None
+    buckets: dict[tuple, int] = {}
+    opaque = 0
+    for start in range(0, len(pixels) - 3, 4):
+        r, g, b, a = pixels[start:start + 4]
+        if a < 128:
+            continue
+        opaque += 1
+        key = (r // GRAPHIC_BUCKET, g // GRAPHIC_BUCKET, b // GRAPHIC_BUCKET)
+        buckets[key] = buckets.get(key, 0) + 1
+    total = width * height
+    if not total or opaque < GRAPHIC_MIN_OPAQUE:
+        return None
+    pairs = same = 0
+    for row in range(height):
+        line = row * width
+        for col in range(width - 1):
+            pairs += 1
+            if grey[line + col] == grey[line + col + 1]:
+                same += 1
+    return {
+        "colors": len(buckets),
+        "dominant": max(buckets.values()) / opaque,
+        "flat": same / pairs if pairs else 0.0,
+        "indexed": source_mode in GRAPHIC_INDEXED_MODES,
+        "transparent": (total - opaque) / total,
+    }
+
+
+def graphic_verdict(size: dict, probe: dict | None, *, hint: bool = False) -> dict:
+    """Приговор кандидату: {"hard": причина|"", "score": 0..100, "soft": bool}.
+
+    hard — фотографией это быть не может (прозрачный значок, индексная
+    палитра, лента), и кандидат не выкладывается вовсе. soft — похоже на
+    плашку: кадр остаётся, но теряет право на шапку и портрет. Это не сила
+    одного и того же сигнала, а два разных действия.
+
+    Жёстко судим только по фактам; всё содержательное — веса, и порог взят
+    так, что ни один сигнал в одиночку метки не ставит: эвристика ошибается,
+    и лишняя картинка в галерее дешевле пустой страницы.
+
+    Чистая функция: ни Pillow, ни байтов — размеры probe_image, метрики
+    graphic_probe и подсказка разметки.
+    """
+    width, height = size.get("width", 0), size.get("height", 0)
+    ratio = width / height if height else 0
+    # Пустой альфа-канал не говорит ни о чём: значок выдаёт не сам канал, а
+    # по-настоящему прозрачные пиксели в нём.
+    if size.get("alpha") and probe and probe["transparent"] >= TRANSPARENT_SHARE:
+        return {"hard": "alpha", "score": 100, "soft": True}
+    if probe and probe["indexed"]:
+        return {"hard": "indexed", "score": 100, "soft": True}
+    if ratio >= BANNER_ASPECT or (ratio and ratio <= 1 / BANNER_ASPECT):
+        return {"hard": "strip", "score": 100, "soft": True}
+    score = 0
+    if probe:
+        if probe["colors"] < GRAPHIC_MAX_COLORS:
+            score += W_COLORS
+        if probe["dominant"] >= GRAPHIC_DOMINANT:
+            score += W_DOMINANT
+        if probe["flat"] >= GRAPHIC_FLAT:
+            score += W_FLAT
+    if hint:
+        score += W_HINT
+    return {"hard": "", "score": score, "soft": score >= GRAPHIC_SOFT}
+
+
 def sanitize_svg(markup: str | bytes) -> str | None:
     """Логотип в SVG без единого способа что-нибудь выполнить. None — отказ.
 
@@ -278,11 +392,16 @@ def assign_roles(candidates: list[dict]) -> dict[str, dict]:
     в шапке — это витрина, а не компания. Магазин, у которого нетоварных фото
     нет, остаётся без шапки-картинки и без портрета — товары уедут в товарные
     секции под именами photo-N, а шапку движок соберёт без фотографии.
+
+    `graphic` — кандидат, который по пикселям похож не на снимок, а на
+    рисованную плашку. В шапку и портрет он не идёт по той же причине, что и
+    товар, но из галереи не выбрасывается: эвристика ошибается, и лучше лишняя
+    картинка в сетке, чем пустая страница.
     """
     logos = [c for c in candidates if c.get("kind") == "logo"]
     photos = sorted((c for c in candidates if c.get("kind") != "logo"),
                     key=_photo_rank)
-    scene = [c for c in photos if not c.get("product")]
+    scene = [c for c in photos if not c.get("product") and not c.get("graphic")]
     roles: dict[str, dict] = {}
     if logos:
         roles["logo"] = logos[0]
@@ -311,9 +430,10 @@ def photo_names(roles) -> list[str]:
 # --- внутреннее ---------------------------------------------------------------
 
 def _photo_rank(item: dict) -> tuple:
-    """Чем крупнее, тем раньше; og:image идёт вперёд при равной площади."""
+    """Графика в хвост; дальше чем крупнее, тем раньше, og вперёд при равной."""
     area = item.get("width", 0) * item.get("height", 0)
-    return (-area, not item.get("og"), item.get("url", ""))
+    return (bool(item.get("graphic")), -area, not item.get("og"),
+            item.get("url", ""))
 
 
 def _is_background(item: dict) -> bool:

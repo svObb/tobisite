@@ -410,6 +410,65 @@ def test_srcset_gives_the_widest_variant(builder):
     assert not any("icon-phone" in url for url in urls)
 
 
+def markup(body: str):
+    return ss.soup_of(f"<html><body>{body}</body></html>".encode())
+
+
+def candidate(body: str, url: str) -> dict:
+    found = {item["url"]: item for item in ss.image_candidates(markup(body), BASE)}
+    return found[f"{BASE}{url}"]
+
+
+def test_a_banner_is_marked_but_not_thrown_away():
+    """Слово «баннер» бывает и в имени нормального кадра шапки — решают пиксели."""
+    body = ('<div class="promo-slider">'
+            '<img src="/media/img_2381.jpg" alt="" width="1200" height="600">'
+            "</div>"
+            '<img src="/media/zal.jpg" alt="Зал" width="1200" height="600">')
+
+    plate = candidate(body, "media/img_2381.jpg")
+    room = candidate(body, "media/zal.jpg")
+
+    assert plate["banner"] is True and room["banner"] is False
+    assert plate["weight"] < room["weight"]
+
+
+def test_the_wifi_sticker_is_marked_by_its_alt_alone():
+    body = '<img src="/media/i7.png" alt="Free Wi-Fi" width="400" height="400">'
+
+    assert candidate(body, "media/i7.png")["banner"] is True
+
+
+def test_a_photo_wrapped_in_a_foreign_link_is_only_hinted():
+    body = ('<a href="https://reklama.example/deal">'
+            '<img src="/media/zal.jpg" alt="Зал" width="1200" height="600">'
+            "</a>")
+
+    item = candidate(body, "media/zal.jpg")
+
+    # кандидат остаётся: агрегаторы дают ложные срабатывания, и отсев по одной
+    # исходящей ссылке стоил бы настоящих фото
+    assert item["outbound"] is True and item["banner"] is False
+
+
+def test_a_social_link_is_not_outbound():
+    body = ('<a href="https://instagram.com/lihtaryk">'
+            '<img src="/media/zal.jpg" alt="Зал" width="1200" height="600">'
+            "</a>"
+            '<a href="/catalog/">'
+            '<img src="/media/tim.jpg" alt="Тім" width="1200" height="600">'
+            "</a>")
+
+    assert candidate(body, "media/zal.jpg")["outbound"] is False
+    assert candidate(body, "media/tim.jpg")["outbound"] is False
+
+
+def test_a_normal_photo_is_not_marked_as_a_banner(builder, handmade, shop):
+    for soup in (builder, handmade, shop):
+        assert not any(item["banner"] or item["outbound"]
+                       for item in ss.image_candidates(soup, BASE))
+
+
 def test_logo_from_the_header_beats_the_touch_icon(shop):
     logos = ss.logo_candidates(shop, BASE)
 

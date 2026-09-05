@@ -4,6 +4,7 @@
 проверяется ровно то, что модуль делает с размерами, альфой и форматом.
 """
 import io
+import random
 
 import pytest
 from PIL import Image
@@ -11,6 +12,7 @@ from PIL import Image
 import site_images as si
 
 ORANGE, BLUE = (194, 98, 26), (43, 74, 140)
+SEED = 20260905
 
 
 def raster(width, height, color=ORANGE, mode="RGB", fmt="PNG") -> bytes:
@@ -18,6 +20,53 @@ def raster(width, height, color=ORANGE, mode="RGB", fmt="PNG") -> bytes:
     buf = io.BytesIO()
     img.save(buf, fmt)
     return buf.getvalue()
+
+
+def photo_like(width, height) -> bytes:
+    """Кадр, который классификатор обязан считать снимком: шум по градиенту.
+
+    Шум крупноблочный, а не попиксельный: загрублённая до 64×64 копия усреднила
+    бы мелкое зерно в ровную заливку, и «фото» вышло бы графикой — ровно та
+    ошибка, которую эти тесты и должны ловить. Зерно фиксировано, чтобы
+    прогоны не расходились.
+    """
+    dice = random.Random(SEED)
+    grid = Image.new("RGB", (si.GRAPHIC_GRID, si.GRAPHIC_GRID))
+    grid.putdata([
+        (_channel(40 + x * 3 + dice.randint(-40, 40)),
+         _channel(90 + y * 2 + dice.randint(-40, 40)),
+         _channel(150 - x * 2 + dice.randint(-40, 40)))
+        for y in range(si.GRAPHIC_GRID) for x in range(si.GRAPHIC_GRID)
+    ])
+    return _png(grid.resize((width, height), Image.Resampling.NEAREST))
+
+
+def flat_graphic(width, height) -> bytes:
+    """Плашка: пара заливок поверх фона, ни шума, ни градиента."""
+    img = Image.new("RGB", (width, height), (246, 246, 244))
+    img.paste(Image.new("RGB", (width, height // 4), ORANGE), (0, 0))
+    img.paste(Image.new("RGB", (width // 4, height // 4), BLUE),
+              (width // 2, height // 2))
+    return _png(img)
+
+
+def icon(width, height, opaque=0.5) -> bytes:
+    """Значок: непрозрачное пятно посреди пустоты, как PNG-лого «Free WiFi»."""
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    side = (round(width * opaque), round(height * opaque))
+    img.paste(Image.new("RGBA", side, ORANGE + (255,)),
+              ((width - side[0]) // 2, (height - side[1]) // 2))
+    return _png(img)
+
+
+def _png(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _channel(value: int) -> int:
+    return max(0, min(255, value))
 
 
 def opened(data: bytes) -> Image.Image:
@@ -148,6 +197,131 @@ def test_a_logo_without_a_single_opaque_pixel_says_nothing():
     assert si.mean_lightness(b"\x89PNG oops") is None
 
 
+# --- графика против фото ------------------------------------------------------
+#
+# Инцидент 03.09: в галерею кав'ярні уехали рекламный баннер и PNG-значок
+# «Free WiFi» — обычные <img>, крупнее 200px и внутри вилки аспектов, то есть
+# для fits() безупречные. Пороги здесь выведены рассуждением, а не выборкой,
+# поэтому тесты проверяют сторону порога и порядок метрик, а не сами числа.
+
+
+def test_a_flat_fill_is_graphics_and_a_noisy_frame_is_not():
+    plate = si.graphic_probe(flat_graphic(800, 600))
+    frame = si.graphic_probe(photo_like(800, 600))
+
+    assert plate["colors"] < si.GRAPHIC_MAX_COLORS <= frame["colors"]
+    assert plate["flat"] >= si.GRAPHIC_FLAT > frame["flat"]
+    assert plate["dominant"] >= si.GRAPHIC_DOMINANT > frame["dominant"]
+
+
+def test_a_transparent_png_never_reaches_the_gallery():
+    data = icon(600, 400)
+
+    verdict = si.graphic_verdict(si.probe_image(data), si.graphic_probe(data))
+
+    assert verdict["hard"] == "alpha"
+
+
+def test_an_opaque_alpha_channel_is_judged_by_pixels():
+    """Фото, экспортированное в PNG с пустым альфа-каналом, — обычное фото."""
+    img = opened(photo_like(800, 600)).convert("RGBA")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    data = buf.getvalue()
+
+    size = si.probe_image(data)
+    verdict = si.graphic_verdict(size, si.graphic_probe(data))
+
+    assert size["alpha"] is True
+    assert verdict["hard"] == "" and verdict["soft"] is False
+
+
+def test_an_indexed_gif_never_reaches_the_gallery():
+    buf = io.BytesIO()
+    opened(flat_graphic(800, 600)).convert("P").save(buf, "GIF")
+    data = buf.getvalue()
+
+    probe = si.graphic_probe(data)
+
+    assert probe["indexed"] is True
+    assert si.graphic_verdict(si.probe_image(data), probe)["hard"] == "indexed"
+
+
+def test_a_strip_is_cut_even_though_fits_lets_it_through():
+    """fits() не трогаем: 4:1 остаётся годным, полосу режет классификатор."""
+    size = {"width": 1600, "height": 400, "alpha": False}
+
+    assert si.fits(size, "photo") is True
+    assert si.graphic_verdict(size, None)["hard"] == "strip"
+    assert si.graphic_verdict({"width": 400, "height": 1600,
+                               "alpha": False}, None)["hard"] == "strip"
+
+
+def test_a_single_signal_is_not_enough_for_a_verdict():
+    data = photo_like(800, 600)
+
+    verdict = si.graphic_verdict(si.probe_image(data), si.graphic_probe(data),
+                                 hint=True)
+
+    assert verdict["score"] == si.W_HINT and verdict["soft"] is False
+
+
+def test_two_signals_make_it_graphics():
+    data = flat_graphic(800, 600)
+
+    verdict = si.graphic_verdict(si.probe_image(data), si.graphic_probe(data))
+
+    assert verdict["soft"] is True and verdict["hard"] == ""
+
+
+def test_a_picture_without_pixels_to_judge_says_nothing():
+    assert si.graphic_probe(icon(600, 400, opaque=0.1)) is None
+    assert si.graphic_probe(b"\x89PNG oops") is None
+
+    verdict = si.graphic_verdict({"width": 600, "height": 400, "alpha": False},
+                                 None)
+
+    assert verdict == {"hard": "", "score": 0, "soft": False}
+
+
+def test_graphics_never_take_the_hero_or_the_portrait():
+    roles = si.assign_roles([photo(2400, 1200, "plashka.png", graphic=100),
+                             photo(1000, 1200, "team.jpg")])
+
+    assert "hero_bg" not in roles
+    assert roles["portrait"]["url"] == "team.jpg"
+    assert roles["photo-2"]["url"] == "plashka.png"
+
+
+def test_graphics_are_the_first_to_fall_off_the_budget():
+    roles = si.assign_roles(
+        [photo(2000 - n, 1500, f"p{n}.jpg") for n in range(9)]
+        + [photo(2400, 1600, "wide-plashka.png", graphic=70),
+           photo(2300, 1500, "promo.png", graphic=100)]
+    )
+
+    assert len(roles) == si.MAX_STAGED
+    assert all(not item.get("graphic") for item in roles.values())
+
+
+def test_graphics_still_reach_the_gallery_when_there_is_nothing_else():
+    """Мягкая метка не удаляет: лишняя картинка дешевле пустой страницы."""
+    roles = si.assign_roles([photo(1200, 900, "promo.png", graphic=70)])
+
+    assert list(roles) == ["photo-2"]
+    assert roles["photo-2"]["url"] == "promo.png"
+
+
+def test_a_candidate_without_the_flag_ranks_exactly_as_before():
+    cands = [photo(2400, 1200, "wide.jpg"), photo(1200, 1600, "portrait.jpg",
+                                                  og=True),
+             photo(900, 900, "third.jpg"), photo(1200, 1600, "same.jpg")]
+
+    order = [c["url"] for c in sorted(cands, key=si._photo_rank)]
+
+    assert order == ["wide.jpg", "portrait.jpg", "same.jpg", "third.jpg"]
+
+
 # --- SVG ----------------------------------------------------------------------
 
 SAFE_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40">'
@@ -252,8 +426,13 @@ def test_a_logo_without_numbers_has_no_size():
 # --- роли ---------------------------------------------------------------------
 
 def photo(width, height, url, **kw) -> dict:
-    return {"kind": "photo", "url": url, "width": width, "height": height,
+    item = {"kind": "photo", "url": url, "width": width, "height": height,
             "og": kw.get("og", False), "product": kw.get("product", False)}
+    if kw.get("graphic"):
+        # ключа нет вовсе, пока его не поставили: так кандидат и приходит из
+        # обогащения, и на этом держится «без метки — как раньше»
+        item["graphic"] = kw["graphic"]
+    return item
 
 
 def test_roles_follow_the_contract_with_the_engine():
