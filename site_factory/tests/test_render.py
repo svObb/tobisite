@@ -5,11 +5,12 @@ import re
 
 from site_factory.engine import niches
 from site_factory.engine.profile import Profile
-from site_factory.engine.render import (BASE_SCRIPTS, PRESET_DEFAULTS,
-                                        SECTION_ROLES, load_library,
-                                        load_tokens, preset_for, recipe_id_for,
-                                        render, resolve_preset, seed_for,
-                                        track_for)
+from site_factory.engine.render import (BASE_SCRIPTS, DESCRIPTION_LIMIT,
+                                        PRESET_DEFAULTS, SECTION_ROLES,
+                                        load_library, load_tokens,
+                                        page_description, preset_for,
+                                        recipe_id_for, render, resolve_preset,
+                                        seed_for, track_for)
 
 from .conftest import (BRAND_SHOP, GENERIC_LIGHT, GENERIC_RICH, LAWYER_POOR,
                        LAWYER_RICH)
@@ -164,7 +165,7 @@ def test_trace_keeps_rejected_candidates_and_versions(lawyer_rich):
     losers = [c["variant"] for c in hero["candidates"] if c["variant"] != hero["chosen"]]
     assert losers, "в следе нет отвергнутых альтернатив со score"
     assert hero["chosen"] in [c["variant"] for c in hero["candidates"]]
-    assert trace["versions"] == {"engine": 3, "library": load_tokens()["version"],
+    assert trace["versions"] == {"engine": 4, "library": load_tokens()["version"],
                                  "recipe": 3}
     assert trace["profile"]["photo_count"] == {"value": 6, "known": True}
     assert trace["profile"]["brand_colors"] == {"value": None, "known": False}
@@ -194,6 +195,84 @@ def test_needs_enrichment_has_no_html(lawyer_poor):
     assert html is None
     assert trace["needs_enrichment"]
     assert trace["sections"] == []
+
+
+def test_the_description_names_the_company_and_what_it_does(lawyer_rich):
+    """Сниппет поиска и предпросмотр ссылки называют лида, а не жанр страницы."""
+    html, _ = render(lawyer_rich)
+    description = _meta(html, "description")
+
+    assert description.startswith(f"{LAWYER_RICH['name']} — {LAWYER_RICH['city']}.")
+    assert LAWYER_RICH["services"][0] in description
+    assert len(description) <= DESCRIPTION_LIMIT
+    assert description.endswith(".")
+    # og:description идёт из того же поля, и расходиться им не с чего
+    assert _meta(html, "og:description") == description
+
+
+def test_a_lead_without_a_name_keeps_the_description_of_the_recipe():
+    """Имени нет — говорить о лиде нечем, и остаётся заготовка рецепта."""
+    profile = Profile.from_dict({"domain_norm": "bez-nazvy.example",
+                                 "lang": "uk", "city": "Київ"})
+    assert page_description(profile, "Заготовка рецепта") == "Заготовка рецепта"
+
+
+def test_services_leave_the_description_from_the_tail_until_it_fits():
+    """Потолок держится списком услуг: не влезла — уходит целиком, не хвостом."""
+    services = ["Комплексне оздоблення квартир і будинків під ключ",
+                "Проєктування та узгодження перепланувань",
+                "Технічний нагляд за виконанням робіт на об'єкті"]
+    profile = Profile.from_dict(dict(GENERIC_RICH, services=services))
+
+    text = page_description(profile, "Заготовка рецепта")
+
+    assert text.startswith(f"{GENERIC_RICH['name']} — {GENERIC_RICH['city']}.")
+    assert len(text) <= DESCRIPTION_LIMIT
+    assert text.endswith(".") and "…" not in text
+    assert services[0] in text and services[-1] not in text
+
+
+def test_a_name_that_alone_is_longer_than_the_ceiling_is_not_cut():
+    """Усечение факта запрещено: имя с городом остаются целиком и без услуг."""
+    name = ("Комунальне некомерційне підприємство «Міський центр первинної "
+            "медико-санітарної допомоги № 4 імені Івана Франка» "
+            "Дніпровської міської ради Дніпропетровської області")
+    profile = Profile.from_dict(dict(GENERIC_RICH, name=name))
+
+    text = page_description(profile, "Заготовка рецепта")
+
+    assert text == f"{name} — {GENERIC_RICH['city']}."
+    assert len(text) > DESCRIPTION_LIMIT
+
+
+def test_an_empty_address_breakdown_goes_into_the_json_ld_as_a_line():
+    """Пустой PostalAddress не сообщает ничего — адрес уходит строкой."""
+    profile = Profile.from_dict(dict(
+        GENERIC_RICH, address_parts={"street": "", "locality": " "}))
+    html, _ = render(profile)
+
+    assert _json_ld(html)["address"] == GENERIC_RICH["address"]
+    assert "PostalAddress" not in html
+
+
+def test_a_filled_breakdown_stays_a_postal_address(generic_rich):
+    parts = GENERIC_RICH["address_parts"]
+    assert _json_ld(render(generic_rich)[0])["address"] == {
+        "@type": "PostalAddress",
+        "streetAddress": parts["street"],
+        "addressLocality": parts["locality"],
+        "addressCountry": parts["country"],
+    }
+
+
+def test_the_business_type_comes_from_the_niche(lawyer_rich, brand_shop,
+                                                generic_rich):
+    """Ниша знает о бизнесе больше рецепта: рецептов четыре, ниш полсотни."""
+    assert _json_ld(render(brand_shop)[0])["@type"] == "AutoRepair"
+    assert _json_ld(render(lawyer_rich)[0])["@type"] == "LegalService"
+    # ниша вне таблицы — тип остаётся рецептовым
+    assert generic_rich.niche_key not in niches.schema_types()
+    assert _json_ld(render(generic_rich)[0])["@type"] == "LocalBusiness"
 
 
 def test_language_switches_texts(generic_light):
@@ -387,6 +466,20 @@ def _font_size(value: str, viewport: int) -> float:
     """Кегль clamp'а в пикселях на экране такой ширины."""
     low, vw, high = _clamp(value)
     return min(max(low * REM_PX, vw * viewport / 100), high * REM_PX)
+
+
+def _meta(html: str, name: str) -> str:
+    """Содержимое мета-тега страницы: и name=, и property= пишутся одинаково."""
+    found = re.search(rf'<meta (?:name|property)="{name}" content="([^"]*)">', html)
+    assert found, name
+    return found.group(1)
+
+
+def _json_ld(html: str) -> dict:
+    found = re.search(r'<script type="application/ld\+json">(.*?)</script>', html,
+                      re.S)
+    assert found, "на странице нет JSON-LD"
+    return json.loads(found.group(1))
 
 
 def _key(niche: str) -> str:

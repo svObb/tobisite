@@ -23,6 +23,12 @@
 #
 # Пулы намеренно узкие: ниша решает, каким сайт вообще может быть, домен —
 # каким он будет.
+#
+# schema_types: ключ ниши -> тип schema.org для JSON-LD страницы
+# (base/schema_localbusiness.j2). Здесь только ниши, у которых свой тип у
+# schema.org есть; остальные остаются с типом рецепта (LocalBusiness) — общий
+# тип честнее близкого по смыслу. Ключи обязаны быть нишами из pools, это
+# проверяет engine/niches.
 
 aliases:
   юрист: lawyer
@@ -139,3 +145,12 @@ pools:
   vacation-rental-bnb: [deep-premium, editorial-warm, warm-table]
   veterinary-clinic: [warm-table, clinical-light, friendly-pop]
   yoga-pilates-studio: [deep-premium, editorial-warm, friendly-pop]
+
+schema_types:
+  lawyer: LegalService
+  dental: Dentist
+  auto_service: AutoRepair
+  cafe: Restaurant
+  beauty: BeautySalon
+  hotel: Hotel
+  construction: HomeAndConstructionBusiness

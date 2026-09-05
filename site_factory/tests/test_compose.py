@@ -201,7 +201,10 @@ def test_long_fact_is_not_truncated():
     services = role_record(trace, "services")
     kinds = {r["kind"] for r in rejected_reasons(services, "svc_cards_3")}
     assert kinds == {gates.TOO_LONG}
-    assert too_long not in (html or "")
+    assert too_long not in html[html.index("<body"):]
+    # в описании страницы услуга стоит целиком: там свой потолок, и он режет
+    # список услуг, а не саму строку (render.page_description)
+    assert html.count(too_long) == 2      # description и og:description
 
 
 def test_tie_is_broken_by_seed():

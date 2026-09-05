@@ -95,6 +95,27 @@ def test_reserve_niches_have_pools_too():
         assert table[slug], slug
 
 
+def test_every_bot_niche_has_a_schema_type():
+    """Тип schema.org знает ниша: рецептов четыре, а ниш бота семь."""
+    table = niches.schema_types()
+    assert set(table) == set(BOT_POOLS)
+    assert niches.schema_type_for("cafe") == "Restaurant"
+    assert niches.schema_type_for("lawyer") == "LegalService"
+    # ниша вне таблицы типа не получает — его возьмёт рецепт
+    assert niches.schema_type_for("bakery") is None
+    assert niches.schema_type_for(None) is None
+
+
+def test_a_schema_type_for_a_niche_without_a_pool_is_an_error(tmp_path):
+    """Опечатка в ключе обязана падать при загрузке, а не в JSON-LD лида."""
+    (tmp_path / "tokens").mkdir()
+    (tmp_path / "tokens" / "niches.yaml").write_text(
+        "aliases: {}\npools:\n  darkroom: [deep-premium]\n"
+        "schema_types:\n  darkroon: Store\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="schema_types"):
+        niches.schema_types(tmp_path)
+
+
 def test_logo_pushes_dark_presets_out_of_the_pool():
     """Логотип нарисован под белый фон — на чёрной бумаге он пропадает."""
     paper = papers()

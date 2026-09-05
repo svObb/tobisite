@@ -22,7 +22,11 @@
 {%- if value -%}{%- set ns.fields = ns.fields + [(key, value)] -%}{%- endif -%}
 {%- endfor -%}
 {%- set addr = facts.get('address') -%}
-{%- if addr -%}
+{%- if addr is string -%}
+{#- Разбор адреса пуст насквозь: schema.org допускает address текстом, и
+    строка лида говорит больше, чем PostalAddress без единого поля. -#}
+{%- set ns.fields = ns.fields + [('address', addr)] -%}
+{%- elif addr -%}
 {%- set an = namespace(fields=[('@type', 'PostalAddress')]) -%}
 {%- for key, value in [
   ('streetAddress', addr.get('street')),

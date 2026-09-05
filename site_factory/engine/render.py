@@ -49,8 +49,17 @@ from .profile import Profile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS_BASE = "/assets"          # общий префикс превью; @font-face в бандле
-ENGINE_VERSION = 3
+ENGINE_VERSION = 4
 OVERLAY = "overlay"              # ключ header контракта: шапка ложится на секцию
+
+# Потолок meta description. Длиннее — поисковик обрежет сам и обрежет там, где
+# ему удобно; лучше решить это здесь и целыми фактами.
+DESCRIPTION_LIMIT = 160
+DESCRIPTION_SERVICES = 3
+
+# Поля разбора адреса, которые доходят до PostalAddress (base/schema_*.j2).
+# Разбор бывает пустым насквозь, и тогда адрес идёт в JSON-LD строкой.
+ADDRESS_PART_KEYS = ("street", "locality", "region", "postal_code", "country")
 
 SECTION_ROLES = ("header", "hero", "products", "services", "gallery", "proof",
                  "about", "info", "cta", "footer")
@@ -235,7 +244,7 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
     return {
         "lang": lang,
         "title": f"{name} — {city}" if name and city else (name or ""),
-        "description": page.get("description"),
+        "description": page_description(profile, page.get("description")),
         "assets_base": ASSETS_BASE,
         "scripts": scripts_for(sections),
         "preload_images": preload_for(sections),
@@ -243,6 +252,36 @@ def site_context(profile: Profile, recipe: dict, lang: str, sections=()) -> dict
         "ui": {"skip_to_content": page.get("skip_to_content", ""),
                "nav_label": page.get("nav_label", "")},
     }
+
+
+def page_description(profile: Profile, default: str) -> str:
+    """Описание страницы фактами лида: имя, город и первые услуги.
+
+    Заготовка рецепта одна на все черновики, а description виден в сниппете
+    поиска и в предпросмотре ссылки — там он обязан называть эту компанию, а не
+    жанр страницы. Имени лида нет — остаётся заготовка: сказать нечего.
+
+    В потолок DESCRIPTION_LIMIT строка входит услугами: не влезла последняя —
+    уходит целиком, а не многоточием. Усечение факта запрещено (тот же запрет,
+    что в slots._measure), поэтому имя с городом остаются как есть, даже когда
+    и они одни длиннее потолка.
+    """
+    name = profile.name.value if profile.name.known else None
+    if not name:
+        return default
+    city = profile.city.value if profile.city.known else None
+    head = f"{name} — {city}." if city else f"{name}."
+
+    services = [str(item).strip()
+                for item in (profile.services.value or [])
+                if str(item).strip()] if profile.services.known else []
+    services = services[:DESCRIPTION_SERVICES]
+    while services:
+        text = f"{head} {', '.join(services)}."
+        if len(text) <= DESCRIPTION_LIMIT:
+            return text
+        services.pop()
+    return head
 
 
 def first_screen(sections):
@@ -317,11 +356,16 @@ def scripts_for(sections) -> list[str]:
 def facts_context(profile: Profile, recipe: dict) -> dict:
     """Белый список для schema.org. Неизвестное просто не выводится.
 
+    Тип бизнеса называет ниша (tokens/niches.yaml), а рецепт остаётся фолбэком:
+    рецептов четыре на полсотни ниш, и Dentist из ниши точнее, чем
+    LocalBusiness из generic.
+
     openingHours сюда не попадает намеренно: часы приходят строкой на языке
     лида, а schema.org ждёт машинный формат — переводить одно в другое значит
     угадывать, чего движку нельзя.
     """
-    facts = {"business_type": recipe.get("schema_type", "LocalBusiness")}
+    facts = {"business_type": niches.schema_type_for(profile.niche_key)
+             or recipe.get("schema_type", "LocalBusiness")}
     for key, feature in (("name", profile.name),
                          ("telephone", profile.phone),
                          ("email", profile.email)):
@@ -333,8 +377,13 @@ def facts_context(profile: Profile, recipe: dict) -> dict:
     for key, source in (("rating", "rating"), ("review_count", "reviews")):
         if source in stats:
             facts[key] = stats[source]
-    if profile.address_parts.known and profile.address_parts.value:
-        facts["address"] = dict(profile.address_parts.value)
+    parts = (profile.address_parts.value or {}) if profile.address_parts.known else {}
+    if any(str(parts.get(key) or "").strip() for key in ADDRESS_PART_KEYS):
+        facts["address"] = dict(parts)
+    elif profile.address.known and profile.address.value:
+        # разбор пуст насквозь: пустой PostalAddress не сообщает ничего, а
+        # адрес строкой schema.org допускает (address как Text)
+        facts["address"] = str(profile.address.value)
     return facts
 
 
