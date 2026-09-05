@@ -117,6 +117,34 @@ def test_role_substitution(generic_light):
     assert trace["sections"].count("proof_stats_bar") == 1
 
 
+def test_a_page_that_opens_with_a_frame_spends_its_dark_accent_there(brand_shop):
+    """Один тёмный акцент на страницу: либо кадр первого экрана, либо секция."""
+    html, trace = render(brand_shop)
+
+    assert trace["sections"][1] == "hero_bg_photo"
+    assert trace["tone"] is None
+    assert 'data-tone="contrast"' not in html
+
+
+def test_a_page_that_opens_with_text_keeps_its_contrast_section(lawyer_light):
+    """Первый экран без кадра — тёмной остаётся первая роль из CONTRAST_ROLES."""
+    html, trace = render(lawyer_light)
+
+    assert trace["sections"][1] == "hero_type_only"
+    assert trace["tone"] == "about"
+    assert html.count('data-tone="contrast"') == 1
+
+
+def test_the_frames_of_the_split_hero_spend_the_accent_too(
+        shop_without_a_named_hero):
+    """Первый экран из двух полотен — тот же кадр во всю ширину."""
+    html, trace = render(shop_without_a_named_hero)
+
+    assert trace["sections"][1] == "hero_split_2"
+    assert trace["tone"] is None
+    assert 'data-tone="contrast"' not in html
+
+
 def test_a_scraped_rating_keeps_the_proof_section_alive():
     """Оценки в карточке нет вовсе — полоса показателей живёт на рейтинге сайта."""
     profile = _without_card_rating(rating=SCRAPED_RATING)

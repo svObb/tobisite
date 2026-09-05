@@ -506,10 +506,17 @@ def test_a_lead_without_products_has_no_products_link(lawyer_rich):
     assert 'href="#products"' not in html[:html.index("</header>")]
 
 
-def test_exactly_one_section_of_the_page_takes_the_contrast_tone(buildable_profile):
-    """Тональный ритм: одна контрастная секция, и не первый экран и не форма."""
+def test_no_more_than_one_section_of_the_page_takes_the_contrast_tone(
+        buildable_profile):
+    """Тональный ритм: одна контрастная секция, и не первый экран и не форма.
+
+    Ни одной — тоже норма: страница, открытая кадром во всю ширину, тёмный
+    акцент уже потратила (engine/compose.link_sections).
+    """
     html, trace = render(buildable_profile)
     assert html.count('data-tone="contrast"') == (1 if trace["tone"] else 0)
+    if trace["tone"] is None:
+        return
     assert trace["tone"] in CONTRAST_ROLES
     assert f'id="{trace["tone"]}"' in html
     marked = section_html(html, trace["tone"])

@@ -45,6 +45,7 @@ from .profile import Profile
 from .score import choose, score
 
 FALLBACK_HINT = "_fallback"
+OVERLAY = "overlay"       # ключ header контракта: шапка ложится на секцию
 
 # Куда ведёт вторая кнопка первого экрана: первый содержательный раздел
 # страницы, а не форма. Какой из них первый, решает порядок секций на странице,
@@ -197,6 +198,28 @@ def _fill(role: str, profile: Profile, recipe: dict, library: dict,
     return section, record
 
 
+def first_screen(sections):
+    """Секция первого экрана: первая после шапки. None — секций нет вовсе.
+
+    Роль header в порядке страницы идёт первой и первым экраном не бывает: она
+    полоса над содержимым или лежит на нём, но собственного кадра не несёт.
+    """
+    return next((section for section in sections if section["role"] != "header"),
+                None)
+
+
+def opens_with_a_frame(sections) -> bool:
+    """Первый экран страницы — кадр во всю ширину.
+
+    Просит об этом сам контракт секции ключом header: overlay, и просят только
+    те первые экраны, у которых фотография идёт от кромки до кромки. Ответ
+    нужен и композиции (тональный ритм), и рендеру (шапка на кадре), поэтому
+    правило записано здесь один раз.
+    """
+    first = first_screen(sections)
+    return first is not None and (first.get("contract") or {}).get("header") == OVERLAY
+
+
 def link_sections(sections: list[dict]) -> None:
     """Связи между секциями: якорь и подпись второй кнопки, контрастный тон.
 
@@ -209,6 +232,11 @@ def link_sections(sections: list[dict]) -> None:
     Подпись второй кнопки — заголовок секции, к которой она ведёт. Своей
     заготовки у неё нет и модель её не пишет: кнопка, обещающая одно и
     прокручивающая к другому, — это баг, а не текст.
+
+    Страница держит один тёмный акцент: либо кадр первого экрана, либо
+    контрастная секция. Открывается страница фотографией во всю ширину —
+    контрастной секции не будет ни одной, иначе посреди светлых полос встаёт
+    вторая тёмная, и это уже не ритм.
     """
     if not sections:
         return
@@ -221,7 +249,8 @@ def link_sections(sections: list[dict]) -> None:
     }
 
     roles = {section["role"] for section in sections}
-    tone = next((name for name in CONTRAST_ROLES if name in roles), None)
+    tone = (None if opens_with_a_frame(sections)
+            else next((name for name in CONTRAST_ROLES if name in roles), None))
     for section in sections:
         section["tone"] = "contrast" if section["role"] == tone else None
         slots.apply_composer(section, values)

@@ -42,7 +42,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from . import niches, slots
 from .color import PIVOT_LUMINANCE, luminance, srgb
-from .compose import apply_free_texts, compose, enough, link_sections
+from .compose import (apply_free_texts, compose, enough, first_screen,
+                      link_sections, opens_with_a_frame)
 from .naming import split_product_name
 from .palette import brand_palette, contrast_tones
 from .profile import Profile
@@ -50,7 +51,6 @@ from .profile import Profile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS_BASE = "/assets"          # общий префикс превью; @font-face в бандле
 ENGINE_VERSION = 4
-OVERLAY = "overlay"              # ключ header контракта: шапка ложится на секцию
 
 # Потолок meta description. Длиннее — поисковик обрежет сам и обрежет там, где
 # ему удобно; лучше решить это здесь и целыми фактами.
@@ -284,16 +284,6 @@ def page_description(profile: Profile, default: str) -> str:
     return head
 
 
-def first_screen(sections):
-    """Секция первого экрана: первая после шапки. None — секций нет вовсе.
-
-    Роль header в порядке страницы идёт первой и первым экраном не бывает: она
-    полоса над содержимым или лежит на нём, но собственного кадра не несёт.
-    """
-    return next((section for section in sections if section["role"] != "header"),
-                None)
-
-
 def header_overlay(sections) -> bool:
     """Ложится ли шапка на первую секцию вместо того, чтобы стоять над ней.
 
@@ -301,8 +291,7 @@ def header_overlay(sections) -> bool:
     просят только те первые экраны, у которых кадр идёт во всю ширину: тогда
     фотография начинается от кромки окна, а не под полосой шапки.
     """
-    first = first_screen(sections)
-    return first is not None and (first.get("contract") or {}).get("header") == OVERLAY
+    return opens_with_a_frame(sections)
 
 
 def preload_for(sections) -> list[str]:
