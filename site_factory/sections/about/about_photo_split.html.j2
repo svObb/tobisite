@@ -2,39 +2,44 @@
     занимает семь долей, кадр пять — иначе получилась бы не композиция, а
     таблица из двух ячеек.
 
-    Карточка фактов наезжает на кадр: она шире текстовой колонки на две доли
-    и лежит ступенью выше (--z-raise). Из-за этого у секции появляется глубина,
-    которой не даёт ни одна вторая колонка, — и ни один факт при этом не
-    оказывается на фотографии: подложка карточки непрозрачна, контраст в ней
-    тот же, что и на остальной странице.
+    Адрес под текстом печатается только тогда, когда секции info на странице
+    нет: с ней он стоял бы двумя блоками подряд, а название компании и так
+    стоит в шапке и в подвале. Состав страницы виден отсюда через sections —
+    так же, как его читает меню шапки (base/header_nav.j2).
 
-    Кадр тянется на всю высоту обеих строк (absolute внутри figure), поэтому
-    длина абзаца задаёт высоту секции, а не наоборот: у разных лидов текст
-    разной длины, и подгонять его под кадр значило бы резать данные.
+    Карточка адреса наезжает на кадр: она шире текстовой колонки на две доли
+    и лежит ступенью выше (--z-raise). Из-за этого у секции появляется глубина,
+    которой не даёт ни одна вторая колонка, — и адрес при этом не оказывается
+    на фотографии: подложка карточки непрозрачна, контраст в ней тот же, что и
+    на остальной странице.
+
+    Кадр тянется на всю высоту секции (absolute внутри figure), поэтому длина
+    абзаца задаёт высоту секции, а не наоборот: у разных лидов текст разной
+    длины, и подгонять его под кадр значило бы резать данные. Строк у секции
+    две, когда карточка адреса есть, и одна, когда её нет.
 
     Описать чужой снимок движку нечем, поэтому alt пустой, а сам кадр спрятан
-    от скринридера: всё, что секция сообщает, сказано текстом и фактами. -#}
+    от скринридера: всё, что секция сообщает, сказано текстом и адресом. -#}
 {%- set s = section.slots -%}
 {%- set tone = section.get('tone') -%}
 {%- set photo = (section.images.values() | list)[0] -%}
+{%- set info = sections | selectattr('role', 'equalto', 'info') | list -%}
 <section id="{{ section.id }}" class="py-section"{% if tone %} data-tone="{{ tone }}"{% endif %}>
   <div class="grid w-full gap-flow px-gutter lg:grid-cols-12">
     <div class="lg:col-span-7 lg:col-start-1 lg:row-start-1">
       <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
       <p class="mt-flow max-w-[var(--measure)] text-lede" data-reveal="after">{{ s.about_text }}</p>
     </div>
-    <figure class="panel relative isolate min-h-[16rem] overflow-hidden rounded-preset-lg lg:col-span-5 lg:col-start-8 lg:row-span-2 lg:row-start-1 lg:min-h-full">
+    <figure class="panel relative isolate min-h-[16rem] overflow-hidden rounded-preset-lg lg:col-span-5 lg:col-start-8 lg:row-start-1 lg:min-h-full{% if not info %} lg:row-span-2{% endif %}">
       <img src="{{ photo.src }}" alt="" aria-hidden="true" width="{{ photo.width }}" height="{{ photo.height }}" class="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async">
     </figure>
-    <dl class="card panel grid gap-5 rounded-preset-lg p-6 sm:grid-cols-2 lg:col-span-9 lg:col-start-1 lg:row-start-2 lg:z-[var(--z-raise)]" data-reveal="after">
-      <div>
-        <dt class="eyebrow text-muted">{{ s.company_label }}</dt>
-        <dd class="mt-1 font-title text-lg break-words">{{ s.business_name }}</dd>
-      </div>
+{%- if not info %}
+    <dl class="card panel grid gap-5 rounded-preset-lg p-6 lg:col-span-9 lg:col-start-1 lg:row-start-2 lg:z-[var(--z-raise)]" data-reveal="after">
       <div>
         <dt class="eyebrow text-muted">{{ s.address_label }}</dt>
         <dd class="mt-1 leading-relaxed break-words">{{ s.address }}</dd>
       </div>
     </dl>
+{%- endif %}
   </div>
 </section>

@@ -266,6 +266,11 @@ def shop_with_ambient(real: int, drawn: int):
     return Profile.from_dict(dict(BRAND_SHOP, images=named | pool))
 
 
+def shop_without_hours(widths):
+    """То же, но часы спрошены и их нет: страница собирается без секции info."""
+    return dataclasses.replace(shop_with_pool(widths), hours=known([]))
+
+
 def shop_without_hero(widths):
     """То же, но без hero_bg: кадр под первый экран приходится брать из пула."""
     profile = shop_with_pool(widths)

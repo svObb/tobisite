@@ -20,7 +20,7 @@ from site_factory.engine.render import (ROOT, environment, load_library,
 from . import smoke_render
 from .conftest import (BRAND_SHOP, GALLERY, LAWYER_LIGHT, LAWYER_RICH, LOGO,
                        PRODUCTS, shop_with_ambient, shop_with_pool,
-                       shop_without_hero, with_a_light_logo)
+                       shop_without_hero, shop_without_hours, with_a_light_logo)
 
 # Название из настоящего прайса запчастей: имя товара, артикулы в скобках и
 # пометка состояния — три разных сообщения в одной строке.
@@ -451,14 +451,46 @@ def test_the_statement_says_one_thing_over_the_frame(brand_shop):
     assert "/assets/parallax.js" in html
 
 
+def test_the_photo_split_says_its_piece_once():
+    """Название уже в шапке, адрес — в info: рядом с кадром их нет.
+
+    Кадр при этом остаётся: он и есть то, чем этот вариант роли отличается от
+    about_note, а повторяет он не текст страницы, а разве что галерею.
+    """
+    profile = shop_with_pool((1200, 1600))
+    html, trace = render(profile)
+    about = section_html(html, "about")
+
+    assert "about_photo_split" in trace["sections"]
+    assert "info_hours_card" in trace["sections"]
+    assert profile.name.value not in about
+    assert profile.address.value not in about
+    assert "<dl" not in about
+    assert len(images_of(about)) == 1
+
+
+def test_without_the_info_section_the_photo_split_keeps_the_address():
+    """Секции info нет — адрес читать больше негде, и он остаётся при кадре."""
+    profile = shop_without_hours((1200, 1600))
+    html, trace = render(profile)
+    about = section_html(html, "about")
+
+    assert "about_photo_split" in trace["sections"]
+    assert "info_hours_card" not in trace["sections"]
+    assert profile.address.value in about
+    assert about.count("<dl") == 1
+    assert profile.name.value not in about
+    assert html.count(profile.address.value) == 2   # блок о компании и подвал
+
+
 def test_the_facts_card_leans_over_the_photo_and_keeps_its_own_ground():
     """Оверлей даёт глубину, а не проблему с контрастом.
 
-    Карточка фактов шире текстовой колонки на две доли и лежит ступенью выше
+    Карточка адреса шире текстовой колонки на две доли и лежит ступенью выше
     кадра, но текст в ней стоит на непрозрачной подложке — той же, что у любой
     другой карточки страницы, — и все автопроверки черновика остаются пустыми.
     """
-    profile = shop_with_pool((1200, 1600))
+    profile = shop_without_hours((1200, 1600))
     html, _ = render(profile)
     card = re.search(r"<dl[^>]+>", section_html(html, "about")).group(0)
 

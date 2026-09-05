@@ -439,7 +439,6 @@ SLOT_LINES = {
     "privacy_note": "Пишемо у відповідь.",
     "contacts_title": "Контакти",
     "hours_title": "Години",
-    "company_label": "Компанія",
     "about_text": "Приймаємо замовлення телефоном і у формі на цій сторінці.",
     "legal_line": "Чернетка сторінки.",
 }
