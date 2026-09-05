@@ -1,6 +1,19 @@
+{#- Абзац о компании. Адрес рядом с текстом печатается только тогда, когда
+    секции info на странице нет: с ней адрес стоял бы двумя блоками подряд, а
+    название компании и так стоит в шапке и в подвале.
+
+    Состав страницы виден отсюда через sections — так же, как его читает меню
+    шапки (base/header_nav.j2). -#}
 {%- set s = section.slots -%}
 {%- set tone = section.get('tone') -%}
+{%- set info = sections | selectattr('role', 'equalto', 'info') | list -%}
 <section id="{{ section.id }}" class="py-section"{% if tone %} data-tone="{{ tone }}"{% endif %}>
+{%- if info %}
+  <div class="w-full px-gutter">
+    <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
+    <p class="mt-flow max-w-[var(--measure)] text-lede" data-reveal="after">{{ s.about_text }}</p>
+  </div>
+{%- else %}
   <div class="grid w-full gap-flow px-gutter lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
     <div>
       <h2 class="font-title text-h2 tracking-tight text-balance break-words" data-reveal>{{ s.section_title }}</h2>
@@ -8,13 +21,10 @@
     </div>
     <dl class="grid gap-5 border-t border-line pt-5 lg:mt-0 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-flow">
       <div>
-        <dt class="eyebrow text-muted">{{ s.company_label }}</dt>
-        <dd class="mt-1 font-title text-lg break-words">{{ s.business_name }}</dd>
-      </div>
-      <div>
         <dt class="eyebrow text-muted">{{ s.address_label }}</dt>
         <dd class="mt-1 leading-relaxed break-words">{{ s.address }}</dd>
       </div>
     </dl>
   </div>
+{%- endif %}
 </section>

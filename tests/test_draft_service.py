@@ -392,6 +392,30 @@ async def test_a_missing_ready_text_drops_its_section(slot_answer, draft_lead,
     assert "about_note" not in row.section_variants
 
 
+async def test_a_ready_text_of_a_slot_that_left_the_contract_is_ignored(
+        slot_answer, draft_lead, r2):
+    """Слот выбыл из контракта — его текст в карточке лида просто не читается.
+
+    about_note.company_label лежит в карточках живых лидов с прошлых волн, и
+    ключ, которого больше нет в композиции, не имеет права ни попасть в пустые
+    слоты, ни уйти на страницу.
+    """
+    lead = await draft_lead()
+    state = await slot_answer(lead)
+    stale = "about_note.company_label"
+    assert stale not in {spec["slot"] for spec in state.specs}
+    await _ready(lead, dict(_texts(state.specs), **{stale: "Компанія"}))
+
+    result = await draft_service.build_draft(lead.id)
+
+    assert result.ok, result.reason
+    row = await _row(lead.id)
+    assert row.recipe_json["empty_slots"] == []
+    assert stale not in row.slots_json
+    assert "about_note" in row.section_variants
+    assert "Компанія" not in r2.puts[-1]["Body"].decode()
+
+
 async def test_a_ready_text_over_the_limit_is_treated_as_empty(slot_answer,
                                                                draft_lead, r2):
     lead = await draft_lead()

@@ -1,6 +1,10 @@
-# Абзац о компании. Единственная секция, где текст длиннее строки, поэтому
-# рядом с ним стоят два факта из белого списка — название и адрес: читатель
-# видит, о ком речь, а не только слова.
+# Абзац о компании. Название рядом с ним не стоит: оно уже в шапке и в подвале,
+# и панель «компания — адрес» посреди страницы читается как недозаполненный
+# шаблон. Адрес секция печатает только тогда, когда его больше негде прочитать:
+# есть секция info — он стоит там, и второй раз подряд не нужен.
+#
+# requires: адрес остаётся требованием — без него нечем закрыть вариант
+# страницы, где секции info нет.
 id: about_note
 role: about
 requires: {has_address: true}
@@ -9,9 +13,7 @@ image_slots: 0
 slots:
   - {name: section_title, type: free, max_chars: 42, lang: from_lead}
   - {name: about_text, type: free, max_chars: 260, lang: from_lead}
-  - {name: company_label, type: free, max_chars: 20, lang: from_lead}
-  - {name: business_name, type: fact, source: whitelist, max_chars: 60}
   - {name: address_label, type: free, max_chars: 20, lang: from_lead}
   - {name: address, type: fact, source: whitelist, max_chars: 120}
-perf: {est_dom_nodes: 14, images: 0}
+perf: {est_dom_nodes: 11, images: 0}
 a11y: {heading_level: 2}

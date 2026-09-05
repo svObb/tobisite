@@ -430,12 +430,31 @@ def test_hours_line_that_does_not_split_keeps_the_cell_empty():
     assert re.search(r'<td[^>]*></td>', info)
 
 
-def test_about_note_anchors_the_free_text_in_facts(brand_shop):
-    html, _ = render(brand_shop)
+def test_about_note_says_its_piece_once(brand_shop):
+    """Название уже в шапке, адрес — в info: панель рядом с текстом их не повторяет."""
+    html, trace = render(brand_shop)
     about = section_html(html, "about")
-    assert brand_shop.name.value in about
-    assert brand_shop.address.value in about
+
+    assert "about_note" in trace["sections"]
+    assert "info_hours_card" in trace["sections"]
+    assert brand_shop.name.value not in about
+    assert brand_shop.address.value not in about
+    assert "<dl" not in about
     assert not any(char.isdigit() for char in _text_of(about, "text-lede"))
+
+
+def test_without_the_info_section_the_about_note_keeps_the_address():
+    """Секции info нет — адрес читать больше негде, и он остаётся при тексте."""
+    profile = Profile.from_dict(dict(LAWYER_RICH, hours=[]))
+    html, trace = render(profile)
+    about = section_html(html, "about")
+
+    assert "about_note" in trace["sections"]
+    assert "info_hours_card" not in trace["sections"]
+    assert profile.address.value in about
+    assert about.count("<dl") == 1
+    assert profile.name.value not in about
+    assert html.count(profile.address.value) == 2   # блок о компании и подвал
 
 
 def test_a_long_product_name_reaches_the_page_whole():
@@ -554,7 +573,7 @@ def test_the_footer_stops_repeating_what_the_info_section_already_says(brand_sho
     assert "Чернетка" in footer
     assert brand_shop.address.value not in footer
     assert brand_shop.phone.value not in footer
-    assert html.count(brand_shop.address.value) == 2   # первый экран и info
+    assert html.count(brand_shop.address.value) == 1   # только секция info
 
 
 def test_without_the_info_section_the_footer_keeps_the_contacts(lawyer_rich):
