@@ -50,7 +50,7 @@ from .profile import Profile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS_BASE = "/assets"          # общий префикс превью; @font-face в бандле
-ENGINE_VERSION = 4
+ENGINE_VERSION = 5
 
 # Потолок meta description. Длиннее — поисковик обрежет сам и обрежет там, где
 # ему удобно; лучше решить это здесь и целыми фактами.

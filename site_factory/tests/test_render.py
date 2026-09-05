@@ -166,7 +166,7 @@ def test_trace_keeps_rejected_candidates_and_versions(lawyer_rich):
     losers = [c["variant"] for c in hero["candidates"] if c["variant"] != hero["chosen"]]
     assert losers, "в следе нет отвергнутых альтернатив со score"
     assert hero["chosen"] in [c["variant"] for c in hero["candidates"]]
-    assert trace["versions"] == {"engine": 4, "library": load_tokens()["version"],
+    assert trace["versions"] == {"engine": 5, "library": load_tokens()["version"],
                                  "recipe": 3}
     assert trace["profile"]["photo_count"] == {"value": 6, "known": True}
     assert trace["profile"]["brand_colors"] == {"value": None, "known": False}
