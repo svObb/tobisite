@@ -189,7 +189,11 @@ def section(role, template, slots, images=None):
 
 
 def toned(part: dict) -> dict:
-    """Копия секции в контрастном тоне. На странице такая ровно одна."""
+    """Копия секции в контрастном тоне. На странице такая ровно одна.
+
+    Страницы, которые открываются кадром во всю ширину, обходятся без неё:
+    тёмный акцент у них уже потрачен на первый экран (compose.link_sections).
+    """
     return dict(part, tone="contrast")
 
 
@@ -229,7 +233,7 @@ PAGES = {
                 {"section_title": "Напрями роботи", "services": SERVICES}),
         section("gallery", "sections/gallery/gallery_strip.html.j2", {}, PHOTOS),
         PROOF_SECTION,
-        toned(ABOUT_SECTION),
+        ABOUT_SECTION,
         INFO,
         CTA,
         FOOTER_SECTION,
@@ -296,7 +300,7 @@ PAGES = {
         section("gallery", "sections/gallery/gallery_statement.html.j2",
                 {"statement": "Від першої зустрічі до результату"},
                 STATEMENT_PHOTO),
-        toned(ABOUT_SPLIT),
+        ABOUT_SPLIT,
         INFO,
         CTA,
         FOOTER_SECTION,
