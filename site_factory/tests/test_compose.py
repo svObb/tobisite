@@ -147,8 +147,12 @@ def test_the_frames_of_the_split_hero_spend_the_accent_too(
 
 
 def test_the_trace_counts_the_frames_the_gallery_borrowed():
-    """Сколько кадров кладка добрала дорисованными — видно в карточке черновика."""
-    for real, drawn, borrowed in ((3, 2, 0), (2, 2, 1), (0, 3, 3)):
+    """Сколько кадров галерея добрала дорисованными — видно в карточке черновика.
+
+    Своих снимков нет вовсе — добор ровно один: галерея сжимается до заявления
+    на одном кадре, а не собирает кладку из нарисованного (engine/photos).
+    """
+    for real, drawn, borrowed in ((3, 2, 0), (2, 2, 1), (0, 3, 1)):
         _, trace = render(shop_with_ambient(real, drawn))
         assert role_record(trace, "gallery")["ambient_fill"] == borrowed
 

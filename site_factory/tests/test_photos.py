@@ -193,12 +193,23 @@ def test_a_gallery_borrows_exactly_as_many_drawn_frames_as_it_lacks():
     assert photos.picked(STRETCHY, profile, {"photo-2"}) == \
         ["photo-3", "ambient-1", "ambient-2"]
 
+    lone = with_frames("photo-2", "ambient-1", "ambient-2", "ambient-3")
+    assert photos.offered(STRETCHY, lone) == ["photo-2", "ambient-1", "ambient-2"]
+    plenty = with_frames("photo-2", "photo-3", "ambient-1")
+    assert photos.offered(STRETCHY, plenty) == ["photo-2", "photo-3", "ambient-1"]
 
-def test_a_gallery_without_a_single_photo_of_its_own_stands_on_drawn_frames():
-    """Своих снимков нет вовсе — порог закрывается дорисованными целиком."""
+
+def test_a_gallery_without_photos_of_its_own_is_offered_a_single_drawn_frame():
+    """Своих снимков нет вовсе — добирать не к чему, и кладке кадров не набрать.
+
+    Один дорисованный кадр галерее остаётся: во всю ширину под фразой он фон
+    секции. Три нарисованных полосой — уже не заплатка, а выдуманное
+    доказательство, поэтому такого пула ей не показывают.
+    """
     profile = with_frames("ambient-1", "ambient-2", "ambient-3")
-    assert photos.picked(STRETCHY, profile) == \
-        ["ambient-1", "ambient-2", "ambient-3"]
+    assert photos.offered(STRETCHY, profile) == ["ambient-1"]
+    assert not gates.check(STRETCHY, profile).ok
+    assert photos.offered(STRETCHY, with_frames()) == []
 
 
 def test_the_first_screen_takes_a_drawn_frame_as_it_took_it_before():

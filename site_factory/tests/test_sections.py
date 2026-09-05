@@ -47,6 +47,10 @@ LONG_HOURS = ("Пн–Чт: 09:00–13:00 та 14:00–19:00, Пт: 09:00–18:0
 # нечто о том, что на кадрах, — и над дорисованным кадром это ложь.
 CAPTION = "Наш сервіс у Харкові"
 
+# Фраза заявления говорит о компании, а не о кадре под ней, — поэтому она
+# остаётся и над дорисованным фоном.
+STATEMENT = "Робимо швидко і не переробляємо"
+
 
 def images_of(html):
     return IMG_SRC.findall(html)
@@ -348,16 +352,22 @@ def test_a_collage_that_borrowed_a_frame_says_nothing_about_it():
     assert CAPTION not in html
 
 
-def test_a_lead_without_photos_of_its_own_gets_a_collage_of_drawn_frames():
-    """Своих снимков нет — кладка стоит на дорисованных и молчит о них."""
+def test_a_lead_without_photos_of_its_own_gets_a_statement_on_one_frame():
+    """Своих снимков нет — галерея это фраза на одном дорисованном кадре.
+
+    Кладка из трёх нарисованных — не добор, а сфабрикованное доказательство:
+    галерее без единого своего снимка предлагается один кадр, и порога кладки
+    он не закрывает (engine/photos.offered). Фраза над кадром остаётся: она о
+    компании, а не о том, что на снимке.
+    """
     profile = shop_with_ambient(0, 3)
     html, trace = render(profile, free_texts=free_texts_for(
-        profile, {"gallery_collage.caption": CAPTION}))
+        profile, {"gallery_statement.statement": STATEMENT}))
 
-    assert "gallery_collage" in trace["sections"]
-    assert images_of(section_html(html, "gallery")) == \
-        [f"/img/ambient-{number}.webp" for number in (1, 2, 3)]
-    assert CAPTION not in html
+    assert "gallery_statement" in trace["sections"]
+    assert "gallery_collage" not in trace["sections"]
+    assert images_of(section_html(html, "gallery")) == ["/img/ambient-1.webp"]
+    assert STATEMENT in section_html(html, "gallery")
 
 
 def test_narrow_frames_never_become_a_full_width_background():
